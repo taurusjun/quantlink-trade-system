@@ -3,7 +3,7 @@ package indicators
 import (
 	"fmt"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // Spread calculates the bid-ask spread

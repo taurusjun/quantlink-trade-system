@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/strategy"
+	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
 // RiskLimitType represents different types of risk limits

@@ -32,7 +32,7 @@ dlv version
 ## ✅ 第三步: 打开项目
 
 ```bash
-cd /Users/user/PWorks/RD/hft-poc
+cd /Users/user/PWorks/RD/quantlink-trade-system
 code .
 ```
 

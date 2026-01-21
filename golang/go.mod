@@ -1,4 +1,4 @@
-module github.com/yourusername/hft-poc
+module github.com/yourusername/quantlink-trade-system
 
 go 1.24.0
 

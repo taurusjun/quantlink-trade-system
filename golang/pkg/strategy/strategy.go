@@ -3,9 +3,9 @@ package strategy
 import (
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/indicators"
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 // Strategy is the interface that all trading strategies must implement

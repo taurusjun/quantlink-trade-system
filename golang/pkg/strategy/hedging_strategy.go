@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 // HedgingStrategy implements a delta-neutral hedging strategy

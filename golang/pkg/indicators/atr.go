@@ -4,7 +4,7 @@ package indicators
 import (
 	"math"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // ATR implements the Average True Range indicator

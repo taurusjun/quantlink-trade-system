@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 func TestEWMA_Basic(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // Indicator is the base interface for all technical indicators

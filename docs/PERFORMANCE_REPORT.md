@@ -2,7 +2,7 @@
 ## Week 3-4 任务完成报告
 
 生成时间：2026-01-20
-项目：hft-poc - MD Gateway实现
+项目：quantlink-trade-system - MD Gateway实现
 
 ---
 
@@ -206,7 +206,7 @@ class PerformanceMonitor {
 ## 📁 代码结构
 
 ```
-hft-poc/
+quantlink-trade-system/
 ├── gateway/
 │   ├── include/
 │   │   ├── shm_queue.h              # 共享内存队列（简化版ShmMgr）

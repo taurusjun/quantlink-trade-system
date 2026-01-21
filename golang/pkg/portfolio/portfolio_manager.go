@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/strategy"
+	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
 // PortfolioConfig represents portfolio configuration

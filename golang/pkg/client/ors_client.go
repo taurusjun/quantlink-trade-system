@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 // ORSClient ORS Gateway客户端

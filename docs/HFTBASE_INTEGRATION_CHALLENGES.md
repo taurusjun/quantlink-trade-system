@@ -92,7 +92,7 @@ statsrecorder.h → processsettings.h → logger.h
 
 ```bash
 # 步骤1：复制Ipc模块
-cd /Users/user/PWorks/RD/hft-poc/gateway
+cd /Users/user/PWorks/RD/quantlink-trade-system/gateway
 mkdir -p hftbase/Ipc/include
 cp /Users/user/PWorks/RD/hftbase/Ipc/include/*.h hftbase/Ipc/include/
 

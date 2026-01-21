@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package hft.md;
 
-option go_package = "github.com/yourusername/hft-poc/pkg/proto/md";
+option go_package = "github.com/yourusername/quantlink-trade-system/pkg/proto/md";
 
 // 行情订阅请求
 message SubscribeRequest {

@@ -30,7 +30,7 @@
 
 **Terminal 1 - 启动模拟器：**
 ```bash
-cd /Users/user/PWorks/RD/hft-poc
+cd /Users/user/PWorks/RD/quantlink-trade-system
 ./gateway/build/md_simulator 1000
 ```
 
@@ -226,14 +226,14 @@ ls -lh /tmp/hft_md_*
 
 **C++ Gateway：**
 ```bash
-cd /Users/user/PWorks/RD/hft-poc
+cd /Users/user/PWorks/RD/quantlink-trade-system
 rm -rf gateway/build
 ./scripts/build_gateway.sh
 ```
 
 **Golang客户端：**
 ```bash
-cd /Users/user/PWorks/RD/hft-poc/golang
+cd /Users/user/PWorks/RD/quantlink-trade-system/golang
 go build -o bin/md_client ./cmd/md_client
 ```
 
@@ -281,7 +281,7 @@ dlv debug ./cmd/md_client -- -gateway localhost:50051
 ## 📁 项目结构
 
 ```
-hft-poc/
+quantlink-trade-system/
 ├── gateway/
 │   ├── build/
 │   │   ├── md_gateway      ← Gateway (共享内存模式)

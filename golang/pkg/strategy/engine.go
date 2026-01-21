@@ -10,9 +10,9 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 
-	"github.com/yourusername/hft-poc/pkg/client"
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/client"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 // StrategyEngine manages multiple trading strategies

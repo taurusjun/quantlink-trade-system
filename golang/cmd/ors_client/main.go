@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/client"
-	commonpb "github.com/yourusername/hft-poc/pkg/proto/common"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/client"
+	commonpb "github.com/yourusername/quantlink-trade-system/pkg/proto/common"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 var (

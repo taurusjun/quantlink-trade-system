@@ -4,9 +4,9 @@ package strategy
 import (
 	"time"
 
-	commonpb "github.com/yourusername/hft-poc/pkg/proto/common"
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
+	commonpb "github.com/yourusername/quantlink-trade-system/pkg/proto/common"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
 // OrderSide represents buy or sell

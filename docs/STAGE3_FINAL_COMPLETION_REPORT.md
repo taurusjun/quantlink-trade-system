@@ -39,7 +39,7 @@
 ```bash
 go test ./pkg/indicators/... -v
 PASS
-ok   github.com/yourusername/hft-poc/pkg/indicators  0.757s
+ok   github.com/yourusername/quantlink-trade-system/pkg/indicators  0.757s
 
 # 测试覆盖率
 coverage: 25.3% of statements

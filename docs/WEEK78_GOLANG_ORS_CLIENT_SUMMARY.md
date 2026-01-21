@@ -21,7 +21,7 @@
 
 **生成order.proto的Go代码：**
 ```bash
-$ cd /Users/user/PWorks/RD/hft-poc/gateway/proto
+$ cd /Users/user/PWorks/RD/quantlink-trade-system/gateway/proto
 $ protoc --go_out=../../golang/pkg/proto/ors \
          --go_opt=paths=source_relative \
          --go-grpc_out=../../golang/pkg/proto/ors \

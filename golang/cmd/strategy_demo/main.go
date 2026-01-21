@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/strategy"
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 func main() {

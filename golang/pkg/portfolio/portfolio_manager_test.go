@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
-	orspb "github.com/yourusername/hft-poc/pkg/proto/ors"
-	"github.com/yourusername/hft-poc/pkg/strategy"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
+	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
 // MockStrategy implements strategy.Strategy for testing

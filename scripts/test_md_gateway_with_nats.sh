@@ -5,7 +5,7 @@ echo "================================================"
 echo "  MD Gateway + NATS Integration Test"
 echo "================================================"
 
-PROJECT_ROOT="/Users/user/PWorks/RD/hft-poc"
+PROJECT_ROOT="/Users/user/PWorks/RD/quantlink-trade-system"
 BUILD_DIR="$PROJECT_ROOT/gateway/build"
 
 # 颜色输出

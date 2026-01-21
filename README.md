@@ -1,11 +1,11 @@
-# HFT Gateway POC
+# QuantLink Trade System
 
 统一HFT架构的POC验证项目，验证Golang + C++ + gRPC + NATS的混合架构可行性。
 
 ## 项目结构
 
 ```
-hft-poc/
+quantlink-trade-system/
 ├── gateway/              # C++ MD Gateway
 │   ├── src/             # 源代码
 │   ├── include/         # 头文件
@@ -19,6 +19,7 @@ hft-poc/
 │
 ├── config/              # 配置文件
 ├── scripts/             # 构建脚本
+├── docs/                # 项目文档
 └── tests/               # 测试代码
 ```
 
@@ -142,7 +143,7 @@ go build -o bin/md_client ./cmd/md_client
 - [x] 端到端延迟 <1ms - **实测: ~30μs** ✅
 - [x] 吞吐量 >10k msg/s - **实测: 10k msg/s** ✅
 
-**详细性能报告：** 查看 [PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md)
+**详细性能报告：** 查看 [PERFORMANCE_REPORT.md](docs/PERFORMANCE_REPORT.md)
 
 ## 性能测试
 
@@ -256,7 +257,7 @@ pkg-config --modversion protobuf
 - [ ] 生产环境配置
 - [ ] Prometheus监控集成
 
-**详细计划：** 查看 [unified_architecture_design.md](docs/hftbase/unified_architecture_design.md)
+**详细计划：** 查看项目文档 [docs/](docs/)
 
 ## 许可证
 

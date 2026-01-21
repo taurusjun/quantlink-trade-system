@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // Volatility calculates price volatility using various methods

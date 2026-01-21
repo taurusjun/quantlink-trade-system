@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourusername/hft-poc/pkg/indicators"
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 func main() {

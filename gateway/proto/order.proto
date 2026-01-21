@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package hft.ors;
 
-option go_package = "github.com/yourusername/hft-poc/pkg/proto/ors";
+option go_package = "github.com/yourusername/quantlink-trade-system/pkg/proto/ors";
 
 import "common.proto";
 

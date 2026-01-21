@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // VWAP (Volume Weighted Average Price) calculates the volume-weighted average price

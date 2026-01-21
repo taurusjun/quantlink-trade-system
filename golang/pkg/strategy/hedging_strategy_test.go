@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 func TestHedgingStrategy_Creation(t *testing.T) {

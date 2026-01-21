@@ -2,7 +2,7 @@
 package indicators
 
 import (
-	mdpb "github.com/yourusername/hft-poc/pkg/proto/md"
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
 
 // SMA implements the Simple Moving Average indicator

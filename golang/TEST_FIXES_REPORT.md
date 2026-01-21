@@ -194,17 +194,17 @@ Parameters: map[string]interface{}{
 
 ### 修改的核心文件
 
-1. **`/Users/user/PWorks/RD/hft-poc/golang/pkg/strategy/strategy.go`**
+1. **`/Users/user/PWorks/RD/quantlink-trade-system/golang/pkg/strategy/strategy.go`**
    - 重构 `UpdatePosition` 方法
    - 添加已实现盈亏计算逻辑
    - 保持Long/Short独立跟踪同时计算realized PNL
 
-2. **`/Users/user/PWorks/RD/hft-poc/golang/pkg/strategy/aggressive_strategy_test.go`**
+2. **`/Users/user/PWorks/RD/quantlink-trade-system/golang/pkg/strategy/aggressive_strategy_test.go`**
    - 修改 `TestAggressiveStrategy_SignalGeneration` 配置
    - 修改 `TestAggressiveStrategy_ShortPosition` 配置
    - 添加 `min_volatility: 0.0` 参数
 
-3. **`/Users/user/PWorks/RD/hft-poc/golang/pkg/strategy/passive_strategy_test.go`**
+3. **`/Users/user/PWorks/RD/quantlink-trade-system/golang/pkg/strategy/passive_strategy_test.go`**
    - 修改 `TestPassiveStrategy_SignalGeneration` 配置
    - 降低 `min_spread` 从 1.0 到 0.1
 

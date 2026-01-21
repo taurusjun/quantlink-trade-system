@@ -73,7 +73,7 @@ class SPSCQueue {
 ### 步骤1：启动模拟器（生产者）
 
 ```bash
-cd /Users/user/PWorks/RD/hft-poc
+cd /Users/user/PWorks/RD/quantlink-trade-system
 
 # 启动模拟器，1000 Hz频率
 ./gateway/build/md_simulator 1000

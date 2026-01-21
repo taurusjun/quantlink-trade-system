@@ -13,7 +13,7 @@ brew install cmake protobuf grpc go
 ### 2. 编译
 
 ```bash
-cd /Users/user/PWorks/RD/hft-poc
+cd /Users/user/PWorks/RD/quantlink-trade-system
 
 # 编译C++ Gateway（会自动检测NATS，没有也能编译）
 ./scripts/build_gateway.sh

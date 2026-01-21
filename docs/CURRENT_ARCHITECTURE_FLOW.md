@@ -257,7 +257,7 @@
 $ nats-server
 
 # 终端2: 启动ORS Gateway
-$ cd /Users/user/PWorks/RD/hft-poc/gateway/build
+$ cd /Users/user/PWorks/RD/quantlink-trade-system/gateway/build
 $ ./ors_gateway
 [ORSGateway] Connected to NATS: nats://localhost:4222
 [ORSGateway] gRPC Server: 0.0.0.0:50052
@@ -268,7 +268,7 @@ $ ./counter_gateway
 [Counter Gateway started successfully]
 
 # 终端4: 发送测试订单
-$ cd /Users/user/PWorks/RD/hft-poc/golang
+$ cd /Users/user/PWorks/RD/quantlink-trade-system/golang
 $ ./bin/ors_client -mode single -symbol ag2412
 
 Order Response:

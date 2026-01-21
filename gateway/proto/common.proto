@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package hft.common;
 
-option go_package = "github.com/yourusername/hft-poc/pkg/proto/common";
+option go_package = "github.com/yourusername/quantlink-trade-system/pkg/proto/common";
 
 // 交易所枚举
 enum Exchange {

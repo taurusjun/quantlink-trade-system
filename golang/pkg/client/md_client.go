@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/yourusername/hft-poc/pkg/proto/md"
+	pb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	"github.com/nats-io/nats.go"
 )
 
