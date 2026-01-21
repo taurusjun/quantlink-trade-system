@@ -1,0 +1,45 @@
+# C++ Build
+gateway/build/
+gateway/cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+
+# Golang Build
+golang/bin/
+golang/pkg/proto/
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Generated files
+*_pb2.py
+*_pb2_grpc.py
+*.pb.cc
+*.pb.h
+*.pb.go
+
+# Dependencies
+golang/vendor/
+third_party/
+
+# Test outputs
+tests/results/
+*.test
+*.prof
+
+# Temporary files
+*.tmp
+*.bak

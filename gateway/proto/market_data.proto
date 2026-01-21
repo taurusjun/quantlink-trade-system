@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package hft.md;
+
+option go_package = "github.com/yourusername/hft-poc/pkg/proto/md";
+
+// 行情订阅请求
+message SubscribeRequest {
+  repeated string symbols = 1;    // 合约列表
+  string exchange = 2;            // 交易所
+  bool full_depth = 3;            // 是否全深度（10档）
+}
+
+// 行情取消订阅
+message UnsubscribeRequest {
+  repeated string symbols = 1;
+  string exchange = 2;
+}
+
+// 行情快照请求
+message SnapshotRequest {
+  string symbol = 1;
+  string exchange = 2;
+}
+
+// 行情数据更新
+message MarketDataUpdate {
+  string symbol = 1;              // 合约代码
+  string exchange = 2;            // 交易所
+  uint64 timestamp = 3;           // 时间戳（纳秒）
+  uint64 exchange_timestamp = 4;  // 交易所时间戳（纳秒）
+
+  // 买盘（最多10档）
+  repeated double bid_price = 5;
+  repeated uint32 bid_qty = 6;
+  repeated uint32 bid_order_count = 7;
+
+  // 卖盘（最多10档）
+  repeated double ask_price = 8;
+  repeated uint32 ask_qty = 9;
+  repeated uint32 ask_order_count = 10;
+
+  // 成交信息
+  double last_price = 11;
+  uint32 last_qty = 12;
+  uint64 total_volume = 13;
+  double turnover = 14;
+
+  // 其他信息
+  double open_price = 15;
+  double high_price = 16;
+  double low_price = 17;
+  double pre_close_price = 18;
+
+  // 涨跌停价
+  double upper_limit = 19;
+  double lower_limit = 20;
+}
+
+// 订阅响应
+message SubscribeResponse {
+  enum Status {
+    SUCCESS = 0;
+    SYMBOL_NOT_FOUND = 1;
+    EXCHANGE_NOT_SUPPORTED = 2;
+    ALREADY_SUBSCRIBED = 3;
+    INTERNAL_ERROR = 4;
+  }
+
+  Status status = 1;
+  string message = 2;
+  repeated string subscribed_symbols = 3;
+}
+
+// MD Gateway服务
+service MDGateway {
+  // 订阅行情（流式推送）
+  rpc SubscribeMarketData(SubscribeRequest) returns (stream MarketDataUpdate);
+
+  // 取消订阅
+  rpc UnsubscribeMarketData(UnsubscribeRequest) returns (SubscribeResponse);
+
+  // 获取快照
+  rpc GetSnapshot(SnapshotRequest) returns (MarketDataUpdate);
+}

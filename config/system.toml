@@ -1,0 +1,17 @@
+# HFT POC System Configuration
+
+[system]
+environment = "development"  # development/staging/production
+log_level = "info"
+cpu_affinity_enabled = false
+
+[monitoring]
+prometheus_port = 9090
+metrics_interval_ms = 100
+enable_metrics = true
+
+[nats]
+url = "nats://localhost:4222"
+# cluster_urls = ["nats://node1:4222", "nats://node2:4222"]
+max_reconnect = 10
+reconnect_wait_ms = 1000

@@ -1,0 +1,237 @@
+syntax = "proto3";
+
+package hft.ors;
+
+option go_package = "github.com/yourusername/hft-poc/pkg/proto/ors";
+
+import "common.proto";
+
+// ============================================================================
+// 订单相关枚举
+// ============================================================================
+
+// 买卖方向
+enum OrderSide {
+  SIDE_UNKNOWN = 0;
+  BUY = 1;   // 买入
+  SELL = 2;  // 卖出
+}
+
+// 订单类型
+enum OrderType {
+  TYPE_UNKNOWN = 0;
+  LIMIT = 1;        // 限价单
+  MARKET = 2;       // 市价单
+  STOP = 3;         // 止损单
+  STOP_LIMIT = 4;   // 止损限价单
+}
+
+// 时效类型
+enum TimeInForce {
+  TIF_UNKNOWN = 0;
+  GTC = 1;  // Good Till Cancel - 撤单前有效
+  IOC = 2;  // Immediate Or Cancel - 立即成交否则撤销
+  FOK = 3;  // Fill Or Kill - 全部成交否则撤销
+  DAY = 4;  // Day Order - 当日有效
+}
+
+// 开平标志（中国期货特有）
+enum OpenClose {
+  OC_UNKNOWN = 0;
+  OPEN = 1;              // 开仓
+  CLOSE = 2;             // 平仓（平昨或平今）
+  CLOSE_TODAY = 3;       // 平今仓
+  CLOSE_YESTERDAY = 4;   // 平昨仓
+}
+
+// 订单状态
+enum OrderStatus {
+  STATUS_UNKNOWN = 0;
+  PENDING = 1;           // 待提交
+  SUBMITTED = 2;         // 已提交
+  ACCEPTED = 3;          // 已接受
+  PARTIALLY_FILLED = 4;  // 部分成交
+  FILLED = 5;            // 全部成交
+  CANCELING = 6;         // 撤单中
+  CANCELED = 7;          // 已撤销
+  REJECTED = 8;          // 已拒绝
+  EXPIRED = 9;           // 已过期
+}
+
+// 错误码
+enum ErrorCode {
+  SUCCESS = 0;
+  INVALID_PARAMETER = 1;        // 参数错误
+  RISK_CHECK_FAILED = 2;        // 风控检查失败
+  NO_COUNTER_AVAILABLE = 3;     // 无可用柜台
+  INSUFFICIENT_POSITION = 4;    // 仓位不足
+  DUPLICATE_ORDER = 5;          // 重复订单
+  ORDER_NOT_FOUND = 6;          // 订单不存在
+  COUNTER_ERROR = 7;            // 柜台错误
+  INTERNAL_ERROR = 99;          // 内部错误
+}
+
+// ============================================================================
+// 订单请求和响应
+// ============================================================================
+
+// 订单请求
+message OrderRequest {
+  string strategy_id = 1;        // 策略ID
+  string symbol = 2;             // 合约代码
+  hft.common.Exchange exchange = 3;  // 交易所
+
+  OrderSide side = 4;            // 买卖方向
+  OrderType order_type = 5;      // 订单类型
+  TimeInForce time_in_force = 6; // 时效类型
+
+  double price = 7;              // 价格
+  int64 quantity = 8;            // 数量
+
+  OpenClose open_close = 9;      // 开平标志
+
+  // 可选字段
+  string client_order_id = 10;   // 客户端订单ID
+  string account = 11;           // 账户
+  map<string, string> metadata = 12;  // 元数据
+}
+
+// 订单响应
+message OrderResponse {
+  string order_id = 1;           // 系统订单ID
+  string client_order_id = 2;    // 客户端订单ID
+  uint64 client_token = 3;       // 客户端Token
+
+  ErrorCode error_code = 4;      // 错误码
+  string error_msg = 5;          // 错误信息
+
+  uint64 timestamp = 6;          // 时间戳（纳秒）
+}
+
+// 订单更新（推送）
+message OrderUpdate {
+  string order_id = 1;           // 订单ID
+  string client_order_id = 2;    // 客户端订单ID
+  string strategy_id = 3;        // 策略ID
+  string symbol = 4;             // 合约代码
+  hft.common.Exchange exchange = 5;  // 交易所
+
+  OrderSide side = 6;            // 买卖方向
+  OrderStatus status = 7;        // 订单状态
+
+  double price = 8;              // 委托价格
+  int64 quantity = 9;            // 委托数量
+  int64 filled_qty = 10;         // 成交数量
+  int64 remaining_qty = 11;      // 剩余数量
+
+  double avg_price = 12;         // 平均成交价
+  double last_fill_price = 13;   // 最新成交价
+  int64 last_fill_qty = 14;      // 最新成交量
+
+  string exec_id = 15;           // 成交ID
+  uint64 exchange_timestamp = 16;  // 交易所时间戳
+  uint64 timestamp = 17;         // 系统时间戳（纳秒）
+
+  ErrorCode error_code = 18;     // 错误码
+  string error_msg = 19;         // 错误信息
+
+  map<string, string> metadata = 20;  // 元数据
+}
+
+// ============================================================================
+// 撤单请求和响应
+// ============================================================================
+
+// 撤单请求
+message CancelRequest {
+  string order_id = 1;           // 订单ID（二选一）
+  string client_order_id = 2;    // 客户端订单ID（二选一）
+  string strategy_id = 3;        // 策略ID
+  string symbol = 4;             // 合约代码
+}
+
+// 撤单响应
+message CancelResponse {
+  string order_id = 1;           // 订单ID
+  string client_order_id = 2;    // 客户端订单ID
+
+  ErrorCode error_code = 3;      // 错误码
+  string error_msg = 4;          // 错误信息
+
+  uint64 timestamp = 5;          // 时间戳（纳秒）
+}
+
+// ============================================================================
+// 查询请求
+// ============================================================================
+
+// 订单查询请求
+message OrderQuery {
+  string strategy_id = 1;        // 策略ID（可选）
+  string symbol = 2;             // 合约代码（可选）
+  repeated OrderStatus status = 3;  // 订单状态过滤
+
+  uint64 start_time = 4;         // 开始时间
+  uint64 end_time = 5;           // 结束时间
+
+  int32 limit = 6;               // 限制数量
+}
+
+// 订单数据（查询返回）
+message OrderData {
+  OrderUpdate order = 1;
+}
+
+// 仓位查询请求
+message PositionQuery {
+  string strategy_id = 1;        // 策略ID（可选）
+  string symbol = 2;             // 合约代码（可选）
+  hft.common.Exchange exchange = 3;  // 交易所（可选）
+}
+
+// 仓位数据
+message PositionData {
+  string symbol = 1;             // 合约代码
+  hft.common.Exchange exchange = 2;  // 交易所
+  string account = 3;            // 账户
+
+  // 持仓信息
+  int64 long_position = 4;       // 多头持仓
+  int64 short_position = 5;      // 空头持仓
+  int64 net_position = 6;        // 净持仓
+
+  // 中国期货特有：今昨仓
+  int64 today_long = 7;          // 今多仓
+  int64 today_short = 8;         // 今空仓
+  int64 yesterday_long = 9;      // 昨多仓
+  int64 yesterday_short = 10;    // 昨空仓
+
+  // 成本和盈亏
+  double avg_long_price = 11;    // 多头平均价
+  double avg_short_price = 12;   // 空头平均价
+  double realized_pnl = 13;      // 已实现盈亏
+  double unrealized_pnl = 14;    // 未实现盈亏
+
+  uint64 timestamp = 15;         // 时间戳
+}
+
+// ============================================================================
+// ORS Gateway服务
+// ============================================================================
+
+service ORSGateway {
+  // 发送订单
+  rpc SendOrder(OrderRequest) returns (OrderResponse);
+
+  // 撤销订单
+  rpc CancelOrder(CancelRequest) returns (CancelResponse);
+
+  // 查询订单（流式返回）
+  rpc QueryOrders(OrderQuery) returns (stream OrderData);
+
+  // 查询仓位（流式返回）
+  rpc QueryPosition(PositionQuery) returns (stream PositionData);
+
+  // 批量发单
+  rpc SendBatchOrders(stream OrderRequest) returns (stream OrderResponse);
+}
