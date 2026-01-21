@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(protoc:*)",
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(go build:*)",
+      "Bash(for dir in cmd/*/)",
+      "Bash(done)",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(/Users/user/PWorks/RD/quantlink-trade-system/scripts/generate_proto.sh)"
     ]
   }
 }
