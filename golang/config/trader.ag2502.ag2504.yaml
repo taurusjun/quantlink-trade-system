@@ -32,8 +32,8 @@ session:
   start_time: "09:00:00"                # 对应 tbsrc 0100 (UTC+8 09:00)
   end_time: "15:00:00"                  # 对应 tbsrc 0700 (UTC+8 15:00)
   timezone: "Asia/Shanghai"
-  auto_start: true
-  auto_stop: true
+  auto_start: false                      # 测试模式：禁用自动启动
+  auto_stop: false                       # 测试模式：禁用自动停止
 
 risk:
   max_drawdown: 10000.0
@@ -55,7 +55,10 @@ portfolio:
   strategy_allocation:
     "92201": 1.0
   rebalance_interval_sec: 3600
+  min_allocation: 0.0
+  max_allocation: 1.0
   enable_auto_rebalance: false
+  enable_correlation_calc: false
 
 api:
   enabled: true                             # 启用 HTTP REST API

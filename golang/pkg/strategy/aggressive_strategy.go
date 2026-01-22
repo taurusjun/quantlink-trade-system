@@ -397,6 +397,7 @@ func (as *AggressiveStrategy) Start() error {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
+	as.ControlState.RunState = StrategyRunStateActive
 	as.Activate()
 	log.Printf("[AggressiveStrategy:%s] Started", as.ID)
 	return nil
@@ -407,7 +408,13 @@ func (as *AggressiveStrategy) Stop() error {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
+	as.ControlState.RunState = StrategyRunStateStopped
 	as.Deactivate()
 	log.Printf("[AggressiveStrategy:%s] Stopped", as.ID)
 	return nil
+}
+
+// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
+func (as *AggressiveStrategy) GetBaseStrategy() *BaseStrategy {
+	return as.BaseStrategy
 }

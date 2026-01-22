@@ -14,10 +14,11 @@ import (
 // APIServer provides HTTP REST API for trader control
 // 对应 tbsrc 信号控制的现代化替代方案
 type APIServer struct {
-	trader *Trader
-	server *http.Server
-	mu     sync.RWMutex
-	running bool
+	trader    *Trader
+	server    *http.Server
+	mu        sync.RWMutex
+	commandMu sync.Mutex // 命令互斥锁，防止并发激活/停止
+	running   bool
 }
 
 // APIResponse is the standard API response format
@@ -51,12 +52,12 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 
 	mux := http.NewServeMux()
 
-	// Register endpoints
-	mux.HandleFunc("/api/v1/strategy/activate", api.handleActivate)
-	mux.HandleFunc("/api/v1/strategy/deactivate", api.handleDeactivate)
-	mux.HandleFunc("/api/v1/strategy/status", api.handleStatus)
-	mux.HandleFunc("/api/v1/trader/status", api.handleTraderStatus)
-	mux.HandleFunc("/api/v1/health", api.handleHealth)
+	// Register endpoints with CORS
+	mux.HandleFunc("/api/v1/strategy/activate", api.corsMiddleware(api.handleActivate))
+	mux.HandleFunc("/api/v1/strategy/deactivate", api.corsMiddleware(api.handleDeactivate))
+	mux.HandleFunc("/api/v1/strategy/status", api.corsMiddleware(api.handleStatus))
+	mux.HandleFunc("/api/v1/trader/status", api.corsMiddleware(api.handleTraderStatus))
+	mux.HandleFunc("/api/v1/health", api.corsMiddleware(api.handleHealth))
 
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
@@ -124,6 +125,10 @@ func (a *APIServer) handleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 防止并发激活（多人/多次点击）
+	a.commandMu.Lock()
+	defer a.commandMu.Unlock()
+
 	log.Println("[API] ════════════════════════════════════════════════════════════")
 	log.Println("[API] Received HTTP request: Activating strategy")
 	log.Println("[API] ════════════════════════════════════════════════════════════")
@@ -139,6 +144,11 @@ func (a *APIServer) handleActivate(w http.ResponseWriter, r *http.Request) {
 	baseStrat.ControlState.ExitRequested = false
 	baseStrat.ControlState.CancelPending = false
 	baseStrat.ControlState.FlattenMode = false
+	// 重置 RunState 以便可以重新 Start
+	if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
+		baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
+		baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
+	}
 	baseStrat.ControlState.Activate()
 
 	// Start strategy if not running
@@ -167,6 +177,10 @@ func (a *APIServer) handleDeactivate(w http.ResponseWriter, r *http.Request) {
 		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+
+	// 防止并发停止（多人/多次点击）
+	a.commandMu.Lock()
+	defer a.commandMu.Unlock()
 
 	log.Println("[API] ════════════════════════════════════════════════════════════")
 	log.Println("[API] Received HTTP request: Deactivating strategy (squareoff)")
@@ -301,4 +315,23 @@ func (a *APIServer) getBaseStrategy() *strategy.BaseStrategy {
 	}
 	log.Printf("[API] Error: Strategy does not implement BaseStrategyAccessor")
 	return nil
+}
+
+// corsMiddleware adds CORS headers to allow browser access from file://
+func (a *APIServer) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 允许所有来源（开发环境）
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// 处理 OPTIONS 预检请求
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// 调用实际处理函数
+		next(w, r)
+	}
 }

@@ -492,6 +492,11 @@ func (t *Trader) handleControlSignals() {
 			baseStrat.ControlState.ExitRequested = false
 			baseStrat.ControlState.CancelPending = false
 			baseStrat.ControlState.FlattenMode = false
+			// 重置 RunState 以便可以重新 Start
+			if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
+				baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
+				baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
+			}
 			baseStrat.ControlState.Activate()
 
 			// Start strategy if not running

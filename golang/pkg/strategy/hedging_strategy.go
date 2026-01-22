@@ -343,6 +343,7 @@ func (hs *HedgingStrategy) Start() error {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
+	hs.ControlState.RunState = StrategyRunStateActive
 	hs.Activate()
 	log.Printf("[HedgingStrategy:%s] Started", hs.ID)
 	return nil
@@ -353,6 +354,7 @@ func (hs *HedgingStrategy) Stop() error {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
+	hs.ControlState.RunState = StrategyRunStateStopped
 	hs.Deactivate()
 	log.Printf("[HedgingStrategy:%s] Stopped", hs.ID)
 	return nil
@@ -373,4 +375,9 @@ func (hs *HedgingStrategy) GetHedgeStatus() map[string]interface{} {
 		"target_delta":    hs.targetDelta,
 		"delta_deviation": math.Abs(hs.currentDelta - hs.targetDelta),
 	}
+}
+
+// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
+func (hs *HedgingStrategy) GetBaseStrategy() *BaseStrategy {
+	return hs.BaseStrategy
 }

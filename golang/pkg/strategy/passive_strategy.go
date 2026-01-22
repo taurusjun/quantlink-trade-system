@@ -100,6 +100,7 @@ func (ps *PassiveStrategy) Start() error {
 	if ps.IsRunning() {
 		return fmt.Errorf("strategy already running")
 	}
+	ps.ControlState.RunState = StrategyRunStateActive
 	ps.Activate()
 	return nil
 }
@@ -109,6 +110,7 @@ func (ps *PassiveStrategy) Stop() error {
 	if !ps.IsRunning() {
 		return fmt.Errorf("strategy not running")
 	}
+	ps.ControlState.RunState = StrategyRunStateStopped
 	ps.Deactivate()
 	return nil
 }

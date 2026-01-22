@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantlinkTrader 控制台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .config-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .config-section h3 {
+            font-size: 16px;
+            color: #495057;
+            margin-bottom: 10px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .input-group input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .status-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .status-row:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            color: #6c757d;
+            font-size: 14px;
+        }
+
+        .status-value {
+            font-weight: 600;
+            font-size: 16px;
+            color: #212529;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.inactive {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-badge.running {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        button {
+            padding: 15px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .btn-activate {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-activate:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-deactivate {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-deactivate:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(245, 87, 108, 0.4);
+        }
+
+        .btn-refresh {
+            background: #6c757d;
+            color: white;
+            grid-column: 1 / -1;
+        }
+
+        .btn-refresh:hover:not(:disabled) {
+            background: #5a6268;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-left: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+            animation: slideIn 0.3s;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .pnl-section {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .pnl-item {
+            text-align: center;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+        }
+
+        .pnl-label {
+            font-size: 12px;
+            color: #6c757d;
+            margin-bottom: 5px;
+        }
+
+        .pnl-value {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .pnl-value.positive {
+            color: #28a745;
+        }
+
+        .pnl-value.negative {
+            color: #dc3545;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+            font-size: 12px;
+            border-top: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ QuantlinkTrader</h1>
+            <p>策略控制台 | Strategy Control Panel</p>
+        </div>
+
+        <div class="content">
+            <div class="config-section">
+                <h3>🔧 API 配置</h3>
+                <div class="input-group">
+                    <input type="text" id="apiHost" placeholder="API 地址" value="localhost">
+                    <input type="number" id="apiPort" placeholder="端口" value="9201">
+                </div>
+                <button class="btn-refresh" onclick="loadStatus()">🔄 连接并刷新状态</button>
+            </div>
+
+            <div id="message" class="message"></div>
+
+            <div class="status-card">
+                <div class="status-row">
+                    <span class="status-label">策略 ID</span>
+                    <span class="status-value" id="strategyId">-</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">运行状态</span>
+                    <span class="status-value">
+                        <span class="status-badge inactive" id="runningStatus">未运行</span>
+                    </span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">激活状态</span>
+                    <span class="status-value">
+                        <span class="status-badge inactive" id="activeStatus">未激活</span>
+                    </span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">模式</span>
+                    <span class="status-value" id="mode">-</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">品种</span>
+                    <span class="status-value" id="symbols">-</span>
+                </div>
+
+                <div class="pnl-section">
+                    <div class="pnl-item">
+                        <div class="pnl-label">持仓</div>
+                        <div class="pnl-value" id="position">0</div>
+                    </div>
+                    <div class="pnl-item">
+                        <div class="pnl-label">已实现盈亏</div>
+                        <div class="pnl-value" id="realizedPnl">$0.00</div>
+                    </div>
+                    <div class="pnl-item">
+                        <div class="pnl-label">未实现盈亏</div>
+                        <div class="pnl-value" id="unrealizedPnl">$0.00</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn-activate" id="btnActivate" onclick="activateStrategy()">
+                    🚀 激活策略
+                </button>
+                <button class="btn-deactivate" id="btnDeactivate" onclick="deactivateStrategy()">
+                    🛑 停止策略
+                </button>
+            </div>
+        </div>
+
+        <div class="footer">
+            QuantlinkTrader Control Panel v1.0<br>
+            支持并发保护 | 防止重复点击
+        </div>
+    </div>
+
+    <script>
+        // 防止并发的全局状态
+        let isProcessing = false;
+
+        // 获取 API 基础地址
+        function getApiBase() {
+            const host = document.getElementById('apiHost').value;
+            const port = document.getElementById('apiPort').value;
+            return `http://${host}:${port}/api/v1`;
+        }
+
+        // 显示消息
+        function showMessage(text, type = 'success') {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = `message ${type}`;
+            msg.style.display = 'block';
+
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 5000);
+        }
+
+        // 设置按钮加载状态
+        function setButtonLoading(buttonId, loading, text) {
+            const btn = document.getElementById(buttonId);
+            if (loading) {
+                btn.disabled = true;
+                btn.innerHTML = text + '<span class="loading"></span>';
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = text;
+            }
+        }
+
+        // 激活策略
+        async function activateStrategy() {
+            // 防止并发
+            if (isProcessing) {
+                showMessage('操作进行中，请稍候...', 'error');
+                return;
+            }
+
+            isProcessing = true;
+            setButtonLoading('btnActivate', true, '激活中');
+            document.getElementById('btnDeactivate').disabled = true;
+
+            try {
+                const response = await fetch(`${getApiBase()}/strategy/activate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('✅ 策略激活成功！', 'success');
+                    await loadStatus(); // 刷新状态
+                } else {
+                    showMessage(`❌ 激活失败: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ 连接失败: ${error.message}`, 'error');
+            } finally {
+                isProcessing = false;
+                setButtonLoading('btnActivate', false, '🚀 激活策略');
+                document.getElementById('btnDeactivate').disabled = false;
+            }
+        }
+
+        // 停止策略
+        async function deactivateStrategy() {
+            // 防止并发
+            if (isProcessing) {
+                showMessage('操作进行中，请稍候...', 'error');
+                return;
+            }
+
+            // 二次确认
+            if (!confirm('确认停止策略并平仓？')) {
+                return;
+            }
+
+            isProcessing = true;
+            setButtonLoading('btnDeactivate', true, '停止中');
+            document.getElementById('btnActivate').disabled = true;
+
+            try {
+                const response = await fetch(`${getApiBase()}/strategy/deactivate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('✅ 策略已停止，正在平仓...', 'success');
+                    await loadStatus(); // 刷新状态
+                } else {
+                    showMessage(`❌ 停止失败: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ 连接失败: ${error.message}`, 'error');
+            } finally {
+                isProcessing = false;
+                setButtonLoading('btnDeactivate', false, '🛑 停止策略');
+                document.getElementById('btnActivate').disabled = false;
+            }
+        }
+
+        // 加载状态
+        async function loadStatus() {
+            try {
+                const response = await fetch(`${getApiBase()}/strategy/status`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const status = data.data;
+
+                    // 更新基本信息
+                    document.getElementById('strategyId').textContent = status.strategy_id;
+                    document.getElementById('mode').textContent = status.mode;
+                    document.getElementById('symbols').textContent = status.symbols.join(', ');
+
+                    // 更新运行状态
+                    const runningBadge = document.getElementById('runningStatus');
+                    if (status.running) {
+                        runningBadge.textContent = '运行中';
+                        runningBadge.className = 'status-badge running';
+                    } else {
+                        runningBadge.textContent = '已停止';
+                        runningBadge.className = 'status-badge inactive';
+                    }
+
+                    // 更新激活状态
+                    const activeBadge = document.getElementById('activeStatus');
+                    if (status.active) {
+                        activeBadge.textContent = '已激活';
+                        activeBadge.className = 'status-badge active';
+                    } else {
+                        activeBadge.textContent = '未激活';
+                        activeBadge.className = 'status-badge inactive';
+                    }
+
+                    // 更新持仓和盈亏
+                    if (status.position) {
+                        const netQty = status.position.net_qty || status.position.NetQty || 0;
+                        document.getElementById('position').textContent = netQty;
+                    }
+
+                    if (status.pnl) {
+                        const realized = status.pnl.realized_pnl || status.pnl.RealizedPnL || 0;
+                        const unrealized = status.pnl.unrealized_pnl || status.pnl.UnrealizedPnL || 0;
+
+                        const realizedEl = document.getElementById('realizedPnl');
+                        const unrealizedEl = document.getElementById('unrealizedPnl');
+
+                        realizedEl.textContent = `¥${realized.toFixed(2)}`;
+                        unrealizedEl.textContent = `¥${unrealized.toFixed(2)}`;
+
+                        realizedEl.className = realized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
+                        unrealizedEl.className = unrealized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
+                    }
+
+                    showMessage('✅ 状态已刷新', 'success');
+                } else {
+                    showMessage(`❌ 获取状态失败: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ 连接失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时自动获取状态
+        window.addEventListener('load', () => {
+            loadStatus();
+            // 每10秒自动刷新状态
+            setInterval(loadStatus, 10000);
+        });
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'a' && e.ctrlKey) {
+                e.preventDefault();
+                activateStrategy();
+            } else if (e.key === 'd' && e.ctrlKey) {
+                e.preventDefault();
+                deactivateStrategy();
+            } else if (e.key === 'r' && e.ctrlKey) {
+                e.preventDefault();
+                loadStatus();
+            }
+        });
+    </script>
+</body>
+</html>

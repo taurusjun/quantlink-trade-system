@@ -541,6 +541,8 @@ func (pas *PairwiseArbStrategy) Start() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
+	// 设置运行状态为 Active
+	pas.ControlState.RunState = StrategyRunStateActive
 	pas.Activate()
 	log.Printf("[PairwiseArbStrategy:%s] Started", pas.ID)
 	return nil
@@ -551,6 +553,7 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
+	pas.ControlState.RunState = StrategyRunStateStopped
 	pas.Deactivate()
 	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.ID)
 	return nil
@@ -574,4 +577,9 @@ func (pas *PairwiseArbStrategy) GetSpreadStatus() map[string]interface{} {
 		"leg1_position":  pas.leg1Position,
 		"leg2_position":  pas.leg2Position,
 	}
+}
+
+// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
+func (pas *PairwiseArbStrategy) GetBaseStrategy() *BaseStrategy {
+	return pas.BaseStrategy
 }
