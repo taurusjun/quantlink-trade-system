@@ -1,0 +1,65 @@
+# QuantlinkTrader Configuration - al2502-al2503 Pair Trading
+# 对应 tbsrc: control.al2502.al2503.par.txt.93201
+# 铝 2025年2月 - 2025年3月 配对套利
+
+system:
+  strategy_id: "93201"
+  mode: "simulation"
+
+strategy:
+  type: "pairwise_arb"
+  symbols:
+    - "al2502"                          # 铝 2025年2月（主品种）
+    - "al2503"                          # 铝 2025年3月（对冲品种）
+  exchanges:
+    - "SHFE"
+    - "SHFE"
+  max_position_size: 20
+  max_exposure: 400000.0
+
+  parameters:
+    lookback_period: 100
+    entry_zscore: 2.0
+    exit_zscore: 0.5
+    order_size: 5
+    min_correlation: 0.7
+    spread_type: "difference"
+    use_cointegration: false
+    trade_interval_ms: 3000
+
+session:
+  start_time: "09:00:00"
+  end_time: "15:00:00"
+  timezone: "Asia/Shanghai"
+  auto_start: true
+  auto_stop: true
+
+risk:
+  max_drawdown: 8000.0
+  stop_loss: 80000.0
+  max_loss: 80000.0
+  daily_loss_limit: 150000.0
+  max_reject_count: 10
+  check_interval_ms: 100
+
+engine:
+  ors_gateway_addr: "localhost:50052"
+  nats_addr: "nats://localhost:4222"
+  order_queue_size: 100
+  timer_interval: 5s
+  max_concurrent_orders: 10
+
+portfolio:
+  total_capital: 400000.0
+  strategy_allocation:
+    "93201": 1.0
+
+logging:
+  level: "info"
+  file: "./log/trader.al2502.al2503.93201.log"
+  max_size_mb: 100
+  max_backups: 10
+  max_age_days: 30
+  compress: true
+  console: true
+```yaml

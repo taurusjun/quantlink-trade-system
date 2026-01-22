@@ -1,0 +1,89 @@
+# QuantlinkTrader Configuration File
+# 对应 tbsrc 的 TradeBot 配置
+
+# ═══════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════
+system:
+  strategy_id: "92201"                  # 策略唯一标识符（对应 tbsrc --strategyID）
+  mode: "simulation"                    # 运行模式: live, backtest, simulation
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Configuration
+# ═══════════════════════════════════════════════════════════
+strategy:
+  type: "passive"                       # 策略类型: passive, aggressive, hedging, pairwise_arb
+  symbols:                              # 交易品种
+    - "ag2502"                          # 白银 2025年2月
+  exchanges:                            # 交易所
+    - "SHFE"                            # 上期所
+  max_position_size: 100                # 最大持仓数量
+  max_exposure: 1000000.0               # 最大风险敞口
+
+  # Strategy-specific parameters (策略特定参数)
+  parameters:
+    # Passive Strategy Parameters (被动做市策略参数)
+    spread_multiplier: 0.5              # 价差乘数
+    order_size: 10                      # 下单数量
+    max_inventory: 100                  # 最大库存
+    inventory_skew: 0.5                 # 库存偏移系数
+    min_spread: 1.0                     # 最小价差
+    order_refresh_ms: 1000              # 订单刷新间隔（毫秒）
+    use_order_imbalance: true           # 使用订单不平衡指标
+
+# ═══════════════════════════════════════════════════════════
+# Trading Session Configuration (交易时段配置)
+# ═══════════════════════════════════════════════════════════
+session:
+  start_time: "09:00:00"                # 开始时间（本地时间）
+  end_time: "15:00:00"                  # 结束时间（本地时间）
+  timezone: "Asia/Shanghai"             # 时区
+  auto_start: true                      # 自动启动策略
+  auto_stop: true                       # 自动停止策略
+
+# ═══════════════════════════════════════════════════════════
+# Risk Management Configuration (风险管理配置)
+# ═══════════════════════════════════════════════════════════
+risk:
+  max_drawdown: 10000.0                 # 最大回撤限制
+  stop_loss: 50000.0                    # 止损金额（对应 tbsrc STOP_LOSS）
+  max_loss: 100000.0                    # 最大亏损限制（对应 tbsrc MAX_LOSS）
+  daily_loss_limit: 200000.0            # 每日亏损限制
+  max_reject_count: 10                  # 最大拒单次数
+  check_interval_ms: 100                # 风险检查间隔（毫秒）
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Engine Configuration (策略引擎配置)
+# ═══════════════════════════════════════════════════════════
+engine:
+  ors_gateway_addr: "localhost:50052"   # 订单路由服务地址
+  nats_addr: "nats://localhost:4222"    # NATS 消息队列地址
+  order_queue_size: 100                 # 订单队列大小
+  timer_interval: 5s                    # 定时器间隔
+  max_concurrent_orders: 10             # 最大并发订单数
+
+# ═══════════════════════════════════════════════════════════
+# Portfolio Management Configuration (组合管理配置)
+# ═══════════════════════════════════════════════════════════
+portfolio:
+  total_capital: 1000000.0              # 总资金
+  strategy_allocation:                  # 策略资金分配
+    "92201": 1.0                        # 100% 分配给策略 92201
+  rebalance_interval_sec: 3600          # 再平衡间隔（秒）
+  min_allocation: 0.05                  # 最小分配比例
+  max_allocation: 0.50                  # 最大分配比例
+  enable_auto_rebalance: false          # 启用自动再平衡
+  enable_correlation_calc: false        # 启用相关性计算
+
+# ═══════════════════════════════════════════════════════════
+# Logging Configuration (日志配置)
+# ═══════════════════════════════════════════════════════════
+logging:
+  level: "info"                         # 日志级别: debug, info, warn, error
+  file: "./log/trader.92201.log"        # 日志文件路径
+  max_size_mb: 100                      # 日志文件最大大小（MB）
+  max_backups: 10                       # 保留的旧日志文件数量
+  max_age_days: 30                      # 日志文件保留天数
+  compress: true                        # 压缩旧日志文件
+  console: true                         # 同时输出到控制台
+  json_format: false                    # 使用 JSON 格式
