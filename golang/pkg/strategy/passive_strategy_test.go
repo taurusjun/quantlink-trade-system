@@ -4,8 +4,51 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 )
+
+// setupSharedIndicators creates shared indicators for testing
+// This simulates what StrategyEngine does in production
+func setupSharedIndicators(t *testing.T) *indicators.IndicatorLibrary {
+	t.Helper()
+
+	sharedInds := indicators.NewIndicatorLibrary()
+
+	// Create Spread indicator
+	spreadConfig := map[string]interface{}{
+		"absolute":    true,
+		"max_history": 100.0,
+	}
+	_, err := sharedInds.Create("spread", "spread", spreadConfig)
+	if err != nil {
+		t.Fatalf("Failed to create Spread indicator: %v", err)
+	}
+
+	// Create OrderImbalance indicator
+	oiConfig := map[string]interface{}{
+		"levels":        5.0,
+		"volume_weight": true,
+		"max_history":   100.0,
+	}
+	_, err = sharedInds.Create("order_imbalance", "order_imbalance", oiConfig)
+	if err != nil {
+		t.Fatalf("Failed to create OrderImbalance indicator: %v", err)
+	}
+
+	// Create Volatility indicator
+	volConfig := map[string]interface{}{
+		"window":          20.0,
+		"use_log_returns": true,
+		"max_history":     100.0,
+	}
+	_, err = sharedInds.Create("volatility", "volatility", volConfig)
+	if err != nil {
+		t.Fatalf("Failed to create Volatility indicator: %v", err)
+	}
+
+	return sharedInds
+}
 
 func TestPassiveStrategy_Creation(t *testing.T) {
 	ps := NewPassiveStrategy("passive_1")
@@ -78,6 +121,11 @@ func TestPassiveStrategy_SignalGeneration(t *testing.T) {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
+	// Setup shared indicators (normally done by StrategyEngine)
+	// 设置共享指标（通常由 StrategyEngine 完成）
+	sharedIndicators := setupSharedIndicators(t)
+	ps.SetSharedIndicators(sharedIndicators)
+
 	ps.Start()
 
 	// Feed market data
@@ -94,6 +142,9 @@ func TestPassiveStrategy_SignalGeneration(t *testing.T) {
 			TotalVolume: uint64(1000 + i*10),
 			Turnover:    100.25 * float64(1000+i*10),
 		}
+		// Update shared indicators first (simulating StrategyEngine behavior)
+		// 先更新共享指标（模拟 StrategyEngine 的行为）
+		sharedIndicators.UpdateAll(md)
 		ps.OnMarketData(md)
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -168,8 +219,8 @@ func TestPassiveStrategy_InventoryManagement(t *testing.T) {
 func TestPassiveStrategy_StartStop(t *testing.T) {
 	ps := NewPassiveStrategy("passive_1")
 
-	if ps.IsRunning() {
-		t.Error("Strategy should not be running initially")
+	if !ps.IsRunning() {
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 
 	ps.Start()

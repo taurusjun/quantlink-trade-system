@@ -91,14 +91,13 @@ type BaseStrategy struct {
 	ID                 string
 	Type               string
 	Config             *StrategyConfig
-	Indicators         *indicators.IndicatorLibrary // Deprecated: use SharedIndicators + PrivateIndicators
 	SharedIndicators   *indicators.IndicatorLibrary // Shared indicators (read-only, updated by engine)
 	PrivateIndicators  *indicators.IndicatorLibrary // Private indicators (strategy-specific)
 	Position           *Position
 	PNL                *PNL
 	RiskMetrics        *RiskMetrics
 	Status             *StrategyStatus
-	IsRunningFlag      bool
+	ControlState       *StrategyControlState         // State control (aligned with tbsrc)
 	PendingSignals     []*TradingSignal
 	Orders             map[string]*orspb.OrderUpdate // order_id -> OrderUpdate
 }
@@ -108,12 +107,12 @@ func NewBaseStrategy(id string, strategyType string) *BaseStrategy {
 	return &BaseStrategy{
 		ID:                id,
 		Type:              strategyType,
-		Indicators:        indicators.NewIndicatorLibrary(), // For backward compatibility
 		PrivateIndicators: indicators.NewIndicatorLibrary(),
 		Position:          &Position{},
 		PNL:               &PNL{},
 		RiskMetrics:       &RiskMetrics{},
 		Status:            &StrategyStatus{StrategyID: id},
+		ControlState:      NewStrategyControlState(true), // Auto-activate by default
 		PendingSignals:    make([]*TradingSignal, 0),
 		Orders:            make(map[string]*orspb.OrderUpdate),
 	}
@@ -141,11 +140,6 @@ func (bs *BaseStrategy) GetIndicator(name string) (indicators.Indicator, bool) {
 		}
 	}
 
-	// Fallback to old Indicators field for backward compatibility
-	if bs.Indicators != nil {
-		return bs.Indicators.Get(name)
-	}
-
 	return nil, false
 }
 
@@ -161,7 +155,7 @@ func (bs *BaseStrategy) GetType() string {
 
 // IsRunning returns true if strategy is running
 func (bs *BaseStrategy) IsRunning() bool {
-	return bs.IsRunningFlag
+	return bs.ControlState.IsActivated() && bs.ControlState.RunState != StrategyRunStateStopped
 }
 
 // GetPosition returns current position
@@ -181,7 +175,7 @@ func (bs *BaseStrategy) GetRiskMetrics() *RiskMetrics {
 
 // GetStatus returns strategy status
 func (bs *BaseStrategy) GetStatus() *StrategyStatus {
-	bs.Status.IsRunning = bs.IsRunningFlag
+	bs.Status.IsRunning = bs.ControlState.IsActivated() && bs.ControlState.RunState != StrategyRunStateStopped
 	bs.Status.Position = bs.Position
 	bs.Status.PNL = bs.PNL
 	bs.Status.RiskMetrics = bs.RiskMetrics
@@ -329,7 +323,7 @@ func (bs *BaseStrategy) Reset() {
 	bs.RiskMetrics = &RiskMetrics{}
 	bs.PendingSignals = make([]*TradingSignal, 0)
 	bs.Orders = make(map[string]*orspb.OrderUpdate)
-	bs.Indicators.ResetAll()
+	bs.PrivateIndicators.ResetAll()
 }
 
 // OnAuctionData provides default implementation for auction period data

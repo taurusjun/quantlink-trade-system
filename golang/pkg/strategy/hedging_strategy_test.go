@@ -86,7 +86,7 @@ func TestHedgingStrategy_Initialize(t *testing.T) {
 	}
 
 	// Check spread indicator was created
-	spreadInd, ok := hs.Indicators.Get("hedge_spread")
+	spreadInd, ok := hs.GetIndicator("hedge_spread")
 	if !ok {
 		t.Error("Spread indicator should be created")
 	}
@@ -399,8 +399,8 @@ func TestHedgingStrategy_GetHedgeStatus(t *testing.T) {
 func TestHedgingStrategy_StartStop(t *testing.T) {
 	hs := NewHedgingStrategy("hedging_1")
 
-	if hs.IsRunning() {
-		t.Error("Strategy should not be running initially")
+	if !hs.IsRunning() {
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 
 	hs.Start()

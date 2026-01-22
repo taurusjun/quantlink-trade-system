@@ -79,7 +79,7 @@ func TestAggressiveStrategy_Initialize(t *testing.T) {
 	}
 
 	// Check indicators were created
-	trendInd, ok := as.Indicators.Get("ewma_trend_30")
+	trendInd, ok := as.GetIndicator("ewma_trend_30")
 	if !ok {
 		t.Error("Trend indicator should be created")
 	}
@@ -87,7 +87,7 @@ func TestAggressiveStrategy_Initialize(t *testing.T) {
 		t.Error("Trend indicator should not be nil")
 	}
 
-	momentumInd, ok := as.Indicators.Get("ewma_momentum_15")
+	momentumInd, ok := as.GetIndicator("ewma_momentum_15")
 	if !ok {
 		t.Error("Momentum indicator should be created")
 	}
@@ -95,7 +95,7 @@ func TestAggressiveStrategy_Initialize(t *testing.T) {
 		t.Error("Momentum indicator should not be nil")
 	}
 
-	volInd, ok := as.Indicators.Get("volatility")
+	volInd, ok := as.GetIndicator("volatility")
 	if !ok {
 		t.Error("Volatility indicator should be created")
 	}
@@ -401,8 +401,8 @@ func TestAggressiveStrategy_PositionLimits(t *testing.T) {
 func TestAggressiveStrategy_StartStop(t *testing.T) {
 	as := NewAggressiveStrategy("aggressive_1")
 
-	if as.IsRunning() {
-		t.Error("Strategy should not be running initially")
+	if !as.IsRunning() {
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 
 	as.Start()

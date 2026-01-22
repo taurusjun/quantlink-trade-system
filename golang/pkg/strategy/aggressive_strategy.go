@@ -101,7 +101,7 @@ func (as *AggressiveStrategy) Initialize(config *StrategyConfig) error {
 		"period":      float64(as.trendPeriod),
 		"max_history": 200.0,
 	}
-	_, err := as.Indicators.Create(fmt.Sprintf("ewma_trend_%d", as.trendPeriod), "ewma", ewmaTrendConfig)
+	_, err := as.PrivateIndicators.Create(fmt.Sprintf("ewma_trend_%d", as.trendPeriod), "ewma", ewmaTrendConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create trend EWMA: %w", err)
 	}
@@ -111,7 +111,7 @@ func (as *AggressiveStrategy) Initialize(config *StrategyConfig) error {
 		"period":      float64(as.momentumPeriod),
 		"max_history": 200.0,
 	}
-	_, err = as.Indicators.Create(fmt.Sprintf("ewma_momentum_%d", as.momentumPeriod), "ewma", ewmaMomentumConfig)
+	_, err = as.PrivateIndicators.Create(fmt.Sprintf("ewma_momentum_%d", as.momentumPeriod), "ewma", ewmaMomentumConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create momentum EWMA: %w", err)
 	}
@@ -121,7 +121,7 @@ func (as *AggressiveStrategy) Initialize(config *StrategyConfig) error {
 		"period":      float64(as.momentumPeriod),
 		"max_history": 200.0,
 	}
-	_, err = as.Indicators.Create("volatility", "volatility", volConfig)
+	_, err = as.PrivateIndicators.Create("volatility", "volatility", volConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create volatility indicator: %w", err)
 	}
@@ -142,7 +142,7 @@ func (as *AggressiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Update all indicators
-	as.Indicators.UpdateAll(md)
+	as.PrivateIndicators.UpdateAll(md)
 
 	// Calculate mid price
 	if len(md.BidPrice) == 0 || len(md.AskPrice) == 0 {
@@ -203,17 +203,17 @@ func (as *AggressiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 // generateSignals generates trading signals based on trend and momentum
 func (as *AggressiveStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	// Get indicators
-	trendIndicator, ok := as.Indicators.Get(fmt.Sprintf("ewma_trend_%d", as.trendPeriod))
+	trendIndicator, ok := as.GetIndicator(fmt.Sprintf("ewma_trend_%d", as.trendPeriod))
 	if !ok || !trendIndicator.IsReady() {
 		return
 	}
 
-	momentumIndicator, ok := as.Indicators.Get(fmt.Sprintf("ewma_momentum_%d", as.momentumPeriod))
+	momentumIndicator, ok := as.GetIndicator(fmt.Sprintf("ewma_momentum_%d", as.momentumPeriod))
 	if !ok || !momentumIndicator.IsReady() {
 		return
 	}
 
-	volIndicator, ok := as.Indicators.Get("volatility")
+	volIndicator, ok := as.GetIndicator("volatility")
 	if !ok || !volIndicator.IsReady() {
 		return
 	}
@@ -397,7 +397,7 @@ func (as *AggressiveStrategy) Start() error {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
-	as.IsRunningFlag = true
+	as.Activate()
 	log.Printf("[AggressiveStrategy:%s] Started", as.ID)
 	return nil
 }
@@ -407,7 +407,7 @@ func (as *AggressiveStrategy) Stop() error {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
-	as.IsRunningFlag = false
+	as.Deactivate()
 	log.Printf("[AggressiveStrategy:%s] Stopped", as.ID)
 	return nil
 }

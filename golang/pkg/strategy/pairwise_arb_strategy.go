@@ -136,7 +136,7 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Update indicators
-	pas.Indicators.UpdateAll(md)
+	pas.PrivateIndicators.UpdateAll(md)
 
 	// Track prices for both symbols
 	if len(md.BidPrice) == 0 || len(md.AskPrice) == 0 {
@@ -541,7 +541,7 @@ func (pas *PairwiseArbStrategy) Start() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	pas.IsRunningFlag = true
+	pas.Activate()
 	log.Printf("[PairwiseArbStrategy:%s] Started", pas.ID)
 	return nil
 }
@@ -551,7 +551,7 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	pas.IsRunningFlag = false
+	pas.Deactivate()
 	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.ID)
 	return nil
 }

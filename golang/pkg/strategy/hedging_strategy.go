@@ -113,7 +113,7 @@ func (hs *HedgingStrategy) Initialize(config *StrategyConfig) error {
 	spreadConfig := map[string]interface{}{
 		"max_history": 200.0,
 	}
-	_, err := hs.Indicators.Create("hedge_spread", "spread", spreadConfig)
+	_, err := hs.PrivateIndicators.Create("hedge_spread", "spread", spreadConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create spread indicator: %w", err)
 	}
@@ -134,7 +134,7 @@ func (hs *HedgingStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Update indicators
-	hs.Indicators.UpdateAll(md)
+	hs.PrivateIndicators.UpdateAll(md)
 
 	// Track prices for both symbols
 	if len(md.BidPrice) == 0 || len(md.AskPrice) == 0 {
@@ -264,7 +264,7 @@ func (hs *HedgingStrategy) rebalance(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Check spread is reasonable
-	spreadInd, ok := hs.Indicators.Get("hedge_spread")
+	spreadInd, ok := hs.GetIndicator("hedge_spread")
 	if ok && spreadInd.IsReady() {
 		spread := spreadInd.GetValue()
 		if spread < hs.minSpread {
@@ -343,7 +343,7 @@ func (hs *HedgingStrategy) Start() error {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
-	hs.IsRunningFlag = true
+	hs.Activate()
 	log.Printf("[HedgingStrategy:%s] Started", hs.ID)
 	return nil
 }
@@ -353,7 +353,7 @@ func (hs *HedgingStrategy) Stop() error {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
-	hs.IsRunningFlag = false
+	hs.Deactivate()
 	log.Printf("[HedgingStrategy:%s] Stopped", hs.ID)
 	return nil
 }

@@ -33,6 +33,12 @@
   - 状态转换流程与使用场景
   - golang对齐方案与实现建议
 
+- [STRATEGY_STATE_CONTROL_IMPLEMENTATION.md](golang/STRATEGY_STATE_CONTROL_IMPLEMENTATION.md) - 策略状态控制实现报告
+  - 激活控制（m_Active）
+  - 平仓模式控制（m_onFlat/m_onCancel/m_aggFlat）
+  - 退出控制（m_onExit）
+  - 风险检查集成（CheckSquareoff）
+
 #### 技术实现
 - [INDICATOR_IMPLEMENTATION_STATUS.md](golang/INDICATOR_IMPLEMENTATION_STATUS.md) - 指标实现状态
   - 已实现的指标列表
@@ -155,6 +161,31 @@
 详见：
 - [golang/EVENT_CALLBACK_ALIGNMENT.md](golang/EVENT_CALLBACK_ALIGNMENT.md) - 对齐分析
 - [golang/EVENT_CALLBACK_IMPLEMENTATION.md](golang/EVENT_CALLBACK_IMPLEMENTATION.md) - 实现报告
+
+#### 第三阶段：策略状态控制100%对齐 ✅
+
+✅ **新增1：策略激活控制（m_Active）**
+- 手动激活/禁用策略
+- 完全对齐 tbsrc m_Active
+
+✅ **新增2：平仓模式控制（m_onFlat/m_onCancel/m_aggFlat）**
+- 风险触发自动平仓
+- 自动恢复机制（冷却时间）
+- 激进平仓模式（穿越买卖盘）
+
+✅ **新增3：退出控制（m_onExit）**
+- 不可恢复的退出流程
+- 完全退出前必须平仓
+
+✅ **新增4：风险检查集成（CheckSquareoff）**
+- 止损、最大亏损、拒单限制自动检查
+- Engine定时器自动执行
+
+**对齐度**: 100% 🎉
+
+详见：
+- [golang/STRATEGY_STATE_CONTROL_ANALYSIS.md](golang/STRATEGY_STATE_CONTROL_ANALYSIS.md) - 对齐分析
+- [golang/STRATEGY_STATE_CONTROL_IMPLEMENTATION.md](golang/STRATEGY_STATE_CONTROL_IMPLEMENTATION.md) - 实现报告
 
 ---
 

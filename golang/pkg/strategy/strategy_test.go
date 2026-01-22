@@ -19,29 +19,30 @@ func TestBaseStrategy_Creation(t *testing.T) {
 		t.Errorf("Expected type 'test', got '%s'", bs.GetType())
 	}
 
-	if bs.IsRunning() {
-		t.Error("Strategy should not be running initially")
+	// Strategy is auto-activated by default
+	if !bs.IsRunning() {
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 }
 
 func TestBaseStrategy_StartStop(t *testing.T) {
 	bs := NewBaseStrategy("test_strategy", "test")
 
-	// Initially not running
-	if bs.IsRunning() {
-		t.Error("Strategy should not be running initially")
-	}
-
-	// Start
-	bs.IsRunningFlag = true
+	// Initially running (auto-activated)
 	if !bs.IsRunning() {
-		t.Error("Strategy should be running after start")
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 
 	// Stop
-	bs.IsRunningFlag = false
+	bs.Deactivate()
 	if bs.IsRunning() {
-		t.Error("Strategy should not be running after stop")
+		t.Error("Strategy should not be running after deactivate")
+	}
+
+	// Start
+	bs.Activate()
+	if !bs.IsRunning() {
+		t.Error("Strategy should be running after activate")
 	}
 }
 

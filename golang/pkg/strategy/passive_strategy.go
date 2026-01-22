@@ -85,45 +85,11 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 		return fmt.Errorf("failed to create EWMA indicator: %w", err)
 	}
 
-	// Note: Shared indicators (Spread, OrderImbalance, Volatility) are initialized
-	// by the StrategyEngine and attached via SetSharedIndicators()
-	// 注意：共享指标（Spread, OrderImbalance, Volatility）由 StrategyEngine 初始化
-	// 并通过 SetSharedIndicators() 附加
-	//
-	// For backward compatibility, also create them in old Indicators library
-	// 为了向后兼容，也在旧的 Indicators 库中创建它们
-
-	// Order Imbalance for skewing - SHARED (common calculation)
-	oiConfig := map[string]interface{}{
-		"levels":        5.0,
-		"volume_weight": true,
-		"max_history":   100.0,
-	}
-	_, err = ps.Indicators.Create("order_imbalance", "order_imbalance", oiConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create OrderImbalance indicator: %w", err)
-	}
-
-	// Spread indicator - SHARED (common calculation)
-	spreadConfig := map[string]interface{}{
-		"absolute":    true,
-		"max_history": 100.0,
-	}
-	_, err = ps.Indicators.Create("spread", "spread", spreadConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create Spread indicator: %w", err)
-	}
-
-	// Volatility for risk management - SHARED (common calculation)
-	volConfig := map[string]interface{}{
-		"window":          20.0,
-		"use_log_returns": true,
-		"max_history":     100.0,
-	}
-	_, err = ps.Indicators.Create("volatility", "volatility", volConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create Volatility indicator: %w", err)
-	}
+	// Note: Shared indicators (Spread, OrderImbalance, Volatility) MUST be
+	// initialized by the StrategyEngine and attached via SetSharedIndicators().
+	// In unit tests, they must be manually set up.
+	// 注意：共享指标（Spread, OrderImbalance, Volatility）必须由 StrategyEngine 初始化
+	// 并通过 SetSharedIndicators() 附加。在单元测试中，必须手动设置。
 
 	ps.Status.StartTime = time.Now()
 	return nil
@@ -131,36 +97,31 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 
 // Start starts the strategy
 func (ps *PassiveStrategy) Start() error {
-	if ps.IsRunningFlag {
+	if ps.IsRunning() {
 		return fmt.Errorf("strategy already running")
 	}
-	ps.IsRunningFlag = true
-	ps.Status.IsRunning = true
+	ps.Activate()
 	return nil
 }
 
 // Stop stops the strategy
 func (ps *PassiveStrategy) Stop() error {
-	if !ps.IsRunningFlag {
+	if !ps.IsRunning() {
 		return fmt.Errorf("strategy not running")
 	}
-	ps.IsRunningFlag = false
-	ps.Status.IsRunning = false
+	ps.Deactivate()
 	return nil
 }
 
 // OnMarketData is called when new market data arrives
 func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
-	if !ps.IsRunningFlag {
+	if !ps.IsRunning() {
 		return
 	}
 
 	// Update private indicators (shared indicators are already updated by engine)
 	// 更新私有指标（共享指标已由engine更新）
 	ps.PrivateIndicators.UpdateAll(md)
-
-	// For backward compatibility, also update old Indicators
-	ps.Indicators.UpdateAll(md)
 
 	// Update market state
 	ps.currentMarketState = FromMarketDataUpdate(md)
@@ -179,7 +140,7 @@ func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 // OnOrderUpdate is called when order status changes
 func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
-	if !ps.IsRunningFlag {
+	if !ps.IsRunning() {
 		return
 	}
 
@@ -207,7 +168,7 @@ func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 
 // OnTimer is called periodically
 func (ps *PassiveStrategy) OnTimer(now time.Time) {
-	if !ps.IsRunningFlag {
+	if !ps.IsRunning() {
 		return
 	}
 
@@ -242,11 +203,13 @@ func (ps *PassiveStrategy) generateSignals() {
 	// Get order imbalance for skewing
 	var imbalanceSkew float64
 	if ps.useOrderImbalance {
-		oi, _ := ps.Indicators.Get("order_imbalance")
-		imbalance := oi.GetValue()
-		// Imbalance ranges from -1 (all asks) to 1 (all bids)
-		// Positive imbalance = more bids = more buying pressure = skew quotes higher
-		imbalanceSkew = imbalance * 0.5 // Scale down the effect
+		oi, ok := ps.GetIndicator("order_imbalance")
+		if ok {
+			imbalance := oi.GetValue()
+			// Imbalance ranges from -1 (all asks) to 1 (all bids)
+			// Positive imbalance = more bids = more buying pressure = skew quotes higher
+			imbalanceSkew = imbalance * 0.5 // Scale down the effect
+		}
 	}
 
 	// Calculate inventory skew

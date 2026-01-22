@@ -584,8 +584,8 @@ func TestPairwiseArbStrategy_GetSpreadStatus(t *testing.T) {
 func TestPairwiseArbStrategy_StartStop(t *testing.T) {
 	pas := NewPairwiseArbStrategy("pairwise_1")
 
-	if pas.IsRunning() {
-		t.Error("Strategy should not be running initially")
+	if !pas.IsRunning() {
+		t.Error("Strategy should be running initially (auto-activated)")
 	}
 
 	pas.Start()

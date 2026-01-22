@@ -266,7 +266,7 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 	// Step 2: Notify strategies about indicator update (optional interface)
 	// 步骤2：通知策略指标已更新（可选接口，类似tbsrc INDCallBack）
 	se.mu.RLock()
-	sharedInds := se.sharedIndPool.GetIndicators(md.Symbol)
+	sharedInds, _ := se.sharedIndPool.Get(md.Symbol)
 	for _, strategy := range se.strategies {
 		if !strategy.IsRunning() {
 			continue
@@ -296,18 +296,29 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 				}
 			}()
 
-			// 1. Call appropriate callback based on feed type (like tbsrc)
-			if md.FeedType == mdpb.FeedType_AUCTION {
-				s.OnAuctionData(md) // Auction period callback
-			} else {
-				s.OnMarketData(md) // Normal continuous trading callback
-			}
+			// 1. Call market data callback
+			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous
+			// For now, always call OnMarketData
+			s.OnMarketData(md)
 
 			// 2. Immediately collect signals
 			signals := s.GetSignals()
 
-			// 3. Send orders immediately (synchronous)
+			// 3. Send orders immediately (synchronous) - but check state first
+			// 对应 tbsrc: !m_onFlat && m_Active check before SendOrder()
 			for _, signal := range signals {
+				// Check if strategy can send orders (aligned with tbsrc)
+				if accessor, ok := s.(BaseStrategyAccessor); ok {
+					baseStrat := accessor.GetBaseStrategy()
+					if baseStrat != nil && baseStrat.ControlState != nil {
+						if !baseStrat.CanSendOrder() {
+							log.Printf("[%s] Skipping order: strategy not in active state (%s)",
+								s.GetID(), baseStrat.ControlState.String())
+							continue
+						}
+					}
+				}
+
 				se.sendOrderSync(signal)
 			}
 		}(strategy)
@@ -323,7 +334,7 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 	// Step 2: Notify strategies about indicator update (optional interface)
 	// 步骤2：通知策略指标已更新（可选接口）
 	se.mu.RLock()
-	sharedInds := se.sharedIndPool.GetIndicators(md.Symbol)
+	sharedInds, _ := se.sharedIndPool.Get(md.Symbol)
 	for _, strategy := range se.strategies {
 		if !strategy.IsRunning() {
 			continue
@@ -352,12 +363,9 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 				}
 			}()
 
-			// Call appropriate callback based on feed type
-			if md.FeedType == mdpb.FeedType_AUCTION {
-				s.OnAuctionData(md)
-			} else {
-				s.OnMarketData(md)
-			}
+			// Call market data callback
+			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous
+			s.OnMarketData(md)
 
 			// Collect signals
 			signals := s.GetSignals()
@@ -437,7 +445,7 @@ func (se *StrategyEngine) dispatchOrderUpdate(update *orspb.OrderUpdate) {
 			// If strategy implements DetailedOrderStrategy, call fine-grained callbacks
 			if detailedStrategy, ok := s.(DetailedOrderStrategy); ok {
 				switch update.Status {
-				case orspb.OrderStatus_NEW:
+				case orspb.OrderStatus_ACCEPTED, orspb.OrderStatus_SUBMITTED:
 					detailedStrategy.OnOrderNew(update)
 				case orspb.OrderStatus_FILLED, orspb.OrderStatus_PARTIALLY_FILLED:
 					detailedStrategy.OnOrderFilled(update)
@@ -493,6 +501,7 @@ func (se *StrategyEngine) sendOrder(ctx context.Context, req *orspb.OrderRequest
 }
 
 // timerLoop calls OnTimer for all strategies periodically
+// Also performs risk checks and state recovery (aligned with tbsrc CheckSquareoff)
 func (se *StrategyEngine) timerLoop() {
 	defer se.wg.Done()
 
@@ -506,22 +515,63 @@ func (se *StrategyEngine) timerLoop() {
 		case now := <-ticker.C:
 			se.mu.RLock()
 			for _, strategy := range se.strategies {
-				if strategy.IsRunning() {
-					go func(s Strategy, t time.Time) {
-						defer func() {
-							if r := recover(); r != nil {
-								log.Printf("[StrategyEngine] Panic in strategy %s OnTimer: %v", s.GetID(), r)
-							}
-						}()
-						s.OnTimer(t)
-					}(strategy, now)
+				if !strategy.IsRunning() {
+					continue
 				}
+
+				// Perform risk checks and state management (aligned with tbsrc)
+				se.performStateCheck(strategy)
+
+				// Call strategy's timer callback
+				go func(s Strategy, t time.Time) {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("[StrategyEngine] Panic in strategy %s OnTimer: %v", s.GetID(), r)
+						}
+					}()
+					s.OnTimer(t)
+				}(strategy, now)
 			}
 			se.mu.RUnlock()
 
 		case <-se.ctx.Done():
 			log.Println("[StrategyEngine] Timer loop stopped")
 			return
+		}
+	}
+}
+
+// performStateCheck performs risk checks and state management for a strategy
+// Aligned with tbsrc's CheckSquareoff() logic
+func (se *StrategyEngine) performStateCheck(strategy Strategy) {
+	// Try to access BaseStrategy for state control
+	accessor, ok := strategy.(BaseStrategyAccessor)
+	if !ok {
+		return // Strategy doesn't expose BaseStrategy
+	}
+
+	baseStrat := accessor.GetBaseStrategy()
+	if baseStrat == nil || baseStrat.ControlState == nil {
+		return
+	}
+
+	// Check and handle risk limits
+	// This will trigger flatten/exit if limits are exceeded
+	baseStrat.CheckAndHandleRiskLimits()
+
+	// Handle flatten process if in flatten mode
+	if baseStrat.ControlState.FlattenMode || baseStrat.ControlState.ExitRequested {
+		// Get current price for flatten orders
+		// TODO: Use actual market price from latest market data
+		currentPrice := 0.0
+		if baseStrat.Position.AvgLongPrice > 0 {
+			currentPrice = baseStrat.Position.AvgLongPrice
+		} else if baseStrat.Position.AvgShortPrice > 0 {
+			currentPrice = baseStrat.Position.AvgShortPrice
+		}
+
+		if currentPrice > 0 {
+			baseStrat.HandleFlatten(currentPrice)
 		}
 	}
 }
