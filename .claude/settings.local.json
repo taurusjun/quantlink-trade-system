@@ -12,7 +12,10 @@
       "Bash(done)",
       "Bash(cat:*)",
       "Bash(chmod:*)",
-      "Bash(/Users/user/PWorks/RD/quantlink-trade-system/scripts/generate_proto.sh)"
+      "Bash(/Users/user/PWorks/RD/quantlink-trade-system/scripts/generate_proto.sh)",
+      "Bash(nats-server:*)",
+      "Bash(lsof:*)",
+      "Bash(./bin/indicator_demo:*)"
     ]
   }
 }

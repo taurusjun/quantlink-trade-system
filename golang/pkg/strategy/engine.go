@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/client"
+	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
@@ -21,6 +22,7 @@ type StrategyEngine struct {
 	orsClient       *client.ORSClient
 	natsConn        *nats.Conn
 	mdSubscriptions map[string]*nats.Subscription // symbol -> subscription
+	sharedIndPool   *indicators.SharedIndicatorPool // Shared indicator pool (like tbsrc Instrument-level indicators)
 
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -32,22 +34,43 @@ type StrategyEngine struct {
 	config          *EngineConfig
 }
 
+// OrderMode defines how orders are sent
+type OrderMode int
+
+const (
+	// OrderModeAsync - Asynchronous order sending via queue (high throughput)
+	OrderModeAsync OrderMode = iota
+	// OrderModeSync - Synchronous order sending (low latency, like tbsrc)
+	OrderModeSync
+)
+
 // EngineConfig represents strategy engine configuration
 type EngineConfig struct {
-	ORSGatewayAddr  string        // ORS Gateway address
-	NATSAddr        string        // NATS server address
-	OrderQueueSize  int           // Order queue buffer size
-	TimerInterval   time.Duration // Timer interval for strategies
-	MaxConcurrentOrders int       // Max concurrent orders
+	ORSGatewayAddr      string        // ORS Gateway address
+	NATSAddr            string        // NATS server address
+	OrderQueueSize      int           // Order queue buffer size
+	TimerInterval       time.Duration // Timer interval for strategies
+	MaxConcurrentOrders int           // Max concurrent orders
+	OrderMode           OrderMode     // Order sending mode (Sync or Async)
+	OrderTimeout        time.Duration // Timeout for synchronous order sending
 }
 
 // NewStrategyEngine creates a new strategy engine
 func NewStrategyEngine(config *EngineConfig) *StrategyEngine {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Set default values
+	if config.OrderTimeout == 0 {
+		config.OrderTimeout = 50 * time.Millisecond // Default 50ms timeout
+	}
+	if config.OrderQueueSize == 0 {
+		config.OrderQueueSize = 1000 // Default queue size
+	}
+
 	return &StrategyEngine{
 		strategies:      make(map[string]Strategy),
 		mdSubscriptions: make(map[string]*nats.Subscription),
+		sharedIndPool:   indicators.NewSharedIndicatorPool(),
 		ctx:             ctx,
 		cancel:          cancel,
 		orderQueue:      make(chan *TradingSignal, config.OrderQueueSize),
@@ -133,9 +156,14 @@ func (se *StrategyEngine) Start() error {
 
 	log.Println("[StrategyEngine] Starting...")
 
-	// Start order processing goroutine
-	se.wg.Add(1)
-	go se.processOrders()
+	// Start order processing goroutine (only for async mode)
+	if se.config.OrderMode == OrderModeAsync {
+		se.wg.Add(1)
+		go se.processOrders()
+		log.Println("[StrategyEngine] Order mode: Async (queue-based)")
+	} else {
+		log.Println("[StrategyEngine] Order mode: Sync (direct send, low-latency)")
+	}
 
 	// Start timer goroutine
 	se.wg.Add(1)
@@ -222,6 +250,92 @@ func (se *StrategyEngine) SubscribeMarketData(symbol string) error {
 
 // dispatchMarketData dispatches market data to all strategies
 func (se *StrategyEngine) dispatchMarketData(md *mdpb.MarketDataUpdate) {
+	if se.config.OrderMode == OrderModeSync {
+		se.dispatchMarketDataSync(md)
+	} else {
+		se.dispatchMarketDataAsync(md)
+	}
+}
+
+// dispatchMarketDataSync - Synchronous mode (low latency, like tbsrc)
+func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
+	// Step 1: Update shared indicators first (only once for all strategies)
+	// 步骤1：先更新共享指标（所有策略只计算一次）
+	se.sharedIndPool.UpdateAll(md.Symbol, md)
+
+	// Step 2: Notify strategies about indicator update (optional interface)
+	// 步骤2：通知策略指标已更新（可选接口，类似tbsrc INDCallBack）
+	se.mu.RLock()
+	sharedInds := se.sharedIndPool.GetIndicators(md.Symbol)
+	for _, strategy := range se.strategies {
+		if !strategy.IsRunning() {
+			continue
+		}
+		// Check if strategy implements IndicatorAwareStrategy interface
+		if indStrategy, ok := strategy.(IndicatorAwareStrategy); ok {
+			indStrategy.OnIndicatorUpdate(md.Symbol, sharedInds)
+		}
+	}
+	se.mu.RUnlock()
+
+	// Step 3: Process each strategy (distinguish auction vs continuous)
+	// 步骤3：处理每个策略（区分竞价期/连续交易期，类似tbsrc AuctionCallBack）
+	se.mu.RLock()
+	defer se.mu.RUnlock()
+
+	for _, strategy := range se.strategies {
+		if !strategy.IsRunning() {
+			continue
+		}
+
+		// Synchronous processing - no goroutine overhead
+		func(s Strategy) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[StrategyEngine] Panic in strategy %s: %v", s.GetID(), r)
+				}
+			}()
+
+			// 1. Call appropriate callback based on feed type (like tbsrc)
+			if md.FeedType == mdpb.FeedType_AUCTION {
+				s.OnAuctionData(md) // Auction period callback
+			} else {
+				s.OnMarketData(md) // Normal continuous trading callback
+			}
+
+			// 2. Immediately collect signals
+			signals := s.GetSignals()
+
+			// 3. Send orders immediately (synchronous)
+			for _, signal := range signals {
+				se.sendOrderSync(signal)
+			}
+		}(strategy)
+	}
+}
+
+// dispatchMarketDataAsync - Asynchronous mode (high throughput, original behavior)
+func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
+	// Step 1: Update shared indicators first (only once for all strategies)
+	// 步骤1：先更新共享指标（所有策略只计算一次）
+	se.sharedIndPool.UpdateAll(md.Symbol, md)
+
+	// Step 2: Notify strategies about indicator update (optional interface)
+	// 步骤2：通知策略指标已更新（可选接口）
+	se.mu.RLock()
+	sharedInds := se.sharedIndPool.GetIndicators(md.Symbol)
+	for _, strategy := range se.strategies {
+		if !strategy.IsRunning() {
+			continue
+		}
+		if indStrategy, ok := strategy.(IndicatorAwareStrategy); ok {
+			indStrategy.OnIndicatorUpdate(md.Symbol, sharedInds)
+		}
+	}
+	se.mu.RUnlock()
+
+	// Step 3: Process each strategy in goroutine
+	// 步骤3：在goroutine中处理每个策略
 	se.mu.RLock()
 	defer se.mu.RUnlock()
 
@@ -234,11 +348,16 @@ func (se *StrategyEngine) dispatchMarketData(md *mdpb.MarketDataUpdate) {
 		go func(s Strategy) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[StrategyEngine] Panic in strategy %s OnMarketData: %v", s.GetID(), r)
+					log.Printf("[StrategyEngine] Panic in strategy %s: %v", s.GetID(), r)
 				}
 			}()
 
-			s.OnMarketData(md)
+			// Call appropriate callback based on feed type
+			if md.FeedType == mdpb.FeedType_AUCTION {
+				s.OnAuctionData(md)
+			} else {
+				s.OnMarketData(md)
+			}
 
 			// Collect signals
 			signals := s.GetSignals()
@@ -251,6 +370,25 @@ func (se *StrategyEngine) dispatchMarketData(md *mdpb.MarketDataUpdate) {
 			}
 		}(strategy)
 	}
+}
+
+// sendOrderSync sends an order synchronously (for low-latency mode)
+func (se *StrategyEngine) sendOrderSync(signal *TradingSignal) {
+	// Convert signal to order request
+	req := signal.ToOrderRequest()
+
+	// Send order with timeout
+	ctx, cancel := context.WithTimeout(se.ctx, se.config.OrderTimeout)
+	defer cancel()
+
+	resp, err := se.sendOrder(ctx, req)
+	if err != nil {
+		log.Printf("[StrategyEngine] Order failed for %s: %v", signal.StrategyID, err)
+		return
+	}
+
+	log.Printf("[StrategyEngine] Order sent: %s, OrderID: %s, Status: %v",
+		signal.StrategyID, resp.OrderId, resp.ErrorCode)
 }
 
 // subscribeOrderUpdates subscribes to order updates
@@ -293,7 +431,22 @@ func (se *StrategyEngine) dispatchOrderUpdate(update *orspb.OrderUpdate) {
 				}
 			}()
 
+			// Call general OnOrderUpdate first
 			s.OnOrderUpdate(update)
+
+			// If strategy implements DetailedOrderStrategy, call fine-grained callbacks
+			if detailedStrategy, ok := s.(DetailedOrderStrategy); ok {
+				switch update.Status {
+				case orspb.OrderStatus_NEW:
+					detailedStrategy.OnOrderNew(update)
+				case orspb.OrderStatus_FILLED, orspb.OrderStatus_PARTIALLY_FILLED:
+					detailedStrategy.OnOrderFilled(update)
+				case orspb.OrderStatus_CANCELED:
+					detailedStrategy.OnOrderCanceled(update)
+				case orspb.OrderStatus_REJECTED:
+					detailedStrategy.OnOrderRejected(update)
+				}
+			}
 		}(strategy)
 	}
 }

@@ -72,18 +72,28 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 		ps.useOrderImbalance = v
 	}
 
-	// Initialize indicators
-	// EWMA for trend
+	// Initialize private indicators (strategy-specific)
+	// 初始化私有指标（策略特定，每个策略可能有不同参数）
+
+	// EWMA for trend - PRIVATE (each strategy may use different period)
 	ewmaConfig := map[string]interface{}{
 		"period":      20.0,
 		"max_history": 100.0,
 	}
-	_, err := ps.Indicators.Create("ewma_20", "ewma", ewmaConfig)
+	_, err := ps.PrivateIndicators.Create("ewma_20", "ewma", ewmaConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create EWMA indicator: %w", err)
 	}
 
-	// Order Imbalance for skewing
+	// Note: Shared indicators (Spread, OrderImbalance, Volatility) are initialized
+	// by the StrategyEngine and attached via SetSharedIndicators()
+	// 注意：共享指标（Spread, OrderImbalance, Volatility）由 StrategyEngine 初始化
+	// 并通过 SetSharedIndicators() 附加
+	//
+	// For backward compatibility, also create them in old Indicators library
+	// 为了向后兼容，也在旧的 Indicators 库中创建它们
+
+	// Order Imbalance for skewing - SHARED (common calculation)
 	oiConfig := map[string]interface{}{
 		"levels":        5.0,
 		"volume_weight": true,
@@ -94,7 +104,7 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 		return fmt.Errorf("failed to create OrderImbalance indicator: %w", err)
 	}
 
-	// Spread indicator
+	// Spread indicator - SHARED (common calculation)
 	spreadConfig := map[string]interface{}{
 		"absolute":    true,
 		"max_history": 100.0,
@@ -104,7 +114,7 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 		return fmt.Errorf("failed to create Spread indicator: %w", err)
 	}
 
-	// Volatility for risk management
+	// Volatility for risk management - SHARED (common calculation)
 	volConfig := map[string]interface{}{
 		"window":          20.0,
 		"use_log_returns": true,
@@ -145,7 +155,11 @@ func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		return
 	}
 
-	// Update indicators
+	// Update private indicators (shared indicators are already updated by engine)
+	// 更新私有指标（共享指标已由engine更新）
+	ps.PrivateIndicators.UpdateAll(md)
+
+	// For backward compatibility, also update old Indicators
 	ps.Indicators.UpdateAll(md)
 
 	// Update market state
@@ -201,14 +215,23 @@ func (ps *PassiveStrategy) OnTimer(now time.Time) {
 	// Could implement order timeout, position rebalancing, etc.
 }
 
+// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
+func (ps *PassiveStrategy) GetBaseStrategy() *BaseStrategy {
+	return ps.BaseStrategy
+}
+
 // generateSignals generates trading signals based on current market state
 func (ps *PassiveStrategy) generateSignals() {
 	if ps.currentMarketState == nil {
 		return
 	}
 
-	// Get indicator values
-	spread, _ := ps.Indicators.Get("spread")
+	// Get indicator values (tries shared first, then private, then old)
+	// 获取指标值（先尝试共享，然后私有，最后旧的）
+	spread, ok := ps.GetIndicator("spread")
+	if !ok {
+		return
+	}
 	currentSpread := spread.GetValue()
 
 	// Check minimum spread

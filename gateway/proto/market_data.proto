@@ -23,38 +23,45 @@ message SnapshotRequest {
   string exchange = 2;
 }
 
+// 行情类型（区分竞价期/连续交易期）
+enum FeedType {
+  CONTINUOUS = 0;  // 连续交易期（默认）
+  AUCTION = 1;     // 集合竞价期
+}
+
 // 行情数据更新
 message MarketDataUpdate {
   string symbol = 1;              // 合约代码
   string exchange = 2;            // 交易所
   uint64 timestamp = 3;           // 时间戳（纳秒）
   uint64 exchange_timestamp = 4;  // 交易所时间戳（纳秒）
+  FeedType feed_type = 5;         // 行情类型（竞价/连续）
 
   // 买盘（最多10档）
-  repeated double bid_price = 5;
-  repeated uint32 bid_qty = 6;
-  repeated uint32 bid_order_count = 7;
+  repeated double bid_price = 6;
+  repeated uint32 bid_qty = 7;
+  repeated uint32 bid_order_count = 8;
 
   // 卖盘（最多10档）
-  repeated double ask_price = 8;
-  repeated uint32 ask_qty = 9;
-  repeated uint32 ask_order_count = 10;
+  repeated double ask_price = 9;
+  repeated uint32 ask_qty = 10;
+  repeated uint32 ask_order_count = 11;
 
   // 成交信息
-  double last_price = 11;
-  uint32 last_qty = 12;
-  uint64 total_volume = 13;
-  double turnover = 14;
+  double last_price = 12;
+  uint32 last_qty = 13;
+  uint64 total_volume = 14;
+  double turnover = 15;
 
   // 其他信息
-  double open_price = 15;
-  double high_price = 16;
-  double low_price = 17;
-  double pre_close_price = 18;
+  double open_price = 16;
+  double high_price = 17;
+  double low_price = 18;
+  double pre_close_price = 19;
 
   // 涨跌停价
-  double upper_limit = 19;
-  double lower_limit = 20;
+  double upper_limit = 20;
+  double lower_limit = 21;
 }
 
 // 订阅响应

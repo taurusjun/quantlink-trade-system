@@ -257,7 +257,7 @@ pkg-config --modversion protobuf
 - [ ] 生产环境配置
 - [ ] Prometheus监控集成
 
-**详细计划：** 查看项目文档 [docs/](docs/)
+**完整文档：** 查看 [docs/README.md](docs/README.md) 📚
 
 ## 许可证
 

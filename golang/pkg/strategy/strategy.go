@@ -28,8 +28,13 @@ type Strategy interface {
 	// IsRunning returns true if strategy is running
 	IsRunning() bool
 
-	// OnMarketData is called when new market data arrives
+	// OnMarketData is called when new market data arrives (continuous trading)
 	OnMarketData(md *mdpb.MarketDataUpdate)
+
+	// OnAuctionData is called when auction period market data arrives
+	// This allows strategies to implement special logic for auction periods
+	// (e.g., opening/closing auction, like tbsrc AuctionCallBack)
+	OnAuctionData(md *mdpb.MarketDataUpdate)
 
 	// OnOrderUpdate is called when order status changes
 	OnOrderUpdate(update *orspb.OrderUpdate)
@@ -56,34 +61,92 @@ type Strategy interface {
 	Reset()
 }
 
+// IndicatorAwareStrategy is an optional interface for strategies that need
+// to be notified when shared indicators are updated (like tbsrc INDCallBack).
+// This allows strategies to insert custom logic between indicator calculation
+// and signal generation.
+type IndicatorAwareStrategy interface {
+	// OnIndicatorUpdate is called after shared indicators are updated for a symbol
+	OnIndicatorUpdate(symbol string, indicators *indicators.IndicatorLibrary)
+}
+
+// DetailedOrderStrategy is an optional interface for strategies that need
+// fine-grained order event callbacks (more granular than OnOrderUpdate).
+type DetailedOrderStrategy interface {
+	// OnOrderNew is called when order is confirmed by exchange
+	OnOrderNew(update *orspb.OrderUpdate)
+
+	// OnOrderFilled is called when order is filled (partially or fully)
+	OnOrderFilled(update *orspb.OrderUpdate)
+
+	// OnOrderCanceled is called when order is canceled
+	OnOrderCanceled(update *orspb.OrderUpdate)
+
+	// OnOrderRejected is called when order is rejected
+	OnOrderRejected(update *orspb.OrderUpdate)
+}
+
 // BaseStrategy provides common functionality for all strategies
 type BaseStrategy struct {
-	ID              string
-	Type            string
-	Config          *StrategyConfig
-	Indicators      *indicators.IndicatorLibrary
-	Position        *Position
-	PNL             *PNL
-	RiskMetrics     *RiskMetrics
-	Status          *StrategyStatus
-	IsRunningFlag   bool
-	PendingSignals  []*TradingSignal
-	Orders          map[string]*orspb.OrderUpdate // order_id -> OrderUpdate
+	ID                 string
+	Type               string
+	Config             *StrategyConfig
+	Indicators         *indicators.IndicatorLibrary // Deprecated: use SharedIndicators + PrivateIndicators
+	SharedIndicators   *indicators.IndicatorLibrary // Shared indicators (read-only, updated by engine)
+	PrivateIndicators  *indicators.IndicatorLibrary // Private indicators (strategy-specific)
+	Position           *Position
+	PNL                *PNL
+	RiskMetrics        *RiskMetrics
+	Status             *StrategyStatus
+	IsRunningFlag      bool
+	PendingSignals     []*TradingSignal
+	Orders             map[string]*orspb.OrderUpdate // order_id -> OrderUpdate
 }
 
 // NewBaseStrategy creates a new base strategy
 func NewBaseStrategy(id string, strategyType string) *BaseStrategy {
 	return &BaseStrategy{
-		ID:             id,
-		Type:           strategyType,
-		Indicators:     indicators.NewIndicatorLibrary(),
-		Position:       &Position{},
-		PNL:            &PNL{},
-		RiskMetrics:    &RiskMetrics{},
-		Status:         &StrategyStatus{StrategyID: id},
-		PendingSignals: make([]*TradingSignal, 0),
-		Orders:         make(map[string]*orspb.OrderUpdate),
+		ID:                id,
+		Type:              strategyType,
+		Indicators:        indicators.NewIndicatorLibrary(), // For backward compatibility
+		PrivateIndicators: indicators.NewIndicatorLibrary(),
+		Position:          &Position{},
+		PNL:               &PNL{},
+		RiskMetrics:       &RiskMetrics{},
+		Status:            &StrategyStatus{StrategyID: id},
+		PendingSignals:    make([]*TradingSignal, 0),
+		Orders:            make(map[string]*orspb.OrderUpdate),
 	}
+}
+
+// SetSharedIndicators sets the shared indicator library for this strategy
+// (Called by StrategyEngine during initialization)
+func (bs *BaseStrategy) SetSharedIndicators(shared *indicators.IndicatorLibrary) {
+	bs.SharedIndicators = shared
+}
+
+// GetIndicator gets an indicator (tries shared first, then private)
+func (bs *BaseStrategy) GetIndicator(name string) (indicators.Indicator, bool) {
+	// Try shared indicators first
+	if bs.SharedIndicators != nil {
+		if ind, ok := bs.SharedIndicators.Get(name); ok {
+			return ind, true
+		}
+	}
+
+	// Try private indicators
+	if bs.PrivateIndicators != nil {
+		if ind, ok := bs.PrivateIndicators.Get(name); ok {
+			return ind, true
+		}
+	}
+
+	// Fallback to old Indicators field for backward compatibility
+	if bs.Indicators != nil {
+		return bs.Indicators.Get(name)
+	}
+
+	return nil, false
 }
 
 // GetID returns strategy ID
@@ -267,6 +330,14 @@ func (bs *BaseStrategy) Reset() {
 	bs.PendingSignals = make([]*TradingSignal, 0)
 	bs.Orders = make(map[string]*orspb.OrderUpdate)
 	bs.Indicators.ResetAll()
+}
+
+// OnAuctionData provides default implementation for auction period data
+// Default behavior: Do nothing (strategies can override for auction-specific logic)
+// This aligns with tbsrc AuctionCallBack concept
+func (bs *BaseStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {
+	// Default: no action during auction period
+	// Strategies that need auction logic should override this method
 }
 
 // Helper functions
