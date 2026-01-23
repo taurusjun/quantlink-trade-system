@@ -184,8 +184,12 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		"correlation":     spreadStats.Correlation,
 		"min_correlation": pas.minCorrelation,
 		"hedge_ratio":     spreadStats.HedgeRatio,
-		"price1":          pas.price1,
-		"price2":          pas.price2,
+		// Leg 1 details
+		"leg1_price":    pas.price1,
+		"leg1_position": float64(pas.leg1Position),
+		// Leg 2 details
+		"leg2_price":    pas.price2,
+		"leg2_position": float64(pas.leg2Position),
 	}
 
 	// Conditions are met if:
@@ -465,6 +469,42 @@ func (pas *PairwiseArbStrategy) GetSpreadStatus() map[string]interface{} {
 		"hedge_ratio":    stats.HedgeRatio,
 		"leg1_position":  pas.leg1Position,
 		"leg2_position":  pas.leg2Position,
+	}
+}
+
+// GetLegsInfo returns detailed information for each leg (for UI display)
+func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
+	pas.mu.RLock()
+	defer pas.mu.RUnlock()
+
+	// Determine side for each leg
+	leg1Side := "flat"
+	if pas.leg1Position > 0 {
+		leg1Side = "long"
+	} else if pas.leg1Position < 0 {
+		leg1Side = "short"
+	}
+
+	leg2Side := "flat"
+	if pas.leg2Position > 0 {
+		leg2Side = "long"
+	} else if pas.leg2Position < 0 {
+		leg2Side = "short"
+	}
+
+	return []map[string]interface{}{
+		{
+			"symbol":   pas.symbol1,
+			"price":    pas.price1,
+			"position": pas.leg1Position,
+			"side":     leg1Side,
+		},
+		{
+			"symbol":   pas.symbol2,
+			"price":    pas.price2,
+			"position": pas.leg2Position,
+			"side":     leg2Side,
+		},
 	}
 }
 

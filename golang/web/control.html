@@ -294,6 +294,109 @@
             gap: 10px;
         }
 
+        /* 新增：两条腿展示样式 */
+        .legs-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .legs-card h3 {
+            font-size: 18px;
+            color: #495057;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .legs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .leg-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #6c757d;
+        }
+
+        .leg-item.long {
+            border-left-color: #28a745;
+            background: linear-gradient(to right, #d4edda 0%, white 10%);
+        }
+
+        .leg-item.short {
+            border-left-color: #dc3545;
+            background: linear-gradient(to right, #f8d7da 0%, white 10%);
+        }
+
+        .leg-item.flat {
+            border-left-color: #6c757d;
+        }
+
+        .leg-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .leg-symbol {
+            font-size: 16px;
+            font-weight: 700;
+            color: #212529;
+        }
+
+        .leg-side-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .leg-side-badge.long {
+            background: #28a745;
+            color: white;
+        }
+
+        .leg-side-badge.short {
+            background: #dc3545;
+            color: white;
+        }
+
+        .leg-side-badge.flat {
+            background: #6c757d;
+            color: white;
+        }
+
+        .leg-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .leg-detail {
+            text-align: center;
+        }
+
+        .leg-detail-label {
+            font-size: 10px;
+            color: #6c757d;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .leg-detail-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #212529;
+        }
+
         .indicator-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -432,6 +535,14 @@
                         <div class="pnl-label">未实现盈亏</div>
                         <div class="pnl-value" id="unrealizedPnl">$0.00</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- 新增：两条腿卡片 -->
+            <div class="legs-card" id="legsCard" style="display: none;">
+                <h3>🎯 两条腿状态</h3>
+                <div class="legs-grid" id="legsGrid">
+                    <!-- 腿信息将通过 JS 动态生成 -->
                 </div>
             </div>
 
@@ -578,6 +689,45 @@
             }
         }
 
+        // 更新两条腿显示
+        function updateLegsDisplay(status) {
+            const legsCard = document.getElementById('legsCard');
+            const legsGrid = document.getElementById('legsGrid');
+
+            // 如果有legs数据，显示legs卡片
+            if (status.legs && status.legs.length > 0) {
+                legsCard.style.display = 'block';
+                legsGrid.innerHTML = '';
+
+                status.legs.forEach(leg => {
+                    const legItem = document.createElement('div');
+                    legItem.className = `leg-item ${leg.side}`;
+
+                    legItem.innerHTML = `
+                        <div class="leg-header">
+                            <div class="leg-symbol">${leg.symbol}</div>
+                            <div class="leg-side-badge ${leg.side}">${leg.side}</div>
+                        </div>
+                        <div class="leg-details">
+                            <div class="leg-detail">
+                                <div class="leg-detail-label">价格</div>
+                                <div class="leg-detail-value">${leg.price.toFixed(2)}</div>
+                            </div>
+                            <div class="leg-detail">
+                                <div class="leg-detail-label">持仓</div>
+                                <div class="leg-detail-value">${leg.position}</div>
+                            </div>
+                        </div>
+                    `;
+
+                    legsGrid.appendChild(legItem);
+                });
+            } else {
+                // 没有legs数据，隐藏卡片
+                legsCard.style.display = 'none';
+            }
+        }
+
         // 更新交易条件显示
         function updateConditionsDisplay(status) {
             const conditionsCard = document.getElementById('conditionsCard');
@@ -624,13 +774,19 @@
                     'spread_std': '价差标准差',
                     'correlation': '相关性',
                     'min_correlation': '最小相关性',
-                    'hedge_ratio': '对冲比率',
-                    'price1': '价格1',
-                    'price2': '价格2'
+                    'hedge_ratio': '对冲比率'
                 };
+
+                // 过滤掉legs相关的指标（它们会在legs卡片中单独显示）
+                const legsKeys = ['leg1_price', 'leg2_price', 'leg1_position', 'leg2_position'];
 
                 // 生成指标卡片
                 Object.keys(status.indicators).sort().forEach(key => {
+                    // 跳过legs相关的指标（它们会在legs卡片中显示）
+                    if (legsKeys.includes(key)) {
+                        return;
+                    }
+
                     const value = status.indicators[key];
                     const label = indicatorLabels[key] || key;
 
@@ -715,6 +871,9 @@
                         realizedEl.className = realized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
                         unrealizedEl.className = unrealized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
                     }
+
+                    // 更新两条腿状态（新增）
+                    updateLegsDisplay(status);
 
                     // 更新交易条件状态（新增）
                     updateConditionsDisplay(status);

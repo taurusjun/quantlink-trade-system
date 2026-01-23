@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
@@ -97,11 +98,9 @@ func (ps *PassiveStrategy) Initialize(config *StrategyConfig) error {
 
 // Start starts the strategy
 func (ps *PassiveStrategy) Start() error {
-	if ps.IsRunning() {
-		return fmt.Errorf("strategy already running")
-	}
 	ps.ControlState.RunState = StrategyRunStateActive
 	ps.Activate()
+	log.Printf("[PassiveStrategy:%s] Started", ps.ID)
 	return nil
 }
 

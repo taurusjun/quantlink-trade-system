@@ -50,6 +50,17 @@ type StrategyStatusResponse struct {
 	SignalStrength  float64                `json:"signal_strength"`   // Current signal strength (e.g., z-score)
 	LastSignalTime  string                 `json:"last_signal_time"`  // When last signal was generated
 	Indicators      map[string]float64     `json:"indicators"`        // All indicator values for display
+
+	// Legs information for pair trading strategies (optional)
+	Legs []LegInfo `json:"legs,omitempty"` // Detailed info for each leg
+}
+
+// LegInfo contains information for one leg of a pair trading strategy
+type LegInfo struct {
+	Symbol   string  `json:"symbol"`    // Symbol name (e.g., "ag2502")
+	Price    float64 `json:"price"`     // Current price
+	Position int64   `json:"position"`  // Current position
+	Side     string  `json:"side"`      // "long" or "short" or "flat"
 }
 
 // loggingMiddleware logs all incoming requests
@@ -272,6 +283,31 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SignalStrength:  baseStrat.ControlState.SignalStrength,
 		LastSignalTime:  lastSignalTime,
 		Indicators:      baseStrat.ControlState.Indicators,
+	}
+
+	// Get legs info for pair trading strategies
+	if legsProvider, ok := a.trader.Strategy.(interface {
+		GetLegsInfo() []map[string]interface{}
+	}); ok {
+		legsData := legsProvider.GetLegsInfo()
+		legs := make([]LegInfo, 0, len(legsData))
+		for _, legData := range legsData {
+			leg := LegInfo{}
+			if sym, ok := legData["symbol"].(string); ok {
+				leg.Symbol = sym
+			}
+			if price, ok := legData["price"].(float64); ok {
+				leg.Price = price
+			}
+			if pos, ok := legData["position"].(int64); ok {
+				leg.Position = pos
+			}
+			if side, ok := legData["side"].(string); ok {
+				leg.Side = side
+			}
+			legs = append(legs, leg)
+		}
+		status.Legs = legs
 	}
 
 	// Set uptime if available (could be calculated from Status field in future)

@@ -1,0 +1,98 @@
+# QuantlinkTrader Test Configuration File
+# 测试专用配置 - 无交易时段限制，全天运行
+# 使用方法: ./bin/trader -config config/trader.test.yaml
+
+# ═══════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════
+system:
+  strategy_id: "test_92201"             # 策略唯一标识符（测试专用）
+  mode: "simulation"                    # 运行模式: live, backtest, simulation
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Configuration
+# ═══════════════════════════════════════════════════════════
+strategy:
+  type: "pairwise_arb"                  # 策略类型: passive, aggressive, hedging, pairwise_arb
+  symbols:                              # 交易品种（配对交易需要两个）
+    - "ag2502"                          # 白银 2025年2月
+    - "ag2504"                          # 白银 2025年4月
+  exchanges:                            # 交易所
+    - "SHFE"                            # 上期所
+  max_position_size: 100                # 最大持仓数量
+  max_exposure: 1000000.0               # 最大风险敞口
+
+  # Strategy-specific parameters (策略特定参数)
+  parameters:
+    # Pairwise Arbitrage Strategy Parameters (配对套利策略参数)
+    spread_type: "difference"           # 价差类型: difference, ratio, log
+    lookback_period: 100.0              # 回看周期
+    entry_zscore: 2.0                   # 入场Z-Score阈值
+    exit_zscore: 0.5                    # 出场Z-Score阈值
+    order_size: 10.0                    # 每条腿的下单数量
+    min_correlation: 0.7                # 最小相关系数
+
+# ═══════════════════════════════════════════════════════════
+# Trading Session Configuration (交易时段配置)
+# ═══════════════════════════════════════════════════════════
+session:
+  start_time: "00:00:00"                # 开始时间（本地时间）- 测试模式：全天
+  end_time: "23:59:59"                  # 结束时间（本地时间）- 测试模式：全天
+  timezone: "Asia/Shanghai"             # 时区
+  auto_start: true                      # 自动启动策略
+  auto_stop: false                      # 自动停止策略 - 测试模式：禁用自动停止
+
+# ═══════════════════════════════════════════════════════════
+# Risk Management Configuration (风险管理配置)
+# ═══════════════════════════════════════════════════════════
+risk:
+  max_drawdown: 10000.0                 # 最大回撤限制
+  stop_loss: 50000.0                    # 止损金额（对应 tbsrc STOP_LOSS）
+  max_loss: 100000.0                    # 最大亏损限制（对应 tbsrc MAX_LOSS）
+  daily_loss_limit: 200000.0            # 每日亏损限制
+  max_reject_count: 10                  # 最大拒单次数
+  check_interval_ms: 100                # 风险检查间隔（毫秒）
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Engine Configuration (策略引擎配置)
+# ═══════════════════════════════════════════════════════════
+engine:
+  ors_gateway_addr: "localhost:50052"   # 订单路由服务地址
+  nats_addr: "nats://localhost:4222"    # NATS 消息队列地址
+  order_queue_size: 100                 # 订单队列大小
+  timer_interval: 5s                    # 定时器间隔
+  max_concurrent_orders: 10             # 最大并发订单数
+
+# ═══════════════════════════════════════════════════════════
+# Portfolio Management Configuration (组合管理配置)
+# ═══════════════════════════════════════════════════════════
+portfolio:
+  total_capital: 1000000.0              # 总资金
+  strategy_allocation:                  # 策略资金分配
+    "test_92201": 0.5                   # 50% 分配给测试策略
+  rebalance_interval_sec: 3600          # 再平衡间隔（秒）
+  min_allocation: 0.05                  # 最小分配比例
+  max_allocation: 0.50                  # 最大分配比例
+  enable_auto_rebalance: false          # 启用自动再平衡
+  enable_correlation_calc: false        # 启用相关性计算
+
+# ═══════════════════════════════════════════════════════════
+# API Configuration (API配置)
+# ═══════════════════════════════════════════════════════════
+api:
+  enabled: true                         # 启用 HTTP REST API
+  port: 9201                            # API 端口
+  host: "localhost"                     # API 绑定地址
+
+# ═══════════════════════════════════════════════════════════
+# Logging Configuration (日志配置)
+# ═══════════════════════════════════════════════════════════
+logging:
+  level: "info"                         # 日志级别: debug, info, warn, error
+  file: "./log/trader.test.log"         # 日志文件路径（测试专用）
+  max_size_mb: 100                      # 日志文件最大大小（MB）
+  max_backups: 10                       # 保留的旧日志文件数量
+  max_age_days: 30                      # 日志文件保留天数
+  compress: true                        # 压缩旧日志文件
+  console: true                         # 同时输出到控制台
+  json_format: false                    # 使用 JSON 格式

@@ -68,12 +68,20 @@ engine:
 portfolio:
   total_capital: 1000000.0              # 总资金
   strategy_allocation:                  # 策略资金分配
-    "92201": 1.0                        # 100% 分配给策略 92201
+    "92201": 0.5                        # 50% 分配给策略 92201（单一策略时使用最大限额）
   rebalance_interval_sec: 3600          # 再平衡间隔（秒）
   min_allocation: 0.05                  # 最小分配比例
   max_allocation: 0.50                  # 最大分配比例
   enable_auto_rebalance: false          # 启用自动再平衡
   enable_correlation_calc: false        # 启用相关性计算
+
+# ═══════════════════════════════════════════════════════════
+# API Configuration (API配置)
+# ═══════════════════════════════════════════════════════════
+api:
+  enabled: true                         # 启用 HTTP REST API
+  port: 9201                            # API 端口
+  host: "localhost"                     # API 绑定地址
 
 # ═══════════════════════════════════════════════════════════
 # Logging Configuration (日志配置)
