@@ -359,9 +359,17 @@ func (a *APIServer) handleTestPing(w http.ResponseWriter, r *http.Request) {
 
 // handleTestMarketData handles POST /api/v1/test/market-data
 // 用于测试环境模拟行情数据
+// ⚠️ SAFETY: Only available in simulation/backtest modes, disabled in live mode
 func (a *APIServer) handleTestMarketData(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// SAFETY CHECK: Disable test data injection in live mode
+	if a.trader.Config.System.Mode == "live" {
+		a.sendError(w, http.StatusForbidden, "Test market data endpoint is disabled in live mode")
+		log.Printf("[API] WARNING: Attempted to inject test data in LIVE mode - request blocked")
 		return
 	}
 
