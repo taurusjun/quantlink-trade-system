@@ -38,11 +38,12 @@ type StrategyConfig struct {
 
 // SessionConfig contains trading session configuration
 type SessionConfig struct {
-	StartTime string `yaml:"start_time"` // HH:MM:SS
-	EndTime   string `yaml:"end_time"`   // HH:MM:SS
-	Timezone  string `yaml:"timezone"`   // e.g., "Asia/Shanghai"
-	AutoStart bool   `yaml:"auto_start"`
-	AutoStop  bool   `yaml:"auto_stop"`
+	StartTime    string `yaml:"start_time"`    // HH:MM:SS
+	EndTime      string `yaml:"end_time"`      // HH:MM:SS
+	Timezone     string `yaml:"timezone"`      // e.g., "Asia/Shanghai"
+	AutoStart    bool   `yaml:"auto_start"`    // Auto-start session manager
+	AutoStop     bool   `yaml:"auto_stop"`     // Auto-stop at end time
+	AutoActivate bool   `yaml:"auto_activate"` // Auto-activate strategy (if false, wait for manual activation)
 }
 
 // RiskConfig contains risk management configuration

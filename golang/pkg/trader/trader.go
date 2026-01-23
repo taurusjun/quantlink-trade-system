@@ -135,17 +135,17 @@ func (t *Trader) Initialize() error {
 	}
 	log.Println("[Trader] ✓ Strategy initialized")
 
-	// Set initial activation state based on mode (对应 tbsrc 行为)
+	// Set initial activation state based on config (对应 tbsrc 行为)
 	baseStrat := t.getBaseStrategy()
 	if baseStrat != nil {
-		if t.Config.System.Mode == "live" {
-			// Live 模式：初始未激活，等待手动激活
-			baseStrat.ControlState.Deactivate()
-			log.Println("[Trader] Initial state: NOT activated (live mode)")
-		} else {
-			// Simulation/Backtest 模式：默认激活
+		if t.Config.Session.AutoActivate {
+			// 自动激活：ControlState 设为激活
 			baseStrat.ControlState.Activate()
-			log.Println("[Trader] Initial state: Activated (non-live mode)")
+			log.Printf("[Trader] Initial state: Activated (auto_activate=true, mode=%s)", t.Config.System.Mode)
+		} else {
+			// 等待手动激活：ControlState 设为未激活
+			baseStrat.ControlState.Deactivate()
+			log.Printf("[Trader] Initial state: NOT activated (auto_activate=false, mode=%s)", t.Config.System.Mode)
 		}
 	}
 
@@ -217,20 +217,18 @@ func (t *Trader) Start() error {
 		log.Println("[Trader] ✓ Strategy Engine started")
 	}
 
-	// Decide whether to auto-activate based on mode (对应 tbsrc 行为)
-	autoActivate := false
-	if t.Config.System.Mode == "simulation" || t.Config.System.Mode == "backtest" {
-		// Simulation/Backtest 模式：自动激活
-		autoActivate = true
-		log.Println("[Trader] Simulation/Backtest mode: auto-activating strategy")
-	} else if t.Config.System.Mode == "live" {
-		// Live 模式：等待手动激活（对应 tbsrc m_Active = false）
-		autoActivate = false
+	// Decide whether to auto-activate based on config (对应 tbsrc 行为)
+	autoActivate := t.Config.Session.AutoActivate
+
+	if autoActivate {
+		log.Printf("[Trader] Auto-activation enabled (mode: %s)", t.Config.System.Mode)
+	} else {
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
-		log.Println("[Trader] Live mode: Strategy initialized but NOT activated")
-		log.Println("[Trader] Waiting for manual activation signal...")
-		log.Printf("[Trader] To activate: kill -SIGUSR1 %d\n", os.Getpid())
-		log.Printf("[Trader] To deactivate: kill -SIGUSR2 %d\n", os.Getpid())
+		log.Println("[Trader] Strategy initialized but NOT activated")
+		log.Println("[Trader] Waiting for manual activation...")
+		log.Println("[Trader] Activate via:")
+		log.Println("[Trader]   - Web UI: POST /api/v1/strategy/activate")
+		log.Printf("[Trader]   - Signal: kill -SIGUSR1 %d\n", os.Getpid())
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
 	}
 

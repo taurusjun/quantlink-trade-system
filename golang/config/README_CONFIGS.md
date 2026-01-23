@@ -104,6 +104,7 @@ session:
   start_time: "09:00:00"        # 交易开始时间（测试模式用00:00:00）
   end_time: "15:00:00"          # 交易结束时间（测试模式用23:59:59）
   auto_stop: true               # 自动停止（测试模式设为false）
+  auto_activate: false          # 自动激活策略（推荐false，手动激活更安全）
 
 api:
   enabled: true                 # 启用API
@@ -193,6 +194,75 @@ ps aux | grep "bin/trader" | grep -v grep
 
 ---
 
+## 🎯 Strategy Activation (策略激活)
+
+### 激活模式
+
+策略有两种激活模式：
+
+#### 1. 自动激活 (Auto-Activate)
+```yaml
+session:
+  auto_activate: true
+```
+- ✓ 启动即交易
+- ⚠️ 无法在启动时检查状态
+- 适合自动化场景
+
+#### 2. 手动激活 (Manual Activate) - **推荐**
+```yaml
+session:
+  auto_activate: false   # 默认配置
+```
+- ✓ 启动后不立即交易
+- ✓ 可以检查配置和状态
+- ✓ 准备好后再激活
+- 适合交互式场景
+
+### 手动激活流程
+
+```bash
+# 1. 启动trader（策略未激活）
+./start_trader.sh test
+
+# 日志显示:
+# [Trader] Strategy initialized but NOT activated
+# [Trader] Waiting for manual activation...
+
+# 2. 检查状态
+curl http://localhost:9201/api/v1/strategy/status
+
+# 应该看到: "active": false
+
+# 3. 激活策略（三种方式任选）
+
+# 方式1: Web UI（推荐）
+# 访问 http://localhost:3000/?api=http://localhost:9201
+# 点击 "🟢 激活策略" 按钮
+
+# 方式2: API
+curl -X POST http://localhost:9201/api/v1/strategy/activate
+
+# 方式3: 信号
+kill -SIGUSR1 <PID>
+
+# 4. 验证激活
+curl http://localhost:9201/api/v1/strategy/status
+# 应该看到: "active": true
+```
+
+### 停用策略
+
+```bash
+# Web UI: 点击 "🔴 停用策略" 按钮
+# 或
+curl -X POST http://localhost:9201/api/v1/strategy/deactivate
+# 或
+kill -SIGUSR2 <PID>
+```
+
+---
+
 ## 🛠️ Troubleshooting
 
 ### 常见问题
@@ -210,6 +280,14 @@ tail -f log/trader.test.log
 ```
 
 #### 2. 策略不交易
+- **检查策略是否已激活** - 如果 `session.auto_activate=false`，需要手动激活策略
+  ```bash
+  # 检查激活状态
+  curl http://localhost:9201/api/v1/strategy/status | grep "active"
+
+  # 手动激活
+  curl -X POST http://localhost:9201/api/v1/strategy/activate
+  ```
 - 检查 `session.start_time` 和 `end_time` 是否在当前时间范围内
 - 测试时建议使用 `trader.test.yaml` (全天运行)
 - 检查 `session.auto_stop` 是否为 false

@@ -38,8 +38,9 @@ session:
   start_time: "09:00:00"                # 开始时间（本地时间）
   end_time: "15:00:00"                  # 结束时间（本地时间）
   timezone: "Asia/Shanghai"             # 时区
-  auto_start: true                      # 自动启动策略
+  auto_start: true                      # 自动启动Session Manager
   auto_stop: true                       # 自动停止策略
+  auto_activate: false                  # 自动激活策略 - false时需要手动激活（推荐）
 
 # ═══════════════════════════════════════════════════════════
 # Risk Management Configuration (风险管理配置)

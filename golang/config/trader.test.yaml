@@ -39,8 +39,9 @@ session:
   start_time: "00:00:00"                # 开始时间（本地时间）- 测试模式：全天
   end_time: "23:59:59"                  # 结束时间（本地时间）- 测试模式：全天
   timezone: "Asia/Shanghai"             # 时区
-  auto_start: true                      # 自动启动策略
+  auto_start: true                      # 自动启动Session Manager
   auto_stop: false                      # 自动停止策略 - 测试模式：禁用自动停止
+  auto_activate: false                  # 自动激活策略 - false时需要手动激活（推荐）
 
 # ═══════════════════════════════════════════════════════════
 # Risk Management Configuration (风险管理配置)
