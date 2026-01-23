@@ -10,6 +10,7 @@ import (
 
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/strategy/spread"
 )
 
 // PairwiseArbStrategy implements a statistical arbitrage / pairs trading strategy
@@ -33,18 +34,11 @@ type PairwiseArbStrategy struct {
 	// State
 	price1            float64
 	price2            float64
-	spreadMean        float64
-	spreadStd         float64
-	currentSpread     float64
-	currentZScore     float64
 	lastTradeTime     time.Time
 	minTradeInterval  time.Duration
 
-	// Spread history for statistics
-	spreadHistory     []float64
-	price1History     []float64
-	price2History     []float64
-	maxHistoryLen     int
+	// Spread analyzer (encapsulates spread calculation and statistics)
+	spreadAnalyzer    *spread.SpreadAnalyzer
 
 	// Position tracking (separate for each leg)
 	leg1Position      int64
@@ -55,6 +49,8 @@ type PairwiseArbStrategy struct {
 
 // NewPairwiseArbStrategy creates a new pairs trading strategy
 func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
+	maxHistoryLen := 200
+
 	pas := &PairwiseArbStrategy{
 		BaseStrategy:     NewBaseStrategy(id, "pairwise_arb"),
 		lookbackPeriod:   100,
@@ -67,11 +63,12 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 		spreadType:       "difference",
 		useCointegration: false,
 		minTradeInterval: 3 * time.Second,
-		maxHistoryLen:    200,
-		spreadHistory:    make([]float64, 0, 200),
-		price1History:    make([]float64, 0, 200),
-		price2History:    make([]float64, 0, 200),
+		// SpreadAnalyzer 将在 Initialize 中创建（需要知道 symbol 名称）
+		spreadAnalyzer:   nil,
 	}
+
+	// 预创建一个临时的 SpreadAnalyzer（将在 Initialize 时重新创建）
+	pas.spreadAnalyzer = spread.NewSpreadAnalyzer("", "", spread.SpreadTypeDifference, maxHistoryLen)
 
 	return pas
 }
@@ -91,7 +88,7 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	pas.symbol1 = config.Symbols[0]
 	pas.symbol2 = config.Symbols[1]
 
-	// Load strategy-specific parameters
+	// Load strategy-specific parameters (load spread_type first)
 	if val, ok := config.Parameters["lookback_period"].(float64); ok {
 		pas.lookbackPeriod = int(val)
 	}
@@ -113,6 +110,13 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if val, ok := config.Parameters["spread_type"].(string); ok {
 		pas.spreadType = val
 	}
+
+	// 初始化 SpreadAnalyzer（现在知道 symbol 和 spread_type 了）
+	spreadType := spread.SpreadTypeDifference
+	if pas.spreadType == "ratio" {
+		spreadType = spread.SpreadTypeRatio
+	}
+	pas.spreadAnalyzer = spread.NewSpreadAnalyzer(pas.symbol1, pas.symbol2, spreadType, 200)
 	if val, ok := config.Parameters["use_cointegration"].(bool); ok {
 		pas.useCointegration = val
 	}
@@ -146,16 +150,10 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	if md.Symbol == pas.symbol1 {
 		pas.price1 = midPrice
-		pas.price1History = append(pas.price1History, midPrice)
-		if len(pas.price1History) > pas.maxHistoryLen {
-			pas.price1History = pas.price1History[1:]
-		}
+		pas.spreadAnalyzer.UpdatePrice1(midPrice, int64(md.Timestamp))
 	} else if md.Symbol == pas.symbol2 {
 		pas.price2 = midPrice
-		pas.price2History = append(pas.price2History, midPrice)
-		if len(pas.price2History) > pas.maxHistoryLen {
-			pas.price2History = pas.price2History[1:]
-		}
+		pas.spreadAnalyzer.UpdatePrice2(midPrice, int64(md.Timestamp))
 	}
 
 	// Need both prices to calculate spread
@@ -163,38 +161,29 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		return
 	}
 
-	// Calculate spread
-	pas.calculateSpread()
-
-	// Update statistics
-	pas.updateStatistics()
+	// Calculate spread and update statistics using SpreadAnalyzer
+	pas.spreadAnalyzer.CalculateSpread()
+	pas.spreadAnalyzer.UpdateAll(pas.lookbackPeriod)
 
 	// Update PNL (use average price)
 	avgPrice := (pas.price1 + pas.price2) / 2.0
 	pas.BaseStrategy.UpdatePNL(avgPrice)
 	pas.BaseStrategy.UpdateRiskMetrics(avgPrice)
 
-	// Calculate correlation for condition check
-	correlation := 0.0
-	if len(pas.price1History) >= pas.lookbackPeriod && len(pas.price2History) >= pas.lookbackPeriod {
-		n1 := len(pas.price1History)
-		n2 := len(pas.price2History)
-		price1 := pas.price1History[n1-pas.lookbackPeriod:]
-		price2 := pas.price2History[n2-pas.lookbackPeriod:]
-		correlation = pas.calculateCorrelation(price1, price2)
-	}
+	// Get current statistics from SpreadAnalyzer
+	spreadStats := pas.spreadAnalyzer.GetStats()
 
 	// Update condition state for UI display
 	indicators := map[string]float64{
-		"z_score":         pas.currentZScore,
+		"z_score":         spreadStats.ZScore,
 		"entry_threshold": pas.entryZScore,
 		"exit_threshold":  pas.exitZScore,
-		"spread":          pas.currentSpread,
-		"spread_mean":     pas.spreadMean,
-		"spread_std":      pas.spreadStd,
-		"correlation":     correlation,
+		"spread":          spreadStats.CurrentSpread,
+		"spread_mean":     spreadStats.Mean,
+		"spread_std":      spreadStats.Std,
+		"correlation":     spreadStats.Correlation,
 		"min_correlation": pas.minCorrelation,
-		"hedge_ratio":     pas.hedgeRatio,
+		"hedge_ratio":     spreadStats.HedgeRatio,
 		"price1":          pas.price1,
 		"price2":          pas.price2,
 	}
@@ -203,13 +192,13 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	// 1. Z-score exceeds entry threshold
 	// 2. Correlation is above minimum
 	// 3. Enough history data
-	conditionsMet := pas.spreadStd > 1e-10 &&
-		math.Abs(pas.currentZScore) >= pas.entryZScore &&
-		correlation >= pas.minCorrelation &&
-		len(pas.spreadHistory) >= pas.lookbackPeriod
+	conditionsMet := spreadStats.Std > 1e-10 &&
+		math.Abs(spreadStats.ZScore) >= pas.entryZScore &&
+		spreadStats.Correlation >= pas.minCorrelation &&
+		pas.spreadAnalyzer.IsReady(pas.lookbackPeriod)
 
 	// Update control state with current conditions
-	pas.ControlState.UpdateConditions(conditionsMet, pas.currentZScore, indicators)
+	pas.ControlState.UpdateConditions(conditionsMet, spreadStats.ZScore, indicators)
 
 	// Check if we should trade
 	now := time.Now()
@@ -218,7 +207,7 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Check correlation before trading
-	if !pas.checkCorrelation() {
+	if spreadStats.Correlation < pas.minCorrelation {
 		return
 	}
 
@@ -227,165 +216,20 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	pas.lastTradeTime = now
 }
 
-// calculateSpread calculates current spread between the two instruments
-func (pas *PairwiseArbStrategy) calculateSpread() {
-	if pas.price1 == 0 || pas.price2 == 0 {
-		return
-	}
-
-	switch pas.spreadType {
-	case "ratio":
-		pas.currentSpread = pas.price1 / pas.price2
-	case "difference":
-		fallthrough
-	default:
-		pas.currentSpread = pas.price1 - pas.hedgeRatio*pas.price2
-	}
-
-	// Add to history
-	pas.spreadHistory = append(pas.spreadHistory, pas.currentSpread)
-	if len(pas.spreadHistory) > pas.maxHistoryLen {
-		pas.spreadHistory = pas.spreadHistory[1:]
-	}
-}
-
-// updateStatistics updates spread mean, std, and hedge ratio
-func (pas *PairwiseArbStrategy) updateStatistics() {
-	n := len(pas.spreadHistory)
-	if n < pas.lookbackPeriod {
-		return
-	}
-
-	// Use last lookbackPeriod points
-	recent := pas.spreadHistory[n-pas.lookbackPeriod:]
-
-	// Calculate mean
-	var sum float64
-	for _, val := range recent {
-		sum += val
-	}
-	pas.spreadMean = sum / float64(len(recent))
-
-	// Calculate standard deviation
-	var variance float64
-	for _, val := range recent {
-		diff := val - pas.spreadMean
-		variance += diff * diff
-	}
-	variance /= float64(len(recent))
-	pas.spreadStd = math.Sqrt(variance)
-
-	// Calculate z-score
-	if pas.spreadStd > 1e-10 {
-		pas.currentZScore = (pas.currentSpread - pas.spreadMean) / pas.spreadStd
-	}
-
-	// Update hedge ratio if needed
-	if pas.useCointegration || pas.spreadType == "difference" {
-		pas.updateHedgeRatio()
-	}
-}
-
-// updateHedgeRatio calculates optimal hedge ratio using regression
-func (pas *PairwiseArbStrategy) updateHedgeRatio() {
-	n1 := len(pas.price1History)
-	n2 := len(pas.price2History)
-	if n1 < pas.lookbackPeriod || n2 < pas.lookbackPeriod {
-		return
-	}
-
-	// Use last lookbackPeriod points
-	price1 := pas.price1History[n1-pas.lookbackPeriod:]
-	price2 := pas.price2History[n2-pas.lookbackPeriod:]
-
-	// Calculate means
-	var mean1, mean2 float64
-	for i := range price1 {
-		mean1 += price1[i]
-		mean2 += price2[i]
-	}
-	mean1 /= float64(len(price1))
-	mean2 /= float64(len(price2))
-
-	// Calculate covariance and variance
-	var covariance, variance float64
-	for i := range price1 {
-		diff1 := price1[i] - mean1
-		diff2 := price2[i] - mean2
-		covariance += diff1 * diff2
-		variance += diff2 * diff2
-	}
-
-	if variance > 1e-10 {
-		// Beta = Cov(price1, price2) / Var(price2)
-		beta := covariance / variance
-		pas.hedgeRatio = beta
-		// Clamp to reasonable range
-		pas.hedgeRatio = math.Max(0.5, math.Min(2.0, pas.hedgeRatio))
-	}
-}
-
-// checkCorrelation checks if correlation is sufficient for trading
-func (pas *PairwiseArbStrategy) checkCorrelation() bool {
-	n1 := len(pas.price1History)
-	n2 := len(pas.price2History)
-	if n1 < pas.lookbackPeriod || n2 < pas.lookbackPeriod {
-		return false
-	}
-
-	// Use last lookbackPeriod points
-	price1 := pas.price1History[n1-pas.lookbackPeriod:]
-	price2 := pas.price2History[n2-pas.lookbackPeriod:]
-
-	// Calculate Pearson correlation
-	correlation := pas.calculateCorrelation(price1, price2)
-
-	return correlation >= pas.minCorrelation
-}
-
-// calculateCorrelation calculates Pearson correlation coefficient
-func (pas *PairwiseArbStrategy) calculateCorrelation(x, y []float64) float64 {
-	if len(x) != len(y) || len(x) == 0 {
-		return 0
-	}
-
-	// Calculate means
-	var meanX, meanY float64
-	for i := range x {
-		meanX += x[i]
-		meanY += y[i]
-	}
-	meanX /= float64(len(x))
-	meanY /= float64(len(y))
-
-	// Calculate correlation components
-	var numerator, varX, varY float64
-	for i := range x {
-		diffX := x[i] - meanX
-		diffY := y[i] - meanY
-		numerator += diffX * diffY
-		varX += diffX * diffX
-		varY += diffY * diffY
-	}
-
-	denominator := math.Sqrt(varX * varY)
-	if denominator < 1e-10 {
-		return 0
-	}
-
-	return numerator / denominator
-}
 
 // generateSignals generates trading signals based on z-score
 func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
-	if pas.spreadStd < 1e-10 {
+	// Get current statistics from SpreadAnalyzer
+	spreadStats := pas.spreadAnalyzer.GetStats()
+
+	if spreadStats.Std < 1e-10 {
 		return
 	}
 
 	// Entry signals
-	if math.Abs(pas.currentZScore) >= pas.entryZScore {
+	if math.Abs(spreadStats.ZScore) >= pas.entryZScore {
 		// Spread has diverged significantly - enter mean reversion trade
-		if pas.currentZScore > 0 {
+		if spreadStats.ZScore > 0 {
 			// Spread is too high - short spread (sell symbol1, buy symbol2)
 			pas.generateSpreadSignals(md, "short", pas.orderSize)
 		} else {
@@ -396,7 +240,7 @@ func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Exit signals
-	if pas.leg1Position != 0 && math.Abs(pas.currentZScore) <= pas.exitZScore {
+	if pas.leg1Position != 0 && math.Abs(spreadStats.ZScore) <= pas.exitZScore {
 		// Spread has reverted to mean - close positions
 		pas.generateExitSignals(md)
 	}
@@ -409,6 +253,9 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		return
 	}
 
+	// Get current statistics from SpreadAnalyzer
+	spreadStats := pas.spreadAnalyzer.GetStats()
+
 	var signal1Side, signal2Side OrderSide
 	if direction == "long" {
 		signal1Side = OrderSideBuy
@@ -418,8 +265,8 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		signal2Side = OrderSideBuy
 	}
 
-	// Calculate hedge quantity
-	hedgeQty := int64(math.Round(float64(qty) * pas.hedgeRatio))
+	// Calculate hedge quantity using current hedge ratio
+	hedgeQty := int64(math.Round(float64(qty) * spreadStats.HedgeRatio))
 
 	// Generate signal for leg 1
 	signal1 := &TradingSignal{
@@ -428,16 +275,16 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		Side:       signal1Side,
 		Price:      pas.price1,
 		Quantity:   qty,
-		Signal:     -pas.currentZScore, // Negative z-score means buy, positive means sell
-		Confidence: math.Min(1.0, math.Abs(pas.currentZScore)/5.0),
+		Signal:     -spreadStats.ZScore, // Negative z-score means buy, positive means sell
+		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
 		Timestamp:  time.Now(),
 		Metadata: map[string]interface{}{
-			"type":       "entry",
-			"leg":        1,
-			"direction":  direction,
-			"z_score":    pas.currentZScore,
-			"spread":     pas.currentSpread,
-			"hedge_ratio": pas.hedgeRatio,
+			"type":        "entry",
+			"leg":         1,
+			"direction":   direction,
+			"z_score":     spreadStats.ZScore,
+			"spread":      spreadStats.CurrentSpread,
+			"hedge_ratio": spreadStats.HedgeRatio,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal1)
@@ -449,22 +296,22 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		Side:       signal2Side,
 		Price:      pas.price2,
 		Quantity:   hedgeQty,
-		Signal:     pas.currentZScore, // Opposite direction
-		Confidence: math.Min(1.0, math.Abs(pas.currentZScore)/5.0),
+		Signal:     spreadStats.ZScore, // Opposite direction
+		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
 		Timestamp:  time.Now(),
 		Metadata: map[string]interface{}{
-			"type":       "entry",
-			"leg":        2,
-			"direction":  direction,
-			"z_score":    pas.currentZScore,
-			"spread":     pas.currentSpread,
-			"hedge_ratio": pas.hedgeRatio,
+			"type":        "entry",
+			"leg":         2,
+			"direction":   direction,
+			"z_score":     spreadStats.ZScore,
+			"spread":      spreadStats.CurrentSpread,
+			"hedge_ratio": spreadStats.HedgeRatio,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal2)
 
 	log.Printf("[PairwiseArbStrategy:%s] Entering %s spread: z=%.2f, leg1=%v %d, leg2=%v %d",
-		pas.ID, direction, pas.currentZScore, signal1Side, qty, signal2Side, hedgeQty)
+		pas.ID, direction, spreadStats.ZScore, signal1Side, qty, signal2Side, hedgeQty)
 
 	// Track positions (simplified - in reality would track per symbol)
 	if direction == "long" {
@@ -481,6 +328,9 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	if pas.leg1Position == 0 {
 		return
 	}
+
+	// Get current z-score
+	zScore := pas.spreadAnalyzer.GetZScore()
 
 	// Close leg 1
 	var signal1Side OrderSide
@@ -503,7 +353,7 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 		Metadata: map[string]interface{}{
 			"type":    "exit",
 			"leg":     1,
-			"z_score": pas.currentZScore,
+			"z_score": zScore,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal1)
@@ -529,13 +379,13 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 		Metadata: map[string]interface{}{
 			"type":    "exit",
 			"leg":     2,
-			"z_score": pas.currentZScore,
+			"z_score": zScore,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal2)
 
 	log.Printf("[PairwiseArbStrategy:%s] Exiting spread: z=%.2f, leg1=%v %d, leg2=%v %d",
-		pas.ID, pas.currentZScore, signal1Side, qty1, signal2Side, qty2)
+		pas.ID, zScore, signal1Side, qty1, signal2Side, qty2)
 
 	// Reset positions
 	pas.leg1Position = 0
@@ -566,10 +416,11 @@ func (pas *PairwiseArbStrategy) OnTimer(now time.Time) {
 	}
 
 	// Log spread status
-	if now.Unix()%30 == 0 && pas.spreadStd > 0 {
+	stats := pas.spreadAnalyzer.GetStats()
+	if now.Unix()%30 == 0 && stats.Std > 0 {
 		log.Printf("[PairwiseArbStrategy:%s] Spread=%.2f (mean=%.2f, std=%.2f), Z=%.2f, Pos=[%d,%d]",
-			pas.ID, pas.currentSpread, pas.spreadMean, pas.spreadStd,
-			pas.currentZScore, pas.leg1Position, pas.leg2Position)
+			pas.ID, stats.CurrentSpread, stats.Mean, stats.Std,
+			stats.ZScore, pas.leg1Position, pas.leg2Position)
 	}
 }
 
@@ -601,16 +452,17 @@ func (pas *PairwiseArbStrategy) GetSpreadStatus() map[string]interface{} {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
 
+	stats := pas.spreadAnalyzer.GetStats()
 	return map[string]interface{}{
 		"symbol1":        pas.symbol1,
 		"symbol2":        pas.symbol2,
 		"price1":         pas.price1,
 		"price2":         pas.price2,
-		"spread":         pas.currentSpread,
-		"spread_mean":    pas.spreadMean,
-		"spread_std":     pas.spreadStd,
-		"z_score":        pas.currentZScore,
-		"hedge_ratio":    pas.hedgeRatio,
+		"spread":         stats.CurrentSpread,
+		"spread_mean":    stats.Mean,
+		"spread_std":     stats.Std,
+		"z_score":        stats.ZScore,
+		"hedge_ratio":    stats.HedgeRatio,
 		"leg1_position":  pas.leg1Position,
 		"leg2_position":  pas.leg2Position,
 	}
