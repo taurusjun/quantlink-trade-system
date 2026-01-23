@@ -174,6 +174,43 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	pas.BaseStrategy.UpdatePNL(avgPrice)
 	pas.BaseStrategy.UpdateRiskMetrics(avgPrice)
 
+	// Calculate correlation for condition check
+	correlation := 0.0
+	if len(pas.price1History) >= pas.lookbackPeriod && len(pas.price2History) >= pas.lookbackPeriod {
+		n1 := len(pas.price1History)
+		n2 := len(pas.price2History)
+		price1 := pas.price1History[n1-pas.lookbackPeriod:]
+		price2 := pas.price2History[n2-pas.lookbackPeriod:]
+		correlation = pas.calculateCorrelation(price1, price2)
+	}
+
+	// Update condition state for UI display
+	indicators := map[string]float64{
+		"z_score":         pas.currentZScore,
+		"entry_threshold": pas.entryZScore,
+		"exit_threshold":  pas.exitZScore,
+		"spread":          pas.currentSpread,
+		"spread_mean":     pas.spreadMean,
+		"spread_std":      pas.spreadStd,
+		"correlation":     correlation,
+		"min_correlation": pas.minCorrelation,
+		"hedge_ratio":     pas.hedgeRatio,
+		"price1":          pas.price1,
+		"price2":          pas.price2,
+	}
+
+	// Conditions are met if:
+	// 1. Z-score exceeds entry threshold
+	// 2. Correlation is above minimum
+	// 3. Enough history data
+	conditionsMet := pas.spreadStd > 1e-10 &&
+		math.Abs(pas.currentZScore) >= pas.entryZScore &&
+		correlation >= pas.minCorrelation &&
+		len(pas.spreadHistory) >= pas.lookbackPeriod
+
+	// Update control state with current conditions
+	pas.ControlState.UpdateConditions(conditionsMet, pas.currentZScore, indicators)
+
 	// Check if we should trade
 	now := time.Now()
 	if now.Sub(pas.lastTradeTime) < pas.minTradeInterval {

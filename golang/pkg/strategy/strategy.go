@@ -154,8 +154,10 @@ func (bs *BaseStrategy) GetType() string {
 }
 
 // IsRunning returns true if strategy is running
+// 注意：running 表示"策略进程在运行"，不等于"已激活可交易"
+// 对应 tbsrc：TradeBot 启动后就是 running=true，但 m_Active 可能是 false
 func (bs *BaseStrategy) IsRunning() bool {
-	return bs.ControlState.IsActivated() && bs.ControlState.RunState != StrategyRunStateStopped
+	return bs.ControlState.RunState != StrategyRunStateStopped
 }
 
 // GetPosition returns current position

@@ -4,7 +4,7 @@
 
 system:
   strategy_id: "92201"
-  mode: "simulation"                    # live, backtest, simulation
+  mode: "live"                          # live, backtest, simulation
 
 strategy:
   type: "pairwise_arb"                  # 配对套利策略

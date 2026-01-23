@@ -171,6 +171,30 @@ type StrategyControlState struct {
 
 	// ExitReason records the reason for exit request
 	ExitReason string
+
+	// ========== Trading Condition State (New) ==========
+	// ConditionsMet indicates if market conditions are satisfied for trading
+	// Similar to tbsrc: signal > BEGIN_PLACE check
+	ConditionsMet bool
+
+	// SignalStrength represents the current signal strength (e.g., z-score)
+	// Used to determine if conditions are met
+	SignalStrength float64
+
+	// LastSignalTime records when the last signal was generated
+	LastSignalTime time.Time
+
+	// Eligible indicates if strategy is eligible for activation
+	// true when: ConditionsMet=true AND Active=false
+	// This allows trader to see when it's a good time to activate
+	Eligible bool
+
+	// EligibleReason describes why the strategy is eligible
+	EligibleReason string
+
+	// Indicators stores all current indicator values for UI display
+	// e.g., {"z_score": 2.5, "correlation": 0.85, "spread": 5.2}
+	Indicators map[string]float64
 }
 
 // NewStrategyControlState creates a new StrategyControlState with default values
@@ -188,12 +212,22 @@ func NewStrategyControlState(autoActivate bool) *StrategyControlState {
 		FlattenTime:    time.Time{},
 		CanRecoverAt:   time.Time{},
 		ExitReason:     "",
+		// Initialize condition state
+		ConditionsMet:   false,
+		SignalStrength:  0.0,
+		LastSignalTime:  time.Time{},
+		Eligible:        false,
+		EligibleReason:  "",
+		Indicators:      make(map[string]float64),
 	}
 }
 
-// IsActive returns true if the strategy is in active state
+// IsActive returns true if the strategy is activated
+// 注意：检查 Active 字段，不是 RunState
+// Active 表示"策略已激活，可以交易"（对应 tbsrc m_Active）
+// RunState 表示"进程运行状态"
 func (scs *StrategyControlState) IsActive() bool {
-	return scs.RunState == StrategyRunStateActive
+	return scs.Active
 }
 
 // IsStopped returns true if the strategy has stopped
@@ -248,8 +282,12 @@ func (scs *StrategyControlState) Activate() {
 
 // Deactivate deactivates the strategy
 // 对应 tbsrc: m_Active = false
+// 注意：只改变 Active 状态，不影响 RunState（进程仍在运行）
 func (scs *StrategyControlState) Deactivate() {
 	scs.Active = false
+	// RunState 保持不变，因为：
+	// - Active=false 表示"不能交易"
+	// - 但进程仍在运行（对应 tbsrc: TradeBot 进程还在，只是 m_Active=false）
 }
 
 // IsActivated returns true if the strategy is activated
@@ -271,9 +309,45 @@ func (scs *StrategyControlState) Reset() {
 	scs.ExitReason = ""
 }
 
+// UpdateConditions updates the trading condition state
+// This should be called by strategies after calculating indicators
+func (scs *StrategyControlState) UpdateConditions(conditionsMet bool, signalStrength float64, indicators map[string]float64) {
+	scs.ConditionsMet = conditionsMet
+	scs.SignalStrength = signalStrength
+	scs.Indicators = indicators
+
+	if conditionsMet {
+		scs.LastSignalTime = time.Now()
+	}
+
+	// Update eligible status: conditions met but not activated
+	scs.Eligible = conditionsMet && !scs.Active
+
+	// Generate eligible reason
+	if scs.Eligible {
+		scs.EligibleReason = fmt.Sprintf("Conditions met (signal: %.2f)", signalStrength)
+	} else if conditionsMet && scs.Active {
+		scs.EligibleReason = "Already activated"
+	} else {
+		scs.EligibleReason = "Conditions not met"
+	}
+}
+
+// GetConditionStatus returns a summary of current condition status
+func (scs *StrategyControlState) GetConditionStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"conditions_met":   scs.ConditionsMet,
+		"signal_strength":  scs.SignalStrength,
+		"eligible":         scs.Eligible,
+		"eligible_reason":  scs.EligibleReason,
+		"last_signal_time": scs.LastSignalTime,
+		"indicators":       scs.Indicators,
+	}
+}
+
 // String returns a string representation of the control state
 func (scs *StrategyControlState) String() string {
-	return fmt.Sprintf("State=%s, Active=%v, Flatten=%v, Cancel=%v, Exit=%v, Aggressive=%v, Reason=%s",
+	return fmt.Sprintf("State=%s, Active=%v, Flatten=%v, Cancel=%v, Exit=%v, Aggressive=%v, Reason=%s, Conditions=%v, Eligible=%v",
 		scs.RunState, scs.Active, scs.FlattenMode, scs.CancelPending, scs.ExitRequested,
-		scs.AggressiveFlat, scs.FlattenReason)
+		scs.AggressiveFlat, scs.FlattenReason, scs.ConditionsMet, scs.Eligible)
 }

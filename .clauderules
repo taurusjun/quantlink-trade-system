@@ -1,0 +1,63 @@
+# Claude 协作规则
+
+**创建时间**: 2026-01-23
+**适用范围**: QuantLink Trade System 全项目
+
+---
+
+## 文档管理规则
+
+### 1. 文档保存位置
+
+文档统一保存在 `docs/` 目录下：
+
+- **子系统文档**: 每个子系统在 `docs/` 下创建自己的文件夹
+  - 例如: `docs/golang/`、`docs/python/`、`docs/cpp/`
+- **全局文档**: 直接放在 `docs/` 根目录下
+  - 例如: `docs/PROJECT_OVERVIEW.md`
+
+```
+quantlink-trade-system/
+└── docs/
+    ├── 全局文档.md
+    ├── golang/
+    │   └── 子系统文档.md
+    ├── python/
+    └── cpp/
+```
+
+### 2. 文档命名格式
+
+格式: `项目_摘要_时间戳.md`
+
+示例:
+```
+golang_架构分析_2026-01-23-14_36.md
+python_数据处理_2026-01-24-10_15.md
+cpp_性能优化_2026-01-25-09_30.md
+```
+
+时间戳格式: `YYYY-MM-DD-HH_MM`
+
+### 3. 文档内容语言
+
+- 文档内容使用**中文**编写
+- 代码、命令、API 名称等保持原文（英文）
+
+示例:
+```markdown
+## 启动服务
+
+使用以下命令启动 trader 服务：
+
+```bash
+./bin/trader -config config/trader.yaml
+```
+
+服务将监听 9201 端口。
+```
+
+---
+
+**维护者**: Claude Code
+**最后更新**: 2026-01-23

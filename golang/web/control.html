@@ -276,6 +276,102 @@
             font-size: 12px;
             border-top: 1px solid #dee2e6;
         }
+
+        /* 新增：交易条件样式 */
+        .conditions-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .conditions-card h3 {
+            font-size: 18px;
+            color: #495057;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 15px;
+        }
+
+        .indicator-item {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 3px solid #6c757d;
+        }
+
+        .indicator-item.threshold {
+            border-left-color: #ffc107;
+        }
+
+        .indicator-item.met {
+            border-left-color: #28a745;
+            background: #d4edda;
+        }
+
+        .indicator-label {
+            font-size: 11px;
+            color: #6c757d;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .indicator-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: #212529;
+        }
+
+        .condition-status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .condition-status.met {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #28a745;
+        }
+
+        .condition-status.not-met {
+            background: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffc107;
+        }
+
+        .condition-status.eligible {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 2px solid #17a2b8;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .btn-activate.highlight {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            animation: glow 1.5s infinite;
+            box-shadow: 0 0 20px rgba(40, 167, 69, 0.5);
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(40, 167, 69, 0.5); }
+            50% { box-shadow: 0 0 30px rgba(40, 167, 69, 0.8); }
+        }
     </style>
 </head>
 <body>
@@ -336,6 +432,19 @@
                         <div class="pnl-label">未实现盈亏</div>
                         <div class="pnl-value" id="unrealizedPnl">$0.00</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- 新增：交易条件卡片 -->
+            <div class="conditions-card" id="conditionsCard" style="display: none;">
+                <h3>📊 交易条件</h3>
+
+                <div class="condition-status" id="conditionStatus">
+                    等待数据...
+                </div>
+
+                <div class="indicator-grid" id="indicatorGrid">
+                    <!-- 指标将通过 JS 动态生成 -->
                 </div>
             </div>
 
@@ -469,6 +578,90 @@
             }
         }
 
+        // 更新交易条件显示
+        function updateConditionsDisplay(status) {
+            const conditionsCard = document.getElementById('conditionsCard');
+            const conditionStatus = document.getElementById('conditionStatus');
+            const indicatorGrid = document.getElementById('indicatorGrid');
+            const btnActivate = document.getElementById('btnActivate');
+
+            // 如果有指标数据，显示条件卡片
+            if (status.indicators && Object.keys(status.indicators).length > 0) {
+                conditionsCard.style.display = 'block';
+
+                // 更新条件状态
+                if (status.eligible) {
+                    // 条件满足但未激活 - 提示交易员可以激活
+                    conditionStatus.className = 'condition-status eligible';
+                    conditionStatus.innerHTML = `🎯 ${status.eligible_reason || '策略可激活！'}<br><small>点击下方按钮激活策略开始交易</small>`;
+                    btnActivate.classList.add('highlight');
+                } else if (status.conditions_met && status.active) {
+                    // 条件满足且已激活 - 正在交易
+                    conditionStatus.className = 'condition-status met';
+                    conditionStatus.innerHTML = `✅ 交易条件满足，策略正在运行`;
+                    btnActivate.classList.remove('highlight');
+                } else if (!status.conditions_met) {
+                    // 条件不满足
+                    conditionStatus.className = 'condition-status not-met';
+                    conditionStatus.innerHTML = `⏳ ${status.eligible_reason || '等待交易条件满足'}`;
+                    btnActivate.classList.remove('highlight');
+                } else {
+                    conditionStatus.className = 'condition-status not-met';
+                    conditionStatus.innerHTML = `⏳ 等待数据...`;
+                    btnActivate.classList.remove('highlight');
+                }
+
+                // 清空并重新生成指标网格
+                indicatorGrid.innerHTML = '';
+
+                // 定义指标显示名称映射
+                const indicatorLabels = {
+                    'z_score': 'Z-Score',
+                    'entry_threshold': '入场阈值',
+                    'exit_threshold': '出场阈值',
+                    'spread': '价差',
+                    'spread_mean': '价差均值',
+                    'spread_std': '价差标准差',
+                    'correlation': '相关性',
+                    'min_correlation': '最小相关性',
+                    'hedge_ratio': '对冲比率',
+                    'price1': '价格1',
+                    'price2': '价格2'
+                };
+
+                // 生成指标卡片
+                Object.keys(status.indicators).sort().forEach(key => {
+                    const value = status.indicators[key];
+                    const label = indicatorLabels[key] || key;
+
+                    // 判断是否是阈值指标
+                    const isThreshold = key.includes('threshold') || key.includes('min_');
+
+                    // 判断是否满足条件（针对关键指标）
+                    let isMet = false;
+                    if (key === 'z_score' && status.indicators['entry_threshold']) {
+                        isMet = Math.abs(value) >= status.indicators['entry_threshold'];
+                    } else if (key === 'correlation' && status.indicators['min_correlation']) {
+                        isMet = value >= status.indicators['min_correlation'];
+                    }
+
+                    const itemClass = isMet ? 'indicator-item met' : (isThreshold ? 'indicator-item threshold' : 'indicator-item');
+
+                    const item = document.createElement('div');
+                    item.className = itemClass;
+                    item.innerHTML = `
+                        <div class="indicator-label">${label}</div>
+                        <div class="indicator-value">${value.toFixed(4)}</div>
+                    `;
+                    indicatorGrid.appendChild(item);
+                });
+            } else {
+                // 没有指标数据，隐藏卡片
+                conditionsCard.style.display = 'none';
+                btnActivate.classList.remove('highlight');
+            }
+        }
+
         // 加载状态
         async function loadStatus() {
             try {
@@ -522,6 +715,9 @@
                         realizedEl.className = realized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
                         unrealizedEl.className = unrealized >= 0 ? 'pnl-value positive' : 'pnl-value negative';
                     }
+
+                    // 更新交易条件状态（新增）
+                    updateConditionsDisplay(status);
 
                     showMessage('✅ 状态已刷新', 'success');
                 } else {

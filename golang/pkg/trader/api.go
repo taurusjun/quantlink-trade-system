@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
@@ -41,6 +42,22 @@ type StrategyStatusResponse struct {
 	Risk       interface{}            `json:"risk"`
 	Uptime     string                 `json:"uptime"`
 	Details    map[string]interface{} `json:"details"`
+
+	// Trading condition state (new fields)
+	ConditionsMet   bool                   `json:"conditions_met"`    // Are market conditions satisfied?
+	Eligible        bool                   `json:"eligible"`          // Ready to activate? (conditions met but not active)
+	EligibleReason  string                 `json:"eligible_reason"`   // Why eligible/not eligible
+	SignalStrength  float64                `json:"signal_strength"`   // Current signal strength (e.g., z-score)
+	LastSignalTime  string                 `json:"last_signal_time"`  // When last signal was generated
+	Indicators      map[string]float64     `json:"indicators"`        // All indicator values for display
+}
+
+// loggingMiddleware logs all incoming requests
+func (a *APIServer) loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[API] Incoming request: %s %s", r.Method, r.URL.Path)
+		next(w, r)
+	}
 }
 
 // NewAPIServer creates a new API server
@@ -58,6 +75,8 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	mux.HandleFunc("/api/v1/strategy/status", api.corsMiddleware(api.handleStatus))
 	mux.HandleFunc("/api/v1/trader/status", api.corsMiddleware(api.handleTraderStatus))
 	mux.HandleFunc("/api/v1/health", api.corsMiddleware(api.handleHealth))
+	mux.HandleFunc("/api/v1/test-ping", api.loggingMiddleware(api.handleTestPing))
+	mux.HandleFunc("/api/v1/test-market-data", api.loggingMiddleware(api.handleTestMarketData))
 
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
@@ -80,6 +99,7 @@ func (a *APIServer) Start() error {
 	a.mu.Unlock()
 
 	log.Printf("[API] Starting HTTP API server on %s", a.server.Addr)
+	log.Printf("[API] DEBUG: Test endpoints registered: /api/v1/test/ping and /api/v1/test/market-data")
 
 	go func() {
 		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -222,6 +242,12 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Format last signal time
+	lastSignalTime := ""
+	if !baseStrat.ControlState.LastSignalTime.IsZero() {
+		lastSignalTime = baseStrat.ControlState.LastSignalTime.Format("15:04:05")
+	}
+
 	status := &StrategyStatusResponse{
 		StrategyID: a.trader.Config.System.StrategyID,
 		Running:    a.trader.Strategy.IsRunning(),
@@ -239,6 +265,13 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"max_position":    a.trader.Config.Strategy.MaxPositionSize,
 			"max_exposure":    a.trader.Config.Strategy.MaxExposure,
 		},
+		// Condition state (new)
+		ConditionsMet:   baseStrat.ControlState.ConditionsMet,
+		Eligible:        baseStrat.ControlState.Eligible,
+		EligibleReason:  baseStrat.ControlState.EligibleReason,
+		SignalStrength:  baseStrat.ControlState.SignalStrength,
+		LastSignalTime:  lastSignalTime,
+		Indicators:      baseStrat.ControlState.Indicators,
 	}
 
 	// Set uptime if available (could be calculated from Status field in future)
@@ -275,6 +308,7 @@ func (a *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"api_server":   a.IsRunning(),
 		"strategy_id":  a.trader.Config.System.StrategyID,
 		"mode":         a.trader.Config.System.Mode,
+		"test_routes_registered": true,  // DEBUG: confirm new binary
 	}
 
 	a.sendSuccess(w, "Healthy", health)
@@ -315,6 +349,83 @@ func (a *APIServer) getBaseStrategy() *strategy.BaseStrategy {
 	}
 	log.Printf("[API] Error: Strategy does not implement BaseStrategyAccessor")
 	return nil
+}
+
+// handleTestPing handles GET /api/v1/test/ping
+// Simple test endpoint
+func (a *APIServer) handleTestPing(w http.ResponseWriter, r *http.Request) {
+	a.sendSuccess(w, "Pong", map[string]string{"status": "ok"})
+}
+
+// handleTestMarketData handles POST /api/v1/test/market-data
+// 用于测试环境模拟行情数据
+func (a *APIServer) handleTestMarketData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 解析请求体
+	var req struct {
+		Symbol    string    `json:"symbol"`
+		Exchange  string    `json:"exchange"`
+		BidPrice  []float64 `json:"bid_price"`
+		AskPrice  []float64 `json:"ask_price"`
+		BidQty    []uint32  `json:"bid_qty,omitempty"`
+		AskQty    []uint32  `json:"ask_qty,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
+		return
+	}
+
+	// 验证必需字段
+	if req.Symbol == "" || len(req.BidPrice) == 0 || len(req.AskPrice) == 0 {
+		a.sendError(w, http.StatusBadRequest, "Missing required fields: symbol, bid_price, ask_price")
+		return
+	}
+
+	// 设置默认值
+	if req.Exchange == "" {
+		req.Exchange = "SHFE" // 默认上期所
+	}
+	if len(req.BidQty) == 0 {
+		req.BidQty = make([]uint32, len(req.BidPrice))
+		for i := range req.BidQty {
+			req.BidQty[i] = 100 // 默认量
+		}
+	}
+	if len(req.AskQty) == 0 {
+		req.AskQty = make([]uint32, len(req.AskPrice))
+		for i := range req.AskQty {
+			req.AskQty[i] = 100 // 默认量
+		}
+	}
+
+	// 创建 MarketDataUpdate protobuf 消息
+	md := &mdpb.MarketDataUpdate{
+		Symbol:    req.Symbol,
+		Exchange:  req.Exchange,
+		Timestamp: uint64(time.Now().UnixNano()),
+		BidPrice:  req.BidPrice,
+		BidQty:    req.BidQty,
+		AskPrice:  req.AskPrice,
+		AskQty:    req.AskQty,
+		LastPrice: (req.BidPrice[0] + req.AskPrice[0]) / 2, // 用中间价作为最新价
+	}
+
+	// 发送给策略
+	a.trader.Strategy.OnMarketData(md)
+
+	log.Printf("[API] Test market data sent: %s bid=%.2f ask=%.2f",
+		req.Symbol, req.BidPrice[0], req.AskPrice[0])
+
+	a.sendSuccess(w, "Market data sent to strategy", map[string]interface{}{
+		"symbol": req.Symbol,
+		"bid":    req.BidPrice[0],
+		"ask":    req.AskPrice[0],
+	})
 }
 
 // corsMiddleware adds CORS headers to allow browser access from file://
