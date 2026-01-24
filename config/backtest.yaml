@@ -1,0 +1,57 @@
+backtest:
+  # 回测名称
+  name: "pairwise_arb_backtest"
+  mode: "backtest"
+
+  # 时间范围
+  start_date: "2026-01-01"
+  end_date: "2026-01-31"
+  start_time: "09:00:00"
+  end_time: "15:00:00"
+
+  # 数据源
+  data:
+    source_type: "csv"
+    data_path: "./data/market_data"
+    symbols:
+      - "ag2502"
+      - "ag2504"
+
+  # 回放设置
+  replay:
+    mode: "fast"      # realtime, fast, instant
+    speed: 10.0       # 回放速度倍数（fast 模式有效）
+
+  # 初始资金
+  initial:
+    capital: 1000000.0
+
+  # 订单模拟
+  order_simulation:
+    fill_delay_ms: 10        # 成交延迟（毫秒）
+    slippage_bps: 1          # 滑点（基点）
+    commission_rate: 0.0003  # 手续费率
+
+  # 输出设置
+  output:
+    result_dir: "./backtest_results"
+    save_trades: true
+    save_daily_pnl: true
+    generate_report: true
+    report_format: "markdown"  # markdown, json, html
+
+# 策略配置（复用 trader.yaml 格式）
+strategy:
+  type: "pairwise_arb"
+  symbols:
+    - "ag2502"
+    - "ag2504"
+  parameters:
+    entry_zscore: 2.0
+    exit_zscore: 0.5
+    lookback_window: 20
+    max_position_size: 10
+
+# NATS 配置
+engine:
+  nats_addr: "nats://localhost:4222"

@@ -102,12 +102,23 @@ func (t *Trader) Initialize() error {
 	// 3. Create and initialize Strategy Engine
 	log.Println("[Trader] Creating Strategy Engine...")
 	engineConfig := &strategy.EngineConfig{
-		ORSGatewayAddr:      t.Config.Engine.ORSGatewayAddr,
 		NATSAddr:            t.Config.Engine.NATSAddr,
 		OrderQueueSize:      t.Config.Engine.OrderQueueSize,
 		TimerInterval:       t.Config.Engine.TimerInterval,
 		MaxConcurrentOrders: t.Config.Engine.MaxConcurrentOrders,
 	}
+
+	// Select ORS Gateway address based on mode
+	if t.Config.System.Mode == "backtest" {
+		// Backtest mode: use BacktestOrderRouter address
+		engineConfig.ORSGatewayAddr = "localhost:50052"
+		log.Printf("[Trader] Using backtest ORS Gateway: %s", engineConfig.ORSGatewayAddr)
+	} else {
+		// Live/simulation mode: use real ORS Gateway
+		engineConfig.ORSGatewayAddr = t.Config.Engine.ORSGatewayAddr
+		log.Printf("[Trader] Using live ORS Gateway: %s", engineConfig.ORSGatewayAddr)
+	}
+
 	t.Engine = strategy.NewStrategyEngine(engineConfig)
 
 	// Initialize engine (may fail if services not running)

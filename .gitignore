@@ -45,3 +45,7 @@ tests/results/
 # Temporary files
 *.tmp
 *.bak
+
+# Backtest results
+backtest_results/
+data/market_data/
