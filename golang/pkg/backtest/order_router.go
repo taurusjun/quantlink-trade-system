@@ -67,6 +67,12 @@ func (r *BacktestOrderRouter) SetOrderUpdateCallback(callback func(*orspb.OrderU
 
 // Start starts the order router and gRPC server
 func (r *BacktestOrderRouter) Start() error {
+	// Skip gRPC server if port is 0 (optimization mode)
+	if r.port == 0 {
+		log.Printf("[OrderRouter] Order router started (backtest mode, no gRPC)")
+		return nil
+	}
+
 	// Start gRPC server for ORS Gateway interface
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", r.port))
 	if err != nil {

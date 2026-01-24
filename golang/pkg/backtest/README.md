@@ -160,10 +160,46 @@ go test -bench=. -benchmem
 3. 不支持部分成交
 4. 回测模式下不支持实时风控
 
+## Phase 3: 参数优化与生产部署 ✅
+
+### 新增功能
+
+- ✅ **参数优化器** (`optimizer.go`) - Grid Search 网格搜索
+- ✅ **参数导出器** (`param_exporter.go`) - 导出最优参数
+- ✅ **生产配置生成器** (`production_config.go`) - 生成生产配置
+- ✅ **优化工具** (`cmd/backtest_optimize/`) - 命令行工具
+
+### 使用示例
+
+```bash
+# 1. 参数优化
+./bin/backtest_optimize \
+  -action optimize \
+  -params "entry_zscore:1.5:3.0:0.1,exit_zscore:0.5:1.5:0.1" \
+  -goal sharpe \
+  -workers 8
+
+# 2. 导出生产配置
+./bin/backtest_optimize \
+  -action export \
+  -current optimal_params_ag2502_ag2504_20260124.yaml \
+  -strategy-id 92201
+
+# 3. 参数对比
+./bin/backtest_optimize \
+  -action compare \
+  -baseline old.yaml \
+  -current new.yaml
+```
+
+详见：[参数优化使用指南](../../../docs/回测_参数优化使用指南_2026-01-24-20_30.md)
+
+---
+
 ## 未来计划
 
 - [ ] 高级撮合引擎（订单簿深度）
-- [ ] 参数优化框架
+- [ ] 遗传算法优化（GA）
 - [ ] 分布式回测
 - [ ] 可视化图表
 - [ ] 更多数据源（Parquet, Database）

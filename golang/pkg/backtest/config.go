@@ -17,17 +17,18 @@ type BacktestConfig struct {
 
 // BacktestSettings contains backtest-specific settings
 type BacktestSettings struct {
-	Name      string        `yaml:"name"`
-	Mode      string        `yaml:"mode"`
-	StartDate string        `yaml:"start_date"`
-	EndDate   string        `yaml:"end_date"`
-	StartTime string        `yaml:"start_time"`
-	EndTime   string        `yaml:"end_time"`
-	Data      DataSettings  `yaml:"data"`
-	Replay    ReplaySettings `yaml:"replay"`
-	Initial   InitialSettings `yaml:"initial"`
-	OrderSim  OrderSimSettings `yaml:"order_simulation"`
-	Output    OutputSettings `yaml:"output"`
+	Name         string           `yaml:"name"`
+	Mode         string           `yaml:"mode"`
+	StartDate    string           `yaml:"start_date"`
+	EndDate      string           `yaml:"end_date"`
+	StartTime    string           `yaml:"start_time"`
+	EndTime      string           `yaml:"end_time"`
+	Data         DataSettings     `yaml:"data"`
+	Replay       ReplaySettings   `yaml:"replay"`
+	Initial      InitialSettings  `yaml:"initial"`
+	OrderSim     OrderSimSettings `yaml:"order_simulation"`
+	Output       OutputSettings   `yaml:"output"`
+	EnableTrader bool             `yaml:"enable_trader"` // Enable Trader integration (gRPC server)
 }
 
 // DataSettings contains data source settings

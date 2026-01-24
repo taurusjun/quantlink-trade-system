@@ -134,8 +134,14 @@ func (r *BacktestRunner) initialize() error {
 	}
 	r.dataReader = dataReader
 
-	// Create order router (port not used in backtest mode)
-	orderRouter, err := NewBacktestOrderRouter(r.config, 50052)
+	// Create order router
+	// Use port 0 to skip gRPC server (for optimization mode)
+	// Use port 50052 for standalone backtest (with Trader integration)
+	port := 0
+	if r.config.Backtest.EnableTrader {
+		port = 50052
+	}
+	orderRouter, err := NewBacktestOrderRouter(r.config, port)
 	if err != nil {
 		return fmt.Errorf("failed to create order router: %w", err)
 	}
@@ -147,20 +153,22 @@ func (r *BacktestRunner) initialize() error {
 	// Set order update callback
 	r.orderRouter.SetOrderUpdateCallback(r.onOrderUpdate)
 
-	// Create Trader (strategy engine)
-	log.Println("[Backtest] Creating Trader (strategy engine)...")
-	traderConfig := r.convertToTraderConfig()
-	t, err := trader.NewTrader(traderConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create trader: %w", err)
-	}
+	// Create Trader (strategy engine) if enabled
+	if r.config.Backtest.EnableTrader {
+		log.Println("[Backtest] Creating Trader (strategy engine)...")
+		traderConfig := r.convertToTraderConfig()
+		t, err := trader.NewTrader(traderConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create trader: %w", err)
+		}
 
-	// Initialize Trader
-	if err := t.Initialize(); err != nil {
-		return fmt.Errorf("failed to initialize trader: %w", err)
+		// Initialize Trader
+		if err := t.Initialize(); err != nil {
+			return fmt.Errorf("failed to initialize trader: %w", err)
+		}
+		r.trader = t
+		log.Println("[Backtest] ✓ Trader created and initialized")
 	}
-	r.trader = t
-	log.Println("[Backtest] ✓ Trader created and initialized")
 
 	return nil
 }

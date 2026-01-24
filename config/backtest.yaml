@@ -5,7 +5,7 @@ backtest:
 
   # 时间范围
   start_date: "2026-01-01"
-  end_date: "2026-01-31"
+  end_date: "2026-01-01"  # 修改为只测试一天（有数据的日期）
   start_time: "09:00:00"
   end_time: "15:00:00"
 
@@ -19,7 +19,7 @@ backtest:
 
   # 回放设置
   replay:
-    mode: "fast"      # realtime, fast, instant
+    mode: "instant"   # realtime, fast, instant（优化时使用 instant 最快）
     speed: 10.0       # 回放速度倍数（fast 模式有效）
 
   # 初始资金
