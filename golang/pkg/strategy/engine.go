@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/client"
 	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
@@ -227,13 +228,18 @@ func (se *StrategyEngine) SubscribeMarketData(symbol string) error {
 		return nil // Already subscribed
 	}
 
-	subject := fmt.Sprintf("md.%s", symbol)
+	// Subscribe to md.*.symbol to match MD Gateway's md.exchange.symbol format
+	subject := fmt.Sprintf("md.*.%s", symbol)
 	sub, err := se.natsConn.Subscribe(subject, func(msg *nats.Msg) {
 		// Parse market data update
 		var md mdpb.MarketDataUpdate
-		// Note: Actual unmarshal implementation depends on protobuf version
-		// For now, skip parsing (will be implemented when connecting to real MD Gateway)
-		_ = msg.Data
+		if err := proto.Unmarshal(msg.Data, &md); err != nil {
+			log.Printf("[StrategyEngine] Failed to unmarshal market data: %v", err)
+			return
+		}
+
+		log.Printf("[StrategyEngine] Received market data: %s (bid: %.2f, ask: %.2f)",
+			md.Symbol, md.BidPrice[0], md.AskPrice[0])
 
 		// Dispatch to all strategies
 		se.dispatchMarketData(&md)

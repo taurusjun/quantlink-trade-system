@@ -84,17 +84,35 @@ private:
     MarketDataRaw GenerateMarketData() {
         MarketDataRaw md{};
 
-        // 合约信息
-        std::strncpy(md.symbol, "ag2412", sizeof(md.symbol));
+        // 合约信息 - 交替生成两个品种用于套利策略测试
+        static int counter = 0;
+        static double shared_base_price = 7950.0;  // Shared base price for correlation
+        static double price_momentum = 0.0;         // Random walk component
+
+        bool is_symbol1 = (counter++ % 2 == 0);
+        if (is_symbol1) {
+            std::strncpy(md.symbol, "ag2502", sizeof(md.symbol));
+        } else {
+            std::strncpy(md.symbol, "ag2504", sizeof(md.symbol));
+        }
         std::strncpy(md.exchange, "SHFE", sizeof(md.exchange));
         md.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()
         ).count();
         md.seq_num = ++m_seq_num;
 
-        // 基准价格（加入随机波动）
-        std::uniform_real_distribution<double> price_dist(-0.5, 0.5);
-        double base_bid = 7950.0 + price_dist(m_rng);
+        // 生成高度相关的价格（共享随机游走 + 小价差）
+        // Update shared price with random walk every other tick
+        if (is_symbol1) {
+            std::uniform_real_distribution<double> walk_dist(-0.2, 0.2);
+            price_momentum = 0.8 * price_momentum + walk_dist(m_rng);  // AR(1) process
+            shared_base_price += price_momentum;
+        }
+
+        // Add small independent noise and spread between symbols
+        std::uniform_real_distribution<double> noise_dist(-0.05, 0.05);
+        double symbol_spread = is_symbol1 ? 0.0 : 1.5;  // ag2504 slightly higher
+        double base_bid = shared_base_price + symbol_spread + noise_dist(m_rng);
         double base_ask = base_bid + 1.0;
 
         // 生成10档买卖盘

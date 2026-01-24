@@ -1,12 +1,14 @@
 # C++ Build
 gateway/build/
 gateway/cmake-build-*/
+gateway/.cache
 *.o
 *.a
 *.so
 *.dylib
 
 # Golang Build
+bin/
 golang/bin/
 golang/pkg/proto/
 *.exe

@@ -215,6 +215,16 @@ func (t *Trader) Start() error {
 		log.Println("[Trader] Running in offline mode (no external connections)")
 	} else {
 		log.Println("[Trader] ✓ Strategy Engine started")
+
+		// Subscribe to market data for all configured symbols
+		log.Println("[Trader] Subscribing to market data...")
+		for _, symbol := range t.Config.Strategy.Symbols {
+			if err := t.Engine.SubscribeMarketData(symbol); err != nil {
+				log.Printf("[Trader] Warning: Failed to subscribe to %s: %v", symbol, err)
+			} else {
+				log.Printf("[Trader] ✓ Subscribed to market data: %s", symbol)
+			}
+		}
 	}
 
 	// Decide whether to auto-activate based on config (对应 tbsrc 行为)

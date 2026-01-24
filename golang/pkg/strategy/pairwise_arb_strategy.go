@@ -206,6 +206,14 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	// Check if we should trade
 	now := time.Now()
+
+	// Debug logging periodically (every 5 seconds)
+	if time.Since(pas.lastTradeTime) > 5*time.Second {
+		log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (need ±%.2f), corr=%.3f (need %.3f), std=%.4f, ready=%v, condMet=%v",
+			pas.ID, spreadStats.ZScore, pas.entryZScore, spreadStats.Correlation, pas.minCorrelation,
+			spreadStats.Std, pas.spreadAnalyzer.IsReady(pas.lookbackPeriod), conditionsMet)
+	}
+
 	if now.Sub(pas.lastTradeTime) < pas.minTradeInterval {
 		return
 	}
