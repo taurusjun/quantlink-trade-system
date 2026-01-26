@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
@@ -61,6 +62,16 @@ type Strategy interface {
 	Reset()
 }
 
+// ParameterUpdatable is an interface for strategies that support hot parameter reload
+type ParameterUpdatable interface {
+	// ApplyParameters applies new parameters to the strategy
+	// Each strategy implements this to map generic parameters to strategy-specific fields
+	ApplyParameters(params map[string]interface{}) error
+
+	// GetCurrentParameters returns current strategy parameters
+	GetCurrentParameters() map[string]interface{}
+}
+
 // IndicatorAwareStrategy is an optional interface for strategies that need
 // to be notified when shared indicators are updated (like tbsrc INDCallBack).
 // This allows strategies to insert custom logic between indicator calculation
@@ -100,6 +111,10 @@ type BaseStrategy struct {
 	ControlState       *StrategyControlState         // State control (aligned with tbsrc)
 	PendingSignals     []*TradingSignal
 	Orders             map[string]*orspb.OrderUpdate // order_id -> OrderUpdate
+
+	// Concrete strategy instance (for parameter updates)
+	// This is set by concrete strategies in their constructors
+	concreteStrategy interface{}
 }
 
 // NewBaseStrategy creates a new base strategy
@@ -334,6 +349,34 @@ func (bs *BaseStrategy) Reset() {
 func (bs *BaseStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {
 	// Default: no action during auction period
 	// Strategies that need auction logic should override this method
+}
+
+// UpdateParameters updates strategy parameters (hot reload support in BaseStrategy)
+// This is the unified entry point for all strategies
+func (bs *BaseStrategy) UpdateParameters(params map[string]interface{}) error {
+	// Check if concrete strategy supports parameter updates
+	if updatable, ok := bs.concreteStrategy.(ParameterUpdatable); ok {
+		return updatable.ApplyParameters(params)
+	}
+
+	return fmt.Errorf("strategy %s does not implement ParameterUpdatable interface", bs.Type)
+}
+
+// GetCurrentParameters returns current strategy parameters
+func (bs *BaseStrategy) GetCurrentParameters() map[string]interface{} {
+	// Check if concrete strategy supports parameter queries
+	if updatable, ok := bs.concreteStrategy.(ParameterUpdatable); ok {
+		return updatable.GetCurrentParameters()
+	}
+
+	// Return empty map if not supported
+	return make(map[string]interface{})
+}
+
+// SetConcreteStrategy sets the concrete strategy instance
+// This should be called by concrete strategies in their constructors
+func (bs *BaseStrategy) SetConcreteStrategy(strategy interface{}) {
+	bs.concreteStrategy = strategy
 }
 
 // Helper functions

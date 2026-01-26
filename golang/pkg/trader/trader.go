@@ -624,18 +624,14 @@ func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
 func (t *Trader) onModelReload(newParams map[string]interface{}) error {
 	log.Printf("[Trader] Processing model hot reload with %d parameters", len(newParams))
 
-	// Check if strategy supports UpdateParameters
-	type ParameterUpdater interface {
-		UpdateParameters(params map[string]interface{}) error
+	// Get BaseStrategy to call UpdateParameters
+	baseStrat := t.getBaseStrategy()
+	if baseStrat == nil {
+		return fmt.Errorf("failed to access base strategy")
 	}
 
-	updater, ok := t.Strategy.(ParameterUpdater)
-	if !ok {
-		return fmt.Errorf("strategy does not support parameter updates")
-	}
-
-	// Apply new parameters
-	if err := updater.UpdateParameters(newParams); err != nil {
+	// Apply new parameters (BaseStrategy will delegate to concrete strategy)
+	if err := baseStrat.UpdateParameters(newParams); err != nil {
 		return fmt.Errorf("failed to apply new parameters: %w", err)
 	}
 
@@ -664,12 +660,10 @@ func (t *Trader) GetModelStatus() map[string]interface{} {
 	status := t.ModelWatcher.GetStatus()
 	status["enabled"] = true
 
-	// Add strategy current parameters
-	type ParameterGetter interface {
-		GetCurrentParameters() map[string]interface{}
-	}
-	if getter, ok := t.Strategy.(ParameterGetter); ok {
-		status["current_parameters"] = getter.GetCurrentParameters()
+	// Add strategy current parameters (via BaseStrategy)
+	baseStrat := t.getBaseStrategy()
+	if baseStrat != nil {
+		status["current_parameters"] = baseStrat.GetCurrentParameters()
 	}
 
 	return status

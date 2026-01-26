@@ -70,6 +70,9 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 	// 预创建一个临时的 SpreadAnalyzer（将在 Initialize 时重新创建）
 	pas.spreadAnalyzer = spread.NewSpreadAnalyzer("", "", spread.SpreadTypeDifference, maxHistoryLen)
 
+	// 设置具体策略实例，用于参数热加载
+	pas.BaseStrategy.SetConcreteStrategy(pas)
+
 	return pas
 }
 
@@ -448,12 +451,12 @@ func (pas *PairwiseArbStrategy) Start() error {
 	return nil
 }
 
-// UpdateParameters 更新策略参数（热加载支持）
-func (pas *PairwiseArbStrategy) UpdateParameters(params map[string]interface{}) error {
+// ApplyParameters 应用新参数（实现 ParameterUpdatable 接口）
+func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArbStrategy:%s] Updating parameters...", pas.ID)
+	log.Printf("[PairwiseArbStrategy:%s] Applying new parameters...", pas.ID)
 
 	// 保存旧参数（用于日志）
 	oldEntryZ := pas.entryZScore
