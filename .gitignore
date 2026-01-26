@@ -49,3 +49,6 @@ tests/results/
 # Backtest results
 backtest_results/
 data/market_data/
+
+# 密码和敏感配置文件
+*.secret.yaml

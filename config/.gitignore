@@ -1,0 +1,7 @@
+# 保护包含真实账号密码的文件
+*.secret.yaml           # 密码文件
+*.local.yaml            # 本地配置
+ctp_md.yaml.template    # 旧模板（已废弃）
+
+# 允许提交的文件
+!*.secret.yaml.example  # 示例文件可以提交

@@ -5,9 +5,11 @@ ctp:
   front_addr: "tcp://182.254.243.31:40011"
   broker_id: "9999"
 
-  # 用户信息（请填写您的SimNow账号）
-  user_id: ""           # TODO: 填写您的SimNow用户ID
-  password: ""          # TODO: 填写您的SimNow密码
+  # 用户信息（从 ctp_md.secret.yaml 读取）
+  # 请创建 config/ctp_md.secret.yaml 文件并填写您的账号信息
+  # 格式参考: ctp_md.secret.yaml.example
+  user_id: ""           # 留空，从secret文件读取
+  password: ""          # 留空，从secret文件读取
 
   # 终端认证（看穿式前置必需）
   app_id: "simnow_client_test"
