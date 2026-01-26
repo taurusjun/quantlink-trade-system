@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # CTP开发环境
+  ctp-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: quantlink-ctp-dev
+    volumes:
+      # 挂载整个项目目录
+      - .:/workspace
+      # 挂载CTP库（从Mac复制进去）
+      - ./gateway/third_party/ctp:/workspace/gateway/third_party/ctp
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    network_mode: host
+    # 环境变量
+    environment:
+      - LD_LIBRARY_PATH=/workspace/gateway/third_party/ctp/lib:$LD_LIBRARY_PATH
+    command: /bin/bash
+
+  # NATS消息服务（可选，独立容器）
+  nats:
+    image: nats:2.10-alpine
+    container_name: quantlink-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]

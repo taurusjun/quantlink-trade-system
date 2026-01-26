@@ -1,0 +1,31 @@
+# CTP开发环境 - Linux容器
+FROM ubuntu:22.04
+
+# 安装基础工具
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    vim \
+    gdb \
+    valgrind \
+    libgrpc++-dev \
+    libprotobuf-dev \
+    protobuf-compiler-grpc \
+    libyaml-cpp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装NATS服务器
+RUN wget https://github.com/nats-io/nats-server/releases/download/v2.10.7/nats-server-v2.10.7-linux-amd64.tar.gz \
+    && tar -xzf nats-server-v2.10.7-linux-amd64.tar.gz \
+    && mv nats-server-v2.10.7-linux-amd64/nats-server /usr/local/bin/ \
+    && rm -rf nats-server-v2.10.7-linux-amd64*
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 暴露端口
+EXPOSE 4222 50051 50052 9201
+
+CMD ["/bin/bash"]
