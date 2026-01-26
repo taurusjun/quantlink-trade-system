@@ -34,6 +34,18 @@ type StrategyConfig struct {
 	MaxPositionSize int64                  `yaml:"max_position_size"`
 	MaxExposure     float64                `yaml:"max_exposure"`
 	Parameters      map[string]interface{} `yaml:"parameters"`
+
+	// Model hot reload configuration
+	ModelFile string           `yaml:"model_file"` // Path to model file for hot reload
+	HotReload HotReloadConfig  `yaml:"hot_reload"` // Hot reload settings
+}
+
+// HotReloadConfig contains model hot reload configuration
+type HotReloadConfig struct {
+	Enabled       bool          `yaml:"enabled"`         // Enable hot reload
+	CheckInterval time.Duration `yaml:"check_interval"`  // File check interval
+	AutoReload    bool          `yaml:"auto_reload"`     // Auto reload on file change
+	ManualTrigger bool          `yaml:"manual_trigger"`  // Allow manual trigger via API
 }
 
 // SessionConfig contains trading session configuration

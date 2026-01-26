@@ -448,6 +448,116 @@ func (pas *PairwiseArbStrategy) Start() error {
 	return nil
 }
 
+// UpdateParameters 更新策略参数（热加载支持）
+func (pas *PairwiseArbStrategy) UpdateParameters(params map[string]interface{}) error {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	log.Printf("[PairwiseArbStrategy:%s] Updating parameters...", pas.ID)
+
+	// 保存旧参数（用于日志）
+	oldEntryZ := pas.entryZScore
+	oldExitZ := pas.exitZScore
+	oldOrderSize := pas.orderSize
+	oldMaxPos := pas.maxPositionSize
+
+	// 更新参数
+	updated := false
+
+	if val, ok := params["entry_zscore"].(float64); ok {
+		pas.entryZScore = val
+		updated = true
+	}
+	if val, ok := params["exit_zscore"].(float64); ok {
+		pas.exitZScore = val
+		updated = true
+	}
+	if val, ok := params["order_size"].(int); ok {
+		pas.orderSize = int64(val)
+		updated = true
+	} else if val, ok := params["order_size"].(float64); ok {
+		pas.orderSize = int64(val)
+		updated = true
+	}
+	if val, ok := params["max_position_size"].(int); ok {
+		pas.maxPositionSize = int64(val)
+		updated = true
+	} else if val, ok := params["max_position_size"].(float64); ok {
+		pas.maxPositionSize = int64(val)
+		updated = true
+	}
+	if val, ok := params["lookback_period"].(int); ok {
+		pas.lookbackPeriod = val
+		updated = true
+	} else if val, ok := params["lookback_period"].(float64); ok {
+		pas.lookbackPeriod = int(val)
+		updated = true
+	}
+	if val, ok := params["min_correlation"].(float64); ok {
+		pas.minCorrelation = val
+		updated = true
+	}
+
+	if !updated {
+		return fmt.Errorf("no valid parameters found to update")
+	}
+
+	// 参数验证
+	if pas.entryZScore <= pas.exitZScore {
+		// 回滚
+		pas.entryZScore = oldEntryZ
+		pas.exitZScore = oldExitZ
+		return fmt.Errorf("entry_zscore (%.2f) must be greater than exit_zscore (%.2f)",
+			pas.entryZScore, pas.exitZScore)
+	}
+
+	if pas.orderSize <= 0 || pas.orderSize > pas.maxPositionSize {
+		pas.orderSize = oldOrderSize
+		pas.maxPositionSize = oldMaxPos
+		return fmt.Errorf("invalid order_size (%d) or max_position_size (%d)",
+			pas.orderSize, pas.maxPositionSize)
+	}
+
+	// 输出变更日志
+	log.Printf("[PairwiseArbStrategy:%s] ✓ Parameters updated:", pas.ID)
+	if oldEntryZ != pas.entryZScore {
+		log.Printf("[PairwiseArbStrategy:%s]   entry_zscore: %.2f -> %.2f",
+			pas.ID, oldEntryZ, pas.entryZScore)
+	}
+	if oldExitZ != pas.exitZScore {
+		log.Printf("[PairwiseArbStrategy:%s]   exit_zscore: %.2f -> %.2f",
+			pas.ID, oldExitZ, pas.exitZScore)
+	}
+	if oldOrderSize != pas.orderSize {
+		log.Printf("[PairwiseArbStrategy:%s]   order_size: %d -> %d",
+			pas.ID, oldOrderSize, pas.orderSize)
+	}
+	if oldMaxPos != pas.maxPositionSize {
+		log.Printf("[PairwiseArbStrategy:%s]   max_position_size: %d -> %d",
+			pas.ID, oldMaxPos, pas.maxPositionSize)
+	}
+
+	return nil
+}
+
+// GetCurrentParameters 获取当前参数（用于API查询）
+func (pas *PairwiseArbStrategy) GetCurrentParameters() map[string]interface{} {
+	pas.mu.RLock()
+	defer pas.mu.RUnlock()
+
+	return map[string]interface{}{
+		"entry_zscore":       pas.entryZScore,
+		"exit_zscore":        pas.exitZScore,
+		"order_size":         pas.orderSize,
+		"max_position_size":  pas.maxPositionSize,
+		"lookback_period":    pas.lookbackPeriod,
+		"min_correlation":    pas.minCorrelation,
+		"hedge_ratio":        pas.hedgeRatio,
+		"spread_type":        pas.spreadType,
+		"use_cointegration":  pas.useCointegration,
+	}
+}
+
 // Stop stops the strategy
 func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()

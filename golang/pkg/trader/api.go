@@ -89,6 +89,11 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	mux.HandleFunc("/api/v1/test-ping", api.loggingMiddleware(api.handleTestPing))
 	mux.HandleFunc("/api/v1/test-market-data", api.loggingMiddleware(api.handleTestMarketData))
 
+	// Model hot reload endpoints
+	mux.HandleFunc("/api/v1/model/reload", api.corsMiddleware(api.handleModelReload))
+	mux.HandleFunc("/api/v1/model/status", api.corsMiddleware(api.handleModelStatus))
+	mux.HandleFunc("/api/v1/model/history", api.corsMiddleware(api.handleModelHistory))
+
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      mux,
@@ -489,4 +494,50 @@ func (a *APIServer) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// 调用实际处理函数
 		next(w, r)
 	}
+}
+
+// handleModelReload handles manual model reload trigger
+func (a *APIServer) handleModelReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	log.Println("[API] Model reload requested")
+
+	if err := a.trader.ReloadModel(); err != nil {
+		log.Printf("[API] Model reload failed: %v", err)
+		a.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to reload model: %v", err))
+		return
+	}
+
+	log.Println("[API] ✓ Model reloaded successfully")
+	a.sendSuccess(w, "Model reloaded successfully", map[string]interface{}{
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleModelStatus handles model status query
+func (a *APIServer) handleModelStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	status := a.trader.GetModelStatus()
+	a.sendSuccess(w, "Model status retrieved", status)
+}
+
+// handleModelHistory handles model reload history query
+func (a *APIServer) handleModelHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	history := a.trader.GetModelReloadHistory()
+	a.sendSuccess(w, "Model reload history retrieved", map[string]interface{}{
+		"history": history,
+		"count":   len(history),
+	})
 }

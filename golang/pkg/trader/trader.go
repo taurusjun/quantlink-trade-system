@@ -28,6 +28,9 @@ type Trader struct {
 	SessionMgr  *SessionManager
 	APIServer   *APIServer
 
+	// Model hot reload
+	ModelWatcher *ModelWatcher
+
 	// State
 	mu             sync.RWMutex
 	running        bool
@@ -189,6 +192,32 @@ func (t *Trader) Initialize() error {
 		log.Println("[Trader] ✓ API Server created")
 	}
 
+	// 7. Create Model Watcher (if configured)
+	if t.Config.Strategy.ModelFile != "" && t.Config.Strategy.HotReload.Enabled {
+		log.Println("[Trader] Creating Model Watcher...")
+
+		watcherCfg := ModelWatcherConfig{
+			ModelFilePath: t.Config.Strategy.ModelFile,
+			CheckInterval: t.Config.Strategy.HotReload.CheckInterval,
+			AutoReload:    t.Config.Strategy.HotReload.AutoReload,
+			OnReload: func(newParams map[string]interface{}) error {
+				return t.onModelReload(newParams)
+			},
+		}
+
+		var err error
+		t.ModelWatcher, err = NewModelWatcher(watcherCfg)
+		if err != nil {
+			log.Printf("[Trader] Warning: Failed to create model watcher: %v", err)
+			log.Println("[Trader] Continuing without model hot reload...")
+		} else {
+			log.Printf("[Trader] ✓ Model Watcher created (file: %s, interval: %v, auto_reload: %v)",
+				t.Config.Strategy.ModelFile,
+				t.Config.Strategy.HotReload.CheckInterval,
+				t.Config.Strategy.HotReload.AutoReload)
+		}
+	}
+
 	log.Println("[Trader] ✓ All components initialized successfully")
 	return nil
 }
@@ -267,6 +296,15 @@ func (t *Trader) Start() error {
 		}
 	}
 
+	// Start model watcher (if configured)
+	if t.ModelWatcher != nil {
+		if err := t.ModelWatcher.Start(); err != nil {
+			log.Printf("[Trader] Warning: Failed to start model watcher: %v", err)
+		} else {
+			log.Println("[Trader] ✓ Model Watcher started")
+		}
+	}
+
 	// Start session manager
 	go t.runSessionManager()
 
@@ -304,6 +342,15 @@ func (t *Trader) Stop() error {
 			log.Printf("[Trader] Error stopping API server: %v", err)
 		} else {
 			log.Println("[Trader] ✓ API Server stopped")
+		}
+	}
+
+	// Stop model watcher
+	if t.ModelWatcher != nil {
+		if err := t.ModelWatcher.Stop(); err != nil {
+			log.Printf("[Trader] Error stopping model watcher: %v", err)
+		} else {
+			log.Println("[Trader] ✓ Model Watcher stopped")
 		}
 	}
 
@@ -575,4 +622,68 @@ func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
 	}
 	log.Printf("[Trader] Error: Strategy does not implement BaseStrategyAccessor")
 	return nil
+}
+
+// onModelReload handles model hot reload callback
+func (t *Trader) onModelReload(newParams map[string]interface{}) error {
+	log.Printf("[Trader] Processing model hot reload with %d parameters", len(newParams))
+
+	// Check if strategy supports UpdateParameters
+	type ParameterUpdater interface {
+		UpdateParameters(params map[string]interface{}) error
+	}
+
+	updater, ok := t.Strategy.(ParameterUpdater)
+	if !ok {
+		return fmt.Errorf("strategy does not support parameter updates")
+	}
+
+	// Apply new parameters
+	if err := updater.UpdateParameters(newParams); err != nil {
+		return fmt.Errorf("failed to apply new parameters: %w", err)
+	}
+
+	log.Println("[Trader] ✓ Model parameters reloaded successfully")
+	return nil
+}
+
+// ReloadModel manually triggers model reload
+func (t *Trader) ReloadModel() error {
+	if t.ModelWatcher == nil {
+		return fmt.Errorf("model watcher not configured")
+	}
+
+	return t.ModelWatcher.Reload()
+}
+
+// GetModelStatus returns model watcher status
+func (t *Trader) GetModelStatus() map[string]interface{} {
+	if t.ModelWatcher == nil {
+		return map[string]interface{}{
+			"enabled": false,
+			"message": "Model hot reload not configured",
+		}
+	}
+
+	status := t.ModelWatcher.GetStatus()
+	status["enabled"] = true
+
+	// Add strategy current parameters
+	type ParameterGetter interface {
+		GetCurrentParameters() map[string]interface{}
+	}
+	if getter, ok := t.Strategy.(ParameterGetter); ok {
+		status["current_parameters"] = getter.GetCurrentParameters()
+	}
+
+	return status
+}
+
+// GetModelReloadHistory returns model reload history
+func (t *Trader) GetModelReloadHistory() []ModelReloadHistory {
+	if t.ModelWatcher == nil {
+		return []ModelReloadHistory{}
+	}
+
+	return t.ModelWatcher.GetHistory(10)
 }
