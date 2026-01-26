@@ -1,0 +1,42 @@
+# CTP行情网关配置 - SimNow 7x24环境
+
+ctp:
+  # CTP连接信息（SimNow 7x24看穿式前置）
+  front_addr: "tcp://182.254.243.31:40011"
+  broker_id: "9999"
+
+  # 用户信息（请填写您的SimNow账号）
+  user_id: ""           # TODO: 填写您的SimNow用户ID
+  password: ""          # TODO: 填写您的SimNow密码
+
+  # 终端认证（看穿式前置必需）
+  app_id: "simnow_client_test"
+  auth_code: "0000000000000000"  # 16个0
+
+  # 订阅合约列表
+  instruments:
+    - "ag2505"        # 白银2505
+    - "ag2506"        # 白银2506
+    - "rb2505"        # 螺纹钢2505
+    - "au2506"        # 黄金2506
+
+# 共享内存配置
+shm:
+  queue_name: "md_queue"    # 队列名称（与md_gateway保持一致）
+  queue_size: 10000         # 队列容量
+
+# 重连配置
+reconnect:
+  interval_sec: 5           # 重连间隔（秒）
+  max_attempts: -1          # 最大重连次数（-1表示无限重连）
+
+# 日志配置
+log:
+  level: "info"             # debug / info / warn / error
+  file: "log/ctp_md_gateway.log"
+  console: true             # 是否输出到控制台
+
+# 性能配置
+performance:
+  enable_latency_monitor: true   # 启用延迟监控
+  latency_log_interval: 10000    # 每N条记录一次延迟统计
