@@ -21,16 +21,28 @@ const (
 )
 
 var (
-	// Command line flags
-	configFile  = flag.String("config", "./config/trader.yaml", "Configuration file path")
-	strategyID  = flag.String("strategy-id", "", "Strategy ID (overrides config)")
+	// New system flags
+	configFile   = flag.String("config", "./config/trader.yaml", "Configuration file path")
+	strategyID   = flag.String("strategy-id", "", "Strategy ID (overrides config)")
 	strategyType = flag.String("strategy-type", "", "Strategy type: passive, aggressive, hedging, pairwise_arb (overrides config)")
-	mode        = flag.String("mode", "", "Run mode: live, backtest, simulation (overrides config)")
-	logFile     = flag.String("log-file", "", "Log file path (overrides config)")
-	logLevel    = flag.String("log-level", "", "Log level: debug, info, warn, error (overrides config)")
-	watchConfig = flag.Bool("watch-config", false, "Watch config file for changes and hot reload")
-	version     = flag.Bool("version", false, "Print version and exit")
-	help        = flag.Bool("help", false, "Print help and exit")
+	mode         = flag.String("mode", "", "Run mode: live, backtest, simulation (overrides config)")
+	logFile      = flag.String("log-file", "", "Log file path (overrides config)")
+	logLevel     = flag.String("log-level", "", "Log level: debug, info, warn, error (overrides config)")
+	watchConfig  = flag.Bool("watch-config", false, "Watch config file for changes and hot reload")
+	version      = flag.Bool("version", false, "Print version and exit")
+	help         = flag.Bool("help", false, "Print help and exit")
+
+	// Legacy system compatibility flags (旧系统兼容参数)
+	legacyLive       = flag.Bool("Live", false, "Legacy: Live trading mode")
+	legacyBacktest   = flag.Bool("Backtest", false, "Legacy: Backtest mode")
+	legacySimulation = flag.Bool("Simulation", false, "Legacy: Simulation mode")
+	controlFile      = flag.String("controlFile", "", "Legacy: Control file path (symbol + model)")
+	legacyConfigFile = flag.String("configFile", "", "Legacy: Legacy config file path (deprecated)")
+	strategyIDLegacy = flag.String("strategyID", "", "Legacy: Strategy ID (same as --strategy-id)")
+	adjustLTP        = flag.Int("adjustLTP", 0, "Legacy: Adjust last trade price (deprecated)")
+	printMod         = flag.Int("printMod", 0, "Legacy: Print mode (deprecated)")
+	updateInterval   = flag.Int("updateInterval", 300000, "Legacy: Update interval in microseconds (deprecated)")
+	logFileLegacy    = flag.String("logFile", "", "Legacy: Log file path (same as --log-file)")
 )
 
 func main() {
@@ -52,35 +64,35 @@ func main() {
 	// Print banner
 	printBanner()
 
-	// Load configuration
-	log.Printf("[Main] Loading configuration from: %s", *configFile)
-	cfg, err := config.LoadTraderConfig(*configFile)
-	if err != nil {
-		log.Fatalf("[Main] Failed to load config: %v", err)
-	}
-	log.Println("[Main] ✓ Configuration loaded successfully")
+	// Detect legacy mode (旧系统兼容模式检测)
+	isLegacyMode := *controlFile != ""
 
-	// Override config with command line flags
-	if *strategyID != "" {
-		cfg.System.StrategyID = *strategyID
-		log.Printf("[Main] Strategy ID overridden: %s", *strategyID)
+	var cfg *config.TraderConfig
+	var err error
+
+	if isLegacyMode {
+		// Legacy mode: 使用 controlFile + model 文件
+		log.Println("[Main] ════════════════════════════════════════════════════════════")
+		log.Println("[Main] Running in LEGACY COMPATIBILITY MODE")
+		log.Println("[Main] Converting old system config to new format...")
+		log.Println("[Main] ════════════════════════════════════════════════════════════")
+		cfg, err = loadLegacyConfig()
+		if err != nil {
+			log.Fatalf("[Main] Failed to load legacy config: %v", err)
+		}
+		log.Println("[Main] ✓ Legacy configuration converted successfully")
+	} else {
+		// New system mode: 使用 YAML 配置文件
+		log.Printf("[Main] Loading configuration from: %s", *configFile)
+		cfg, err = config.LoadTraderConfig(*configFile)
+		if err != nil {
+			log.Fatalf("[Main] Failed to load config: %v", err)
+		}
+		log.Println("[Main] ✓ Configuration loaded successfully")
 	}
-	if *strategyType != "" {
-		cfg.Strategy.Type = *strategyType
-		log.Printf("[Main] Strategy type overridden: %s", *strategyType)
-	}
-	if *mode != "" {
-		cfg.System.Mode = *mode
-		log.Printf("[Main] Mode overridden: %s", *mode)
-	}
-	if *logFile != "" {
-		cfg.Logging.File = *logFile
-		log.Printf("[Main] Log file overridden: %s", *logFile)
-	}
-	if *logLevel != "" {
-		cfg.Logging.Level = *logLevel
-		log.Printf("[Main] Log level overridden: %s", *logLevel)
-	}
+
+	// Override config with command line flags (新旧系统通用)
+	applyCommandLineOverrides(cfg)
 
 	// Setup logging
 	if cfg.Logging.File != "" {
@@ -293,5 +305,134 @@ func watchConfigFile(configPath string, t *trader.Trader) {
 			log.Printf("[Main] New config loaded (hot reload not yet implemented)")
 			log.Printf("[Main] Strategy: %s, Mode: %s", newCfg.Strategy.Type, newCfg.System.Mode)
 		}
+	}
+}
+
+// loadLegacyConfig 加载旧系统配置（control + model 文件）
+func loadLegacyConfig() (*config.TraderConfig, error) {
+	// 解析 control 文件
+	log.Printf("[Main] Parsing control file: %s", *controlFile)
+	control, err := config.ParseControlFile(*controlFile)
+	if err != nil {
+		return nil, fmt.Errorf("parse control file: %w", err)
+	}
+	log.Printf("[Main] ✓ Control file parsed: %s/%s, model=%s",
+		control.Symbol1, control.Symbol2, control.ModelFilePath)
+
+	// 确定运行模式
+	runMode := "live"
+	if *legacyBacktest {
+		runMode = "backtest"
+	} else if *legacySimulation {
+		runMode = "simulation"
+	} else if *legacyLive {
+		runMode = "live"
+	}
+
+	// 确定策略ID（优先级：--strategyID > --strategy-id）
+	sid := *strategyID
+	if *strategyIDLegacy != "" {
+		sid = *strategyIDLegacy
+	}
+	if sid == "" {
+		return nil, fmt.Errorf("strategy ID is required (use --strategyID or --strategy-id)")
+	}
+
+	// 确定日志文件（优先级：--logFile > --log-file > 自动生成）
+	logPath := *logFile
+	if *logFileLegacy != "" {
+		logPath = *logFileLegacy
+	}
+	if logPath == "" {
+		// 生成旧系统格式的日志文件名
+		date := time.Now().Format("20060102")
+		controlFileName := filepath.Base(*controlFile)
+		logPath = config.GenerateLegacyLogFileName(controlFileName, sid, date)
+	}
+
+	log.Printf("[Main] Strategy ID: %s, Mode: %s, Log: %s", sid, runMode, logPath)
+
+	// 转换为新系统配置
+	cfg, err := config.ConvertLegacyToTraderConfig(control, sid, runMode, logPath)
+	if err != nil {
+		return nil, fmt.Errorf("convert legacy config: %w", err)
+	}
+
+	log.Println("[Main] ────────────────────────────────────────────────────────────")
+	log.Println("[Main] Legacy Config Summary:")
+	log.Printf("[Main]   Control File:  %s", *controlFile)
+	log.Printf("[Main]   Model File:    %s", control.ModelFilePath)
+	log.Printf("[Main]   Symbols:       %v", cfg.Strategy.Symbols)
+	log.Printf("[Main]   Strategy Type: %s", cfg.Strategy.Type)
+	log.Printf("[Main]   Session:       %s - %s", cfg.Session.StartTime, cfg.Session.EndTime)
+	log.Println("[Main] ────────────────────────────────────────────────────────────")
+
+	return cfg, nil
+}
+
+// applyCommandLineOverrides 应用命令行参数覆盖
+func applyCommandLineOverrides(cfg *config.TraderConfig) {
+	// 新系统参数
+	if *strategyID != "" {
+		cfg.System.StrategyID = *strategyID
+		log.Printf("[Main] Strategy ID overridden: %s", *strategyID)
+	}
+	if *strategyIDLegacy != "" {
+		cfg.System.StrategyID = *strategyIDLegacy
+		log.Printf("[Main] Strategy ID overridden (legacy): %s", *strategyIDLegacy)
+	}
+
+	if *strategyType != "" {
+		cfg.Strategy.Type = *strategyType
+		log.Printf("[Main] Strategy type overridden: %s", *strategyType)
+	}
+
+	if *mode != "" {
+		cfg.System.Mode = *mode
+		log.Printf("[Main] Mode overridden: %s", *mode)
+	}
+
+	// Mode overrides from legacy flags
+	if *legacyLive {
+		cfg.System.Mode = "live"
+		log.Println("[Main] Mode set to 'live' (--Live flag)")
+	}
+	if *legacyBacktest {
+		cfg.System.Mode = "backtest"
+		log.Println("[Main] Mode set to 'backtest' (--Backtest flag)")
+	}
+	if *legacySimulation {
+		cfg.System.Mode = "simulation"
+		log.Println("[Main] Mode set to 'simulation' (--Simulation flag)")
+	}
+
+	if *logFile != "" {
+		cfg.Logging.File = *logFile
+		log.Printf("[Main] Log file overridden: %s", *logFile)
+	}
+	if *logFileLegacy != "" {
+		cfg.Logging.File = *logFileLegacy
+		log.Printf("[Main] Log file overridden (legacy): %s", *logFileLegacy)
+	}
+
+	if *logLevel != "" {
+		cfg.Logging.Level = *logLevel
+		log.Printf("[Main] Log level overridden: %s", *logLevel)
+	}
+
+	// Legacy parameters (deprecated, just log warnings)
+	if *adjustLTP != 0 {
+		log.Printf("[Main] Warning: --adjustLTP is deprecated (value: %d)", *adjustLTP)
+	}
+	if *printMod != 0 {
+		log.Printf("[Main] Warning: --printMod is deprecated (value: %d)", *printMod)
+	}
+	if *updateInterval != 300000 {
+		log.Printf("[Main] Warning: --updateInterval is deprecated (value: %d μs)", *updateInterval)
+		// 可以转换为 TimerInterval
+		cfg.Engine.TimerInterval = time.Duration(*updateInterval) * time.Microsecond
+	}
+	if *legacyConfigFile != "" {
+		log.Printf("[Main] Warning: --configFile (legacy) is deprecated and ignored")
 	}
 }
