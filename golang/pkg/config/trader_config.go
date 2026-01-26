@@ -42,10 +42,7 @@ type StrategyConfig struct {
 
 // HotReloadConfig contains model hot reload configuration
 type HotReloadConfig struct {
-	Enabled       bool          `yaml:"enabled"`         // Enable hot reload
-	CheckInterval time.Duration `yaml:"check_interval"`  // File check interval
-	AutoReload    bool          `yaml:"auto_reload"`     // Auto reload on file change
-	ManualTrigger bool          `yaml:"manual_trigger"`  // Allow manual trigger via API
+	Enabled bool `yaml:"enabled"` // Enable manual hot reload via API
 }
 
 // SessionConfig contains trading session configuration

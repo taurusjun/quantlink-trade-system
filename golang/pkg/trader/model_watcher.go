@@ -20,28 +20,21 @@ type ModelReloadHistory struct {
 	ErrorMsg  string                 `json:"error_msg,omitempty"`
 }
 
-// ModelWatcher 监控 model 文件变化
+// ModelWatcher 手动重载 model 文件
 type ModelWatcher struct {
 	modelFilePath string
-	lastModTime   time.Time
-	checkInterval time.Duration
-	stopChan      chan struct{}
 	onReload      func(newParams map[string]interface{}) error
 	mu            sync.RWMutex
-	enabled       bool
-	autoReload    bool
 
 	// 历史记录
-	history   []ModelReloadHistory
-	historyMu sync.RWMutex
+	history    []ModelReloadHistory
+	historyMu  sync.RWMutex
 	maxHistory int
 }
 
 // ModelWatcherConfig model watcher配置
 type ModelWatcherConfig struct {
 	ModelFilePath string
-	CheckInterval time.Duration
-	AutoReload    bool
 	OnReload      func(newParams map[string]interface{}) error
 }
 
@@ -51,24 +44,14 @@ func NewModelWatcher(cfg ModelWatcherConfig) (*ModelWatcher, error) {
 		return nil, fmt.Errorf("model file path is empty")
 	}
 
-	if cfg.CheckInterval <= 0 {
-		cfg.CheckInterval = 5 * time.Second
-	}
-
 	// 检查文件是否存在
-	stat, err := os.Stat(cfg.ModelFilePath)
-	if err != nil {
+	if _, err := os.Stat(cfg.ModelFilePath); err != nil {
 		return nil, fmt.Errorf("stat model file: %w", err)
 	}
 
 	watcher := &ModelWatcher{
 		modelFilePath: cfg.ModelFilePath,
-		lastModTime:   stat.ModTime(),
-		checkInterval: cfg.CheckInterval,
-		stopChan:      make(chan struct{}),
 		onReload:      cfg.OnReload,
-		enabled:       false,
-		autoReload:    cfg.AutoReload,
 		history:       make([]ModelReloadHistory, 0, 100),
 		maxHistory:    100,
 	}
@@ -76,125 +59,22 @@ func NewModelWatcher(cfg ModelWatcherConfig) (*ModelWatcher, error) {
 	return watcher, nil
 }
 
-// Start 启动watcher
+// Start 启动watcher（手动模式下不需要实际启动）
 func (w *ModelWatcher) Start() error {
-	w.mu.Lock()
-	if w.enabled {
-		w.mu.Unlock()
-		return fmt.Errorf("model watcher already started")
-	}
-	w.enabled = true
-	w.mu.Unlock()
-
-	log.Printf("[ModelWatcher] Started watching: %s", w.modelFilePath)
-	log.Printf("[ModelWatcher] Check interval: %v", w.checkInterval)
-	log.Printf("[ModelWatcher] Auto reload: %v", w.autoReload)
-
-	go w.watchLoop()
-
+	log.Printf("[ModelWatcher] Model watcher initialized (manual reload mode)")
+	log.Printf("[ModelWatcher] Model file: %s", w.modelFilePath)
+	log.Printf("[ModelWatcher] Use API to trigger reload: POST /api/v1/model/reload")
 	return nil
 }
 
 // Stop 停止watcher
 func (w *ModelWatcher) Stop() error {
-	w.mu.Lock()
-	if !w.enabled {
-		w.mu.Unlock()
-		return nil
-	}
-	w.enabled = false
-	w.mu.Unlock()
-
-	close(w.stopChan)
-	log.Println("[ModelWatcher] Stopped")
-
+	log.Println("[ModelWatcher] Model watcher stopped")
 	return nil
-}
-
-// watchLoop 监控循环
-func (w *ModelWatcher) watchLoop() {
-	ticker := time.NewTicker(w.checkInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			w.mu.RLock()
-			autoReload := w.autoReload
-			w.mu.RUnlock()
-
-			if autoReload {
-				if err := w.checkAndReload(); err != nil {
-					log.Printf("[ModelWatcher] Auto reload error: %v", err)
-				}
-			} else {
-				// 只检查不重载
-				w.checkFileChange()
-			}
-
-		case <-w.stopChan:
-			log.Println("[ModelWatcher] Watch loop stopped")
-			return
-		}
-	}
-}
-
-// checkFileChange 检查文件是否变化（不重载）
-func (w *ModelWatcher) checkFileChange() {
-	w.mu.RLock()
-	filePath := w.modelFilePath
-	lastModTime := w.lastModTime
-	w.mu.RUnlock()
-
-	stat, err := os.Stat(filePath)
-	if err != nil {
-		return
-	}
-
-	if stat.ModTime().After(lastModTime) {
-		log.Printf("[ModelWatcher] Model file changed: %s (auto reload disabled, use API to reload manually)",
-			filePath)
-	}
-}
-
-// checkAndReload 检查文件并重载
-func (w *ModelWatcher) checkAndReload() error {
-	w.mu.RLock()
-	if !w.enabled {
-		w.mu.RUnlock()
-		return nil
-	}
-	filePath := w.modelFilePath
-	lastModTime := w.lastModTime
-	w.mu.RUnlock()
-
-	// 检查文件修改时间
-	stat, err := os.Stat(filePath)
-	if err != nil {
-		return fmt.Errorf("stat file: %w", err)
-	}
-
-	// 文件未修改
-	if !stat.ModTime().After(lastModTime) {
-		return nil
-	}
-
-	log.Printf("[ModelWatcher] Model file changed: %s", filePath)
-	log.Printf("[ModelWatcher]   Last modified: %s", stat.ModTime().Format("2006-01-02 15:04:05"))
-
-	// 执行重载
-	return w.reload()
 }
 
 // Reload 手动触发重载
 func (w *ModelWatcher) Reload() error {
-	w.mu.RLock()
-	if !w.enabled {
-		w.mu.RUnlock()
-		return fmt.Errorf("model watcher not started")
-	}
-	w.mu.RUnlock()
-
 	log.Println("[ModelWatcher] Manual reload triggered")
 	return w.reload()
 }
@@ -243,12 +123,6 @@ func (w *ModelWatcher) reload() error {
 			return fmt.Errorf("apply parameters: %w", err)
 		}
 	}
-
-	// 更新修改时间
-	stat, _ := os.Stat(filePath)
-	w.mu.Lock()
-	w.lastModTime = stat.ModTime()
-	w.mu.Unlock()
 
 	// 记录成功历史
 	w.recordHistory(filePath, nil, newStrategyParams, true, "")
@@ -303,21 +177,15 @@ func (w *ModelWatcher) GetStatus() map[string]interface{} {
 
 	stat, _ := os.Stat(w.modelFilePath)
 
-	return map[string]interface{}{
-		"enabled":        w.enabled,
-		"auto_reload":    w.autoReload,
-		"model_file":     w.modelFilePath,
-		"last_mod_time":  w.lastModTime.Format("2006-01-02 15:04:05"),
-		"check_interval": w.checkInterval.String(),
-		"file_exists":    stat != nil,
+	var lastModTime string
+	if stat != nil {
+		lastModTime = stat.ModTime().Format("2006-01-02 15:04:05")
 	}
-}
 
-// SetAutoReload 设置自动重载
-func (w *ModelWatcher) SetAutoReload(enabled bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	w.autoReload = enabled
-	log.Printf("[ModelWatcher] Auto reload set to: %v", enabled)
+	return map[string]interface{}{
+		"mode":          "manual",
+		"model_file":    w.modelFilePath,
+		"last_mod_time": lastModTime,
+		"file_exists":   stat != nil,
+	}
 }

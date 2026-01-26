@@ -198,8 +198,6 @@ func (t *Trader) Initialize() error {
 
 		watcherCfg := ModelWatcherConfig{
 			ModelFilePath: t.Config.Strategy.ModelFile,
-			CheckInterval: t.Config.Strategy.HotReload.CheckInterval,
-			AutoReload:    t.Config.Strategy.HotReload.AutoReload,
 			OnReload: func(newParams map[string]interface{}) error {
 				return t.onModelReload(newParams)
 			},
@@ -211,10 +209,8 @@ func (t *Trader) Initialize() error {
 			log.Printf("[Trader] Warning: Failed to create model watcher: %v", err)
 			log.Println("[Trader] Continuing without model hot reload...")
 		} else {
-			log.Printf("[Trader] ✓ Model Watcher created (file: %s, interval: %v, auto_reload: %v)",
-				t.Config.Strategy.ModelFile,
-				t.Config.Strategy.HotReload.CheckInterval,
-				t.Config.Strategy.HotReload.AutoReload)
+			log.Printf("[Trader] ✓ Model Watcher created (file: %s, mode: manual)",
+				t.Config.Strategy.ModelFile)
 		}
 	}
 
