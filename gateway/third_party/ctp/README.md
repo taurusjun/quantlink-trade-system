@@ -9,7 +9,7 @@
 
 ## 📂 目录结构
 
-安装完成后应包含以下文件：
+### MacOS版本（推荐）
 
 ```
 ctp/
@@ -18,33 +18,63 @@ ctp/
 │   ├── ThostFtdcTraderApi.h
 │   ├── ThostFtdcUserApiStruct.h
 │   └── ThostFtdcUserApiDataType.h
+├── thostmduserapi_se.framework/    (MacOS Framework)
+└── thosttraderapi_se.framework/    (MacOS Framework)
+```
+
+### Linux版本
+
+```
+ctp/
+├── include/
+│   └── (同上)
 └── lib/
-    ├── thostmduserapi_se.so      (Linux)
-    ├── thosttraderapi_se.so      (Linux)
+    ├── thostmduserapi_se.so
+    ├── thosttraderapi_se.so
     ├── error.xml
     └── error.dtd
 ```
 
 ## 🚀 快速安装
 
-### Linux/Mac
+### MacOS（推荐）
 
 ```bash
-# 下载CTP API v6.7.11或更新版本
-# 解压后执行：
+# 从SimNow下载MacOS版本
+# 在下载页面选择: MacOS -> 看穿式监管生产版
 
+# 解压后复制framework
+cp -R /path/to/API/thostmduserapi_se.framework ./
+cp -R /path/to/API/thosttraderapi_se.framework ./
+
+# 复制头文件到include目录（方便CMake查找）
+cp thostmduserapi_se.framework/Headers/*.h include/
+cp thosttraderapi_se.framework/Headers/ThostFtdcTraderApi.h include/
+```
+
+**架构支持**:
+- ✅ Apple Silicon (M1/M2/M3) - arm64
+- ✅ Intel Mac - x86_64
+
+### Linux
+
+```bash
+# 下载Linux版本
 cp /path/to/ctp/ThostFtdc*.h include/
 cp /path/to/ctp/*.so lib/
 cp /path/to/ctp/error.* lib/
 ```
 
-### Mac开发环境
-
-Mac用户推荐使用Docker方案，参考：
-- `docs/Mac开发环境配置_Docker方案_2026-01-26-16_00.md`
-
 ## ✅ 验证安装
 
+### MacOS
+```bash
+ls include/                      # 应该看到4个头文件
+ls *.framework                   # 应该看到2个framework
+file thostmduserapi_se.framework/thostmduserapi_se  # 检查架构
+```
+
+### Linux
 ```bash
 ls include/  # 应该看到4个头文件
 ls lib/      # 应该看到2个.so文件和2个error文件
