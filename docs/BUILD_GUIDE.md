@@ -78,14 +78,71 @@ gateway/build/
 ├── md_simulator      # 行情模拟器
 ├── md_benchmark      # 性能测试工具
 ├── ors_gateway       # 订单网关
-└── counter_gateway   # 交易所网关
+├── counter_gateway   # 交易所网关
+└── ctp_md_gateway    # CTP行情网关（可选）
 ```
 
 **验证构建**:
 ```bash
 ls -lh gateway/build/
-# 应该看到 5 个可执行文件
+# 应该看到 5-6 个可执行文件
 ```
+
+---
+
+#### CTP行情网关编译（可选）
+
+**前置要求**:
+- macOS系统（Apple Silicon或Intel）
+- CTP SDK（已包含在 `gateway/third_party/ctp/`）
+- yaml-cpp库：`brew install yaml-cpp`
+
+**编译步骤**:
+```bash
+cd /Users/user/PWorks/RD/quantlink-trade-system/gateway/build
+
+# 配置（CMake会自动检测CTP SDK和yaml-cpp）
+cmake ..
+
+# 编译CTP网关
+make ctp_md_gateway -j4
+
+# 验证编译结果
+./ctp_md_gateway --help
+```
+
+**输出示例**:
+```
+╔═══════════════════════════════════════════════════════╗
+║      HFT CTP Market Data Gateway - Production       ║
+╚═══════════════════════════════════════════════════════╝
+
+Usage: ./ctp_md_gateway [OPTIONS]
+
+CTP Market Data Gateway - Connects to CTP and publishes market data
+
+Options:
+  -c, --config FILE        Config file path (default: config/ctp_md.yaml)
+  -s, --secret FILE        Secret file path (default: config/ctp_md.secret.yaml)
+  -h, --help              Show this help message
+```
+
+**常见问题**:
+
+1. **找不到yaml-cpp**
+   ```bash
+   brew install yaml-cpp
+   cd gateway/build && cmake .. && make ctp_md_gateway
+   ```
+
+2. **CTP framework签名问题（macOS）**
+   ```bash
+   xattr -d com.apple.quarantine gateway/third_party/ctp/thostmduserapi_se.framework/Versions/A/thostmduserapi_se
+   ```
+
+3. **运行时找不到动态库**
+   - CMake已配置RPATH，正常情况下不需要额外设置
+   - 如果仍有问题，检查 `gateway/third_party/ctp/` 目录是否完整
 
 ---
 
