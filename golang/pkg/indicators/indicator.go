@@ -171,6 +171,20 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	lib.RegisterFactory("bollinger_bands", NewBollingerBandsFromConfig)
 	lib.RegisterFactory("atr", NewATRFromConfig)
 
+	// Register orderbook indicators
+	lib.RegisterFactory("mid_price", NewMidPriceFromConfig)
+	lib.RegisterFactory("weighted_mid_price", NewWeightedMidPriceFromConfig)
+	lib.RegisterFactory("orderbook_volume", NewOrderBookVolumeFromConfig)
+	lib.RegisterFactory("price_impact", NewPriceImpactFromConfig)
+	lib.RegisterFactory("liquidity_ratio", NewLiquidityRatioFromConfig)
+	lib.RegisterFactory("bid_ask_ratio", NewBidAskRatioFromConfig)
+
+	// Register technical indicators
+	lib.RegisterFactory("wma", NewWMAFromConfig)
+	lib.RegisterFactory("momentum", NewMomentumFromConfig)
+	lib.RegisterFactory("roc", NewROCFromConfig)
+	lib.RegisterFactory("stddev", NewStdDevFromConfig)
+
 	return lib
 }
 
