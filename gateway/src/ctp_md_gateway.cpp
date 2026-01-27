@@ -29,10 +29,7 @@ CTPMDGatewayImpl::CTPMDGatewayImpl(const CTPMDConfig& config)
 
     // 打开或创建共享内存队列
     try {
-        m_queue = hft::shm::ShmManager::OpenOrCreate(
-            m_config.shm_queue_name,
-            m_config.shm_queue_size
-        );
+        m_queue = hft::shm::ShmManager::CreateOrOpen(m_config.shm_queue_name);
         std::cout << "[CTPMDGateway] Shared memory queue opened: "
                   << m_config.shm_queue_name << std::endl;
     } catch (const std::exception& e) {
@@ -316,9 +313,7 @@ void CTPMDGatewayImpl::ConvertMarketData(CThostFtdcDepthMarketDataField* ctp_md,
     raw_md->last_qty = ctp_md->Volume;
     raw_md->total_volume = ctp_md->Volume;
 
-    // 其他字段
-    raw_md->turnover = ctp_md->Turnover;
-    raw_md->open_interest = static_cast<uint64_t>(ctp_md->OpenInterest);
+    // 注意：MarketDataRaw不包含turnover和open_interest，CTP提供的这些字段被忽略
 }
 
 // ==================== 辅助方法 ====================

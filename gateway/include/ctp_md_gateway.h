@@ -17,7 +17,7 @@ namespace gateway {
 class CTPMDGatewayImpl : public CThostFtdcMdSpi {
 public:
     explicit CTPMDGatewayImpl(const CTPMDConfig& config);
-    ~CTPMDGatewayImpl() override;
+    virtual ~CTPMDGatewayImpl();
 
     // 启动和停止
     void Start();

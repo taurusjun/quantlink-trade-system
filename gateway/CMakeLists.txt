@@ -32,6 +32,17 @@ else()
     set(HAS_NATS FALSE)
 endif()
 
+# yaml-cpp（用于CTP配置加载）
+find_package(yaml-cpp QUIET)
+if(yaml-cpp_FOUND)
+    message(STATUS "Found yaml-cpp: ${yaml-cpp_VERSION}")
+    set(HAS_YAML_CPP TRUE)
+else()
+    message(WARNING "yaml-cpp not found - CTP gateway will not be built")
+    message(WARNING "To install: brew install yaml-cpp (macOS) or apt install libyaml-cpp-dev (Linux)")
+    set(HAS_YAML_CPP FALSE)
+endif()
+
 # 生成protobuf和gRPC代码
 set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(GENERATED_PROTOBUF_PATH "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -137,8 +148,60 @@ target_link_libraries(counter_gateway
     Threads::Threads
 )
 
+# CTP Market Data Gateway (仅在macOS且yaml-cpp可用时编译)
+if(APPLE AND HAS_YAML_CPP)
+    set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
+
+    if(EXISTS "${CTP_FRAMEWORK_DIR}/thostmduserapi_se.framework")
+        message(STATUS "Found CTP framework: ${CTP_FRAMEWORK_DIR}/thostmduserapi_se.framework")
+
+        set(CTP_MD_GATEWAY_SRCS
+            src/ctp_config.cpp
+            src/ctp_md_gateway.cpp
+            src/main_ctp_md.cpp
+        )
+
+        add_executable(ctp_md_gateway ${CTP_MD_GATEWAY_SRCS})
+
+        target_include_directories(ctp_md_gateway PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CTP_FRAMEWORK_DIR}/include
+            /opt/homebrew/include
+        )
+
+        target_link_libraries(ctp_md_gateway
+            ${CTP_FRAMEWORK_DIR}/thostmduserapi_se.framework/Versions/A/thostmduserapi_se
+            /opt/homebrew/lib/libyaml-cpp.dylib
+            Threads::Threads
+        )
+
+        # 设置RPATH以便运行时能找到CTP framework
+        set_target_properties(ctp_md_gateway PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+        )
+
+        set(HAS_CTP_GATEWAY TRUE)
+        message(STATUS "CTP MD Gateway will be built")
+    else()
+        message(WARNING "CTP framework not found at ${CTP_FRAMEWORK_DIR}")
+        set(HAS_CTP_GATEWAY FALSE)
+    endif()
+else()
+    set(HAS_CTP_GATEWAY FALSE)
+    if(NOT APPLE)
+        message(STATUS "CTP MD Gateway only supports macOS - skipping")
+    elseif(NOT HAS_YAML_CPP)
+        message(STATUS "yaml-cpp not found - CTP MD Gateway skipped")
+    endif()
+endif()
+
 # 安装
-install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway DESTINATION bin)
+if(HAS_CTP_GATEWAY)
+    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway ctp_md_gateway DESTINATION bin)
+else()
+    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway DESTINATION bin)
+endif()
 
 # 打印信息
 message(STATUS "========================================")
@@ -148,4 +211,6 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "gRPC: Found")
 message(STATUS "NATS library: ${NATS_LIB}")
+message(STATUS "yaml-cpp: ${yaml-cpp_FOUND}")
+message(STATUS "CTP MD Gateway: ${HAS_CTP_GATEWAY}")
 message(STATUS "========================================")
