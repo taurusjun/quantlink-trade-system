@@ -202,6 +202,108 @@ if(APPLE)
         install(TARGETS ctp_market_order_test DESTINATION bin)
 
         message(STATUS "CTP Market Order Test target added: ctp_market_order_test")
+
+        # ==================== Query and Close Position Tool ====================
+
+        add_executable(ctp_query_and_close
+            src/ctp_td_config.cpp
+            src/ctp_td_plugin.cpp
+            test/query_and_close.cpp
+        )
+
+        # 包含目录
+        target_include_directories(ctp_query_and_close PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+            ${CTP_FRAMEWORK_DIR}/include
+            /opt/homebrew/include
+        )
+
+        # 链接库
+        target_link_libraries(ctp_query_and_close
+            ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+            /opt/homebrew/lib/libyaml-cpp.dylib
+            pthread
+        )
+
+        # 设置RPATH
+        set_target_properties(ctp_query_and_close PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+        )
+
+        # 安装
+        install(TARGETS ctp_query_and_close DESTINATION bin)
+
+        message(STATUS "CTP Query and Close Position Tool target added: ctp_query_and_close")
+
+        # ==================== Simple Close Position Tool ====================
+
+        add_executable(ctp_close_simple
+            src/ctp_td_config.cpp
+            src/ctp_td_plugin.cpp
+            test/close_position_simple.cpp
+        )
+
+        # 包含目录
+        target_include_directories(ctp_close_simple PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+            ${CTP_FRAMEWORK_DIR}/include
+            /opt/homebrew/include
+        )
+
+        # 链接库
+        target_link_libraries(ctp_close_simple
+            ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+            /opt/homebrew/lib/libyaml-cpp.dylib
+            pthread
+        )
+
+        # 设置RPATH
+        set_target_properties(ctp_close_simple PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+        )
+
+        # 安装
+        install(TARGETS ctp_close_simple DESTINATION bin)
+
+        message(STATUS "CTP Simple Close Position Tool target added: ctp_close_simple")
+
+        # ==================== Auto Close Position Tool ====================
+
+        add_executable(ctp_close_auto
+            src/ctp_td_config.cpp
+            src/ctp_td_plugin.cpp
+            test/close_position_auto.cpp
+        )
+
+        # 包含目录
+        target_include_directories(ctp_close_auto PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+            ${CTP_FRAMEWORK_DIR}/include
+            /opt/homebrew/include
+        )
+
+        # 链接库
+        target_link_libraries(ctp_close_auto
+            ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+            /opt/homebrew/lib/libyaml-cpp.dylib
+            pthread
+        )
+
+        # 设置RPATH
+        set_target_properties(ctp_close_auto PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+        )
+
+        # 安装
+        install(TARGETS ctp_close_auto DESTINATION bin)
+
+        message(STATUS "CTP Auto Close Position Tool target added: ctp_close_auto")
     endif()
 
 elseif(UNIX AND NOT APPLE)

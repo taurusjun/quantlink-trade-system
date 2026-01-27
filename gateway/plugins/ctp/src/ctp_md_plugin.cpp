@@ -312,6 +312,16 @@ void CTPMDPlugin::OnRtnDepthMarketData(CThostFtdcDepthMarketDataField* pDepthMar
 
     auto receive_time = std::chrono::high_resolution_clock::now();
 
+    // 打印ag2603的行情数据（调试用）
+    if (std::string(pDepthMarketData->InstrumentID) == "ag2603") {
+        std::cout << "\n========== ag2603 行情 ==========" << std::endl;
+        std::cout << "  最新价: " << pDepthMarketData->LastPrice << std::endl;
+        std::cout << "  买一价: " << pDepthMarketData->BidPrice1 << "  量: " << pDepthMarketData->BidVolume1 << std::endl;
+        std::cout << "  卖一价: " << pDepthMarketData->AskPrice1 << "  量: " << pDepthMarketData->AskVolume1 << std::endl;
+        std::cout << "  时间: " << pDepthMarketData->UpdateTime << "." << pDepthMarketData->UpdateMillisec << std::endl;
+        std::cout << "=================================" << std::endl;
+    }
+
     // 转换为内部格式
     hft::shm::MarketDataRaw raw_md = {};
     ConvertMarketData(pDepthMarketData, &raw_md);
