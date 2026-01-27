@@ -6,8 +6,7 @@ ctp:
   broker_id: "9999"
 
   # 用户信息（从 ctp_md.secret.yaml 读取）
-  # 请创建 config/ctp_md.secret.yaml 文件并填写您的账号信息
-  # 格式参考: ctp_md.secret.yaml.example
+  # 请创建 config/ctp/ctp_md.secret.yaml 文件并填写您的账号信息
   user_id: ""           # 留空，从secret文件读取
   password: ""          # 留空，从secret文件读取
 
@@ -25,7 +24,7 @@ ctp:
 
 # 共享内存配置
 shm:
-  queue_name: "md_queue"    # 队列名称（与md_gateway保持一致）
+  queue_name: "queue"       # 队列名称（ShmManager会添加/hft_md_前缀）
   queue_size: 10000         # 队列容量
 
 # 重连配置

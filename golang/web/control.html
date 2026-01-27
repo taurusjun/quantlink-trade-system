@@ -739,25 +739,44 @@
             if (status.indicators && Object.keys(status.indicators).length > 0) {
                 conditionsCard.style.display = 'block';
 
-                // 更新条件状态
-                if (status.eligible) {
-                    // 条件满足但未激活 - 提示交易员可以激活
-                    conditionStatus.className = 'condition-status eligible';
-                    conditionStatus.innerHTML = `🎯 ${status.eligible_reason || '策略可激活！'}<br><small>点击下方按钮激活策略开始交易</small>`;
-                    btnActivate.classList.add('highlight');
-                } else if (status.conditions_met && status.active) {
+                // 更新条件状态 - 修复逻辑：严格检查 conditions_met
+                // 检查具体哪些条件未满足
+                let unmetConditions = [];
+                if (status.indicators) {
+                    const zScore = status.indicators.z_score;
+                    const correlation = status.indicators.correlation;
+                    const entryThreshold = status.indicators.entry_threshold || 2.0;
+                    const minCorrelation = status.indicators.min_correlation || 0.7;
+
+                    if (zScore !== undefined && Math.abs(zScore) < entryThreshold) {
+                        unmetConditions.push(`Z-Score: ${Math.abs(zScore).toFixed(2)} < ${entryThreshold.toFixed(1)}`);
+                    }
+                    if (correlation !== undefined && correlation < minCorrelation) {
+                        unmetConditions.push(`相关性: ${correlation.toFixed(3)} < ${minCorrelation.toFixed(1)}`);
+                    }
+                }
+
+                if (status.active && status.conditions_met) {
                     // 条件满足且已激活 - 正在交易
                     conditionStatus.className = 'condition-status met';
                     conditionStatus.innerHTML = `✅ 交易条件满足，策略正在运行`;
                     btnActivate.classList.remove('highlight');
-                } else if (!status.conditions_met) {
-                    // 条件不满足
+                } else if (status.active && !status.conditions_met) {
+                    // 已激活但条件不满足 - 等待条件
                     conditionStatus.className = 'condition-status not-met';
-                    conditionStatus.innerHTML = `⏳ ${status.eligible_reason || '等待交易条件满足'}`;
+                    let detailMsg = unmetConditions.length > 0 ? unmetConditions.join(', ') : '收集数据中...';
+                    conditionStatus.innerHTML = `⏳ 策略已激活，等待交易条件<br><small>${detailMsg}</small>`;
                     btnActivate.classList.remove('highlight');
+                } else if (!status.active && status.eligible) {
+                    // 未激活但条件满足 - 提示可以激活
+                    conditionStatus.className = 'condition-status eligible';
+                    conditionStatus.innerHTML = `🎯 交易条件已满足！<br><small>点击下方按钮激活策略开始交易</small>`;
+                    btnActivate.classList.add('highlight');
                 } else {
+                    // 未激活且条件不满足
                     conditionStatus.className = 'condition-status not-met';
-                    conditionStatus.innerHTML = `⏳ 等待数据...`;
+                    let detailMsg = unmetConditions.length > 0 ? unmetConditions.join(', ') : '等待交易条件满足';
+                    conditionStatus.innerHTML = `⏳ 条件未满足<br><small>${detailMsg}</small>`;
                     btnActivate.classList.remove('highlight');
                 }
 

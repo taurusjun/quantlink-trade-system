@@ -304,12 +304,7 @@ if(APPLE)
         install(TARGETS ctp_close_auto DESTINATION bin)
 
         message(STATUS "CTP Auto Close Position Tool target added: ctp_close_auto")
-    endif()
 
-elseif(UNIX AND NOT APPLE)
-    # Linux CTP库路径（未来支持）
-    message(STATUS "CTP plugin on Linux is not yet supported")
-    message(STATUS "Linux support will be added in future releases")
-else()
-    message(STATUS "CTP plugin is only supported on macOS and Linux")
-endif()
+    endif()  # Close the if(NOT EXISTS thosttraderapi_se.framework) else block
+
+endif()  # Close if(APPLE) block

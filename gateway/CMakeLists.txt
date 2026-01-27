@@ -242,3 +242,63 @@ message(STATUS "CTP Plugin: ${BUILD_CTP_PLUGIN}")
 message(STATUS "XTP Plugin: ${BUILD_XTP_PLUGIN}")
 message(STATUS "FEMAS Plugin: ${BUILD_FEMAS_PLUGIN}")
 message(STATUS "========================================")
+
+# ==================== Counter Bridge (通用多券商订单路由网关) ====================
+# 从ORS共享内存读取订单，路由到各券商插件（CTP/盛立/XTP等）
+
+if(BUILD_CTP_PLUGIN AND APPLE AND HAS_YAML_CPP)
+    message(STATUS "Building Counter Bridge with CTP support...")
+
+    set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
+
+    # Counter Bridge可执行文件
+    add_executable(counter_bridge
+        src/counter_bridge.cpp
+        ${PROTO_SRCS}
+        ${GRPC_SRCS}
+    )
+
+    # 包含目录
+    target_include_directories(counter_bridge PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ctp/include
+        ${GENERATED_PROTOBUF_PATH}
+        ${CTP_FRAMEWORK_DIR}/include
+        /opt/homebrew/include
+    )
+
+    # 链接CTP插件静态库（需要先编译CTP插件的对象文件）
+    target_link_libraries(counter_bridge
+        gRPC::grpc++
+        gRPC::grpc++_reflection
+        Threads::Threads
+        ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+        /opt/homebrew/lib/libyaml-cpp.dylib
+    )
+
+    # 定义启用CTP插件的宏
+    target_compile_definitions(counter_bridge PRIVATE ENABLE_CTP_PLUGIN)
+
+    # 添加CTP插件源文件作为依赖
+    target_sources(counter_bridge PRIVATE
+        plugins/ctp/src/ctp_td_config.cpp
+        plugins/ctp/src/ctp_td_plugin.cpp
+    )
+
+    # 设置RPATH
+    set_target_properties(counter_bridge PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+    )
+
+    # 安装
+    install(TARGETS counter_bridge DESTINATION bin)
+
+    message(STATUS "Counter Bridge target added:")
+    message(STATUS "  - Reads orders from shared memory (ors_request)")
+    message(STATUS "  - Routes to broker plugins (currently: CTP)")
+    message(STATUS "  - Writes responses to shared memory (ors_response)")
+    message(STATUS "  - Extensible: add more brokers by implementing ITDPlugin")
+else()
+    message(STATUS "Counter Bridge: Skipped (requires CTP plugin)")
+endif()
