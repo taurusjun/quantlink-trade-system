@@ -52,3 +52,6 @@ data/market_data/
 
 # 密码和敏感配置文件
 *.secret.yaml
+
+# CTP SDK 流文件目录
+ctp_flow/
