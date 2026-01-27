@@ -46,7 +46,14 @@ func NewLiquidityScore(name string, levels int, maxHistory int) *LiquidityScore 
 }
 
 // NewLiquidityScoreFromConfig creates a LiquidityScore from configuration
-func NewLiquidityScoreFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewLiquidityScoreFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "LiquidityScore"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

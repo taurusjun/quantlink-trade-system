@@ -45,7 +45,14 @@ func NewOrderFlowImbalance(name string, windowSize int, maxHistory int) *OrderFl
 }
 
 // NewOrderFlowImbalanceFromConfig creates an OrderFlowImbalance from configuration
-func NewOrderFlowImbalanceFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewOrderFlowImbalanceFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "OrderFlowImbalance"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	windowSize := 100
 	if v, ok := config["window_size"]; ok {
 		if fv, ok := v.(float64); ok {
@@ -86,11 +93,11 @@ func (ofi *OrderFlowImbalance) Update(md *mdpb.MarketDataUpdate) {
 		if lastPrice > ofi.lastPrice {
 			// Price up = buy
 			isBuy = true
-			tradeVolume = float64(md.LastVolume)
+			tradeVolume = float64(md.LastQty)
 		} else if lastPrice < ofi.lastPrice {
 			// Price down = sell
 			isBuy = false
-			tradeVolume = float64(md.LastVolume)
+			tradeVolume = float64(md.LastQty)
 		} else {
 			// Price unchanged - use bid/ask to classify
 			if len(md.BidPrice) > 0 && len(md.AskPrice) > 0 {
@@ -99,7 +106,7 @@ func (ofi *OrderFlowImbalance) Update(md *mdpb.MarketDataUpdate) {
 					isBuy = true
 				}
 			}
-			tradeVolume = float64(md.LastVolume)
+			tradeVolume = float64(md.LastQty)
 		}
 	}
 

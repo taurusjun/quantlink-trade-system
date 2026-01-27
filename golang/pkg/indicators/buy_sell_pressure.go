@@ -52,7 +52,14 @@ func NewBuySellPressure(name string, levels int, maxHistory int) *BuySellPressur
 }
 
 // NewBuySellPressureFromConfig creates a BuySellPressure from configuration
-func NewBuySellPressureFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewBuySellPressureFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "BuySellPressure"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

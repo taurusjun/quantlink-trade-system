@@ -171,7 +171,35 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	lib.RegisterFactory("bollinger_bands", NewBollingerBandsFromConfig)
 	lib.RegisterFactory("atr", NewATRFromConfig)
 
-	// Register orderbook indicators
+	// Register orderbook indicators - Depth Indicators (Group 1)
+	lib.RegisterFactory("book_depth", NewBookDepthFromConfig)
+	lib.RegisterFactory("cumulative_volume", NewCumulativeVolumeFromConfig)
+	lib.RegisterFactory("depth_imbalance", NewDepthImbalanceFromConfig)
+	lib.RegisterFactory("volume_at_price", NewVolumeAtPriceFromConfig)
+	lib.RegisterFactory("book_pressure", NewBookPressureFromConfig)
+
+	// Liquidity Indicators (Group 2)
+	lib.RegisterFactory("liquidity_score", NewLiquidityScoreFromConfig)
+	lib.RegisterFactory("market_depth", NewMarketDepthFromConfig)
+	lib.RegisterFactory("quote_slope", NewQuoteSlopeFromConfig)
+	lib.RegisterFactory("depth_to_spread", NewDepthToSpreadFromConfig)
+	lib.RegisterFactory("resilience_score", NewResilienceScoreFromConfig)
+
+	// Order Flow Indicators (Group 3)
+	lib.RegisterFactory("order_flow_imbalance", NewOrderFlowImbalanceFromConfig)
+	lib.RegisterFactory("trade_intensity", NewTradeIntensityFromConfig)
+	lib.RegisterFactory("buy_sell_pressure", NewBuySellPressureFromConfig)
+	lib.RegisterFactory("net_order_flow", NewNetOrderFlowFromConfig)
+	lib.RegisterFactory("aggressive_trade", NewAggressiveTradeFromConfig)
+
+	// Microstructure Indicators (Group 4)
+	lib.RegisterFactory("tick_rule", NewTickRuleFromConfig)
+	lib.RegisterFactory("quote_stability", NewQuoteStabilityFromConfig)
+	lib.RegisterFactory("spread_volatility", NewSpreadVolatilityFromConfig)
+	lib.RegisterFactory("quote_update_frequency", NewQuoteUpdateFrequencyFromConfig)
+	lib.RegisterFactory("order_arrival_rate", NewOrderArrivalRateFromConfig)
+
+	// Legacy orderbook indicators (kept for compatibility)
 	lib.RegisterFactory("mid_price", NewMidPriceFromConfig)
 	lib.RegisterFactory("weighted_mid_price", NewWeightedMidPriceFromConfig)
 	lib.RegisterFactory("orderbook_volume", NewOrderBookVolumeFromConfig)

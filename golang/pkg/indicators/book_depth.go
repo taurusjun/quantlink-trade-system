@@ -42,7 +42,14 @@ func NewBookDepth(name string, levels int, side string, maxHistory int) *BookDep
 }
 
 // NewBookDepthFromConfig creates a BookDepth indicator from configuration
-func NewBookDepthFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewBookDepthFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "BookDepth"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

@@ -41,7 +41,14 @@ func NewVolumeAtPrice(name string, targetPrice float64, side string, tolerance f
 }
 
 // NewVolumeAtPriceFromConfig creates a VolumeAtPrice indicator from configuration
-func NewVolumeAtPriceFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewVolumeAtPriceFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "VolumeAtPrice"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	targetPrice := 0.0
 	if v, ok := config["target_price"]; ok {
 		if fv, ok := v.(float64); ok {

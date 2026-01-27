@@ -57,7 +57,14 @@ func NewAggressiveTrade(name string, windowSize int, maxHistory int) *Aggressive
 }
 
 // NewAggressiveTradeFromConfig creates an AggressiveTrade from configuration
-func NewAggressiveTradeFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewAggressiveTradeFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "AggressiveTrade"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	windowSize := 100
 	if v, ok := config["window_size"]; ok {
 		if fv, ok := v.(float64); ok {

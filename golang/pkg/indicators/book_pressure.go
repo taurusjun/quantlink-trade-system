@@ -45,7 +45,14 @@ func NewBookPressure(name string, levels int, weightDecay float64, useVolume boo
 }
 
 // NewBookPressureFromConfig creates a BookPressure indicator from configuration
-func NewBookPressureFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewBookPressureFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "BookPressure"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

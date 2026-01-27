@@ -43,7 +43,14 @@ func NewDepthToSpread(name string, levels int, normalized bool, maxHistory int) 
 }
 
 // NewDepthToSpreadFromConfig creates a DepthToSpread from configuration
-func NewDepthToSpreadFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewDepthToSpreadFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "DepthToSpread"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

@@ -58,7 +58,14 @@ func NewResilienceScore(name string, levels int, windowSize int, maxHistory int)
 }
 
 // NewResilienceScoreFromConfig creates a ResilienceScore from configuration
-func NewResilienceScoreFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewResilienceScoreFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "ResilienceScore"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

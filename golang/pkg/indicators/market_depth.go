@@ -42,7 +42,14 @@ func NewMarketDepth(name string, levels int, maxHistory int) *MarketDepth {
 }
 
 // NewMarketDepthFromConfig creates a MarketDepth from configuration
-func NewMarketDepthFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewMarketDepthFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "MarketDepth"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 10
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

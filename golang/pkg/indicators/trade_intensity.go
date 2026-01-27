@@ -47,7 +47,14 @@ func NewTradeIntensity(name string, windowDuration time.Duration, useVolume bool
 }
 
 // NewTradeIntensityFromConfig creates a TradeIntensity from configuration
-func NewTradeIntensityFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewTradeIntensityFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "TradeIntensity"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	// Default 1 minute window
 	windowSeconds := 60.0
 	if v, ok := config["window_seconds"]; ok {
@@ -84,7 +91,7 @@ func (ti *TradeIntensity) Update(md *mdpb.MarketDataUpdate) {
 	// Add current trade
 	ti.tradeTimestamps = append(ti.tradeTimestamps, now)
 	if ti.useVolume {
-		ti.tradeVolumes = append(ti.tradeVolumes, float64(md.LastVolume))
+		ti.tradeVolumes = append(ti.tradeVolumes, float64(md.LastQty))
 	}
 
 	// Remove trades outside the window

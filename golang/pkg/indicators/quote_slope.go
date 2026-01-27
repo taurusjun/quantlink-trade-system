@@ -41,7 +41,14 @@ func NewQuoteSlope(name string, levels int, maxHistory int) *QuoteSlope {
 }
 
 // NewQuoteSlopeFromConfig creates a QuoteSlope from configuration
-func NewQuoteSlopeFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewQuoteSlopeFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "QuoteSlope"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	levels := 5
 	if v, ok := config["levels"]; ok {
 		if fv, ok := v.(float64); ok {

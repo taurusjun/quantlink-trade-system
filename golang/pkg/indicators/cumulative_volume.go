@@ -32,7 +32,14 @@ func NewCumulativeVolume(name string, resetOnNewBar bool, maxHistory int) *Cumul
 }
 
 // NewCumulativeVolumeFromConfig creates a CumulativeVolume indicator from configuration
-func NewCumulativeVolumeFromConfig(name string, config map[string]interface{}) (Indicator, error) {
+func NewCumulativeVolumeFromConfig(config map[string]interface{}) (Indicator, error) {
+	name := "CumulativeVolume"
+	if v, ok := config["name"]; ok {
+		if sv, ok := v.(string); ok {
+			name = sv
+		}
+	}
+
 	resetOnNewBar := false
 	if v, ok := config["reset_on_new_bar"]; ok {
 		if bv, ok := v.(bool); ok {
