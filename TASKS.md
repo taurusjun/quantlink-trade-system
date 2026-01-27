@@ -1,7 +1,8 @@
 # QuantlinkTrader 任务跟踪
 
-**最后更新**: 2026-01-27 16:10
+**最后更新**: 2026-01-27 16:20
 **当前阶段**: P0 核心功能开发（6/6完成 - 100%） 🎉
+**当前进行**: P1-1 订单簿指标补充（5/20完成 - 25%）
 
 ---
 
@@ -14,6 +15,46 @@
 ## 📋 待办任务（P0 - 必须完成）
 
 *所有 P0 任务已完成！*
+
+---
+
+## 🔄 进行中任务（P1 - 推荐完成）
+
+### 任务 P1-1: 订单簿指标补充（20个） 🔄
+- **状态**: 🔄 In Progress (25% - 5/20)
+- **优先级**: P1-1
+- **工作量**: 8-10天（预估）
+- **开始日期**: 2026-01-27
+- **负责人**: 开发团队
+
+**已完成的指标** (5/20):
+  1. ✅ BookDepth - 订单簿深度 (book_depth.go, 140行)
+     - 多档位总挂单量计算
+     - 支持bid/ask/both模式
+
+  2. ✅ CumulativeVolume - 累计成交量 (cumulative_volume.go, 95行)
+     - 跟踪累计交易量
+     - 支持重置功能
+
+  3. ✅ DepthImbalance - 深度不平衡度 (depth_imbalance.go, 145行)
+     - 公式: (BidDepth - AskDepth) / Total
+     - 范围: [-1, 1]
+
+  4. ✅ VolumeAtPrice - 特定价位挂单量 (volume_at_price.go, 150行)
+     - 跟踪特定价格挂单量
+     - 价格容差匹配
+
+  5. ✅ BookPressure - 订单簿压力 (book_pressure.go, 200行)
+     - 加权买卖压力
+     - 深度衰减支持
+
+**待实现** (15/20):
+  - [ ] 流动性指标（5个）：LiquidityScore, MarketDepth, QuoteSlope等
+  - [ ] 订单流指标（5个）：OrderFlowImbalance, TradeIntensity等
+  - [ ] 微观结构指标（5个）：TickRule, QuoteStability等
+
+**备注**:
+  - 2026-01-27 16:20: 深度指标完成（5个），暂停以测试CTP实盘
 
 ---
 
