@@ -203,6 +203,28 @@ else()
     install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway DESTINATION bin)
 endif()
 
+# ==================== 插件编译选项 ====================
+
+option(BUILD_CTP_PLUGIN "Build CTP plugin" ON)
+option(BUILD_XTP_PLUGIN "Build XTP plugin" OFF)
+option(BUILD_FEMAS_PLUGIN "Build FEMAS plugin" OFF)
+
+# 编译插件
+if(BUILD_CTP_PLUGIN)
+    message(STATUS "Building CTP plugin...")
+    add_subdirectory(plugins/ctp)
+endif()
+
+if(BUILD_XTP_PLUGIN)
+    message(STATUS "Building XTP plugin...")
+    add_subdirectory(plugins/xtp)
+endif()
+
+if(BUILD_FEMAS_PLUGIN)
+    message(STATUS "Building FEMAS plugin...")
+    add_subdirectory(plugins/femas)
+endif()
+
 # 打印信息
 message(STATUS "========================================")
 message(STATUS "HFT Gateway POC Configuration")
@@ -212,5 +234,11 @@ message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "gRPC: Found")
 message(STATUS "NATS library: ${NATS_LIB}")
 message(STATUS "yaml-cpp: ${yaml-cpp_FOUND}")
-message(STATUS "CTP MD Gateway: ${HAS_CTP_GATEWAY}")
+message(STATUS "CTP MD Gateway (legacy): ${HAS_CTP_GATEWAY}")
+message(STATUS "========================================")
+message(STATUS "Plugin Configuration")
+message(STATUS "========================================")
+message(STATUS "CTP Plugin: ${BUILD_CTP_PLUGIN}")
+message(STATUS "XTP Plugin: ${BUILD_XTP_PLUGIN}")
+message(STATUS "FEMAS Plugin: ${BUILD_FEMAS_PLUGIN}")
 message(STATUS "========================================")
