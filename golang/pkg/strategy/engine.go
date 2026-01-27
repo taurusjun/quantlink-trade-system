@@ -496,10 +496,14 @@ func (se *StrategyEngine) processOrders() {
 	}
 }
 
-// sendOrder sends an order (placeholder - actual implementation uses orsClient)
+// sendOrder sends an order via ORS client
 func (se *StrategyEngine) sendOrder(ctx context.Context, req *orspb.OrderRequest) (*orspb.OrderResponse, error) {
-	// This is a placeholder
-	// Actual implementation would use se.orsClient.SendOrder(ctx, req)
+	// Send order via ORS client (gRPC)
+	if se.orsClient != nil {
+		return se.orsClient.SendOrder(ctx, req)
+	}
+
+	// Fallback for testing/simulation
 	return &orspb.OrderResponse{
 		OrderId:   fmt.Sprintf("ORD_%d", time.Now().UnixNano()),
 		ErrorCode: orspb.ErrorCode_SUCCESS,

@@ -7,7 +7,7 @@
 # ═══════════════════════════════════════════════════════════
 system:
   strategy_id: "test_92201"             # 策略唯一标识符（测试专用）
-  mode: "simulation"                    # 运行模式: live, backtest, simulation
+  mode: "live"                          # 运行模式: live, backtest, simulation
 
 # ═══════════════════════════════════════════════════════════
 # Strategy Configuration
@@ -15,8 +15,8 @@ system:
 strategy:
   type: "pairwise_arb"                  # 策略类型: passive, aggressive, hedging, pairwise_arb
   symbols:                              # 交易品种（配对交易需要两个）
-    - "ag2502"                          # 白银 2025年2月
-    - "ag2504"                          # 白银 2025年4月
+    - "ag2603"                          # 白银 2026年3月
+    - "ag2605"                          # 白银 2026年5月
   exchanges:                            # 交易所
     - "SHFE"                            # 上期所
   max_position_size: 100                # 最大持仓数量
@@ -29,8 +29,8 @@ strategy:
     lookback_period: 100.0              # 回看周期
     entry_zscore: 0.5                   # 入场Z-Score阈值（降低以便测试）
     exit_zscore: 0.2                    # 出场Z-Score阈值
-    order_size: 10.0                    # 每条腿的下单数量
-    min_correlation: 0.7                # 最小相关系数
+    order_size: 1.0                     # 每条腿的下单数量（测试用1手）
+    min_correlation: 0.5                # 最小相关系数（测试用0.5）
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)
