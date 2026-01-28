@@ -235,6 +235,32 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	lib.RegisterFactory("information_ratio", NewInformationRatioIndicatorFromConfig)
 	lib.RegisterFactory("cointegration", NewCointegrationIndicatorFromConfig)
 
+	// P1-2: Additional Technical Indicators (Batch 1 - Moving Averages)
+	lib.RegisterFactory("ema", NewEMAFromConfig)
+	lib.RegisterFactory("tema", NewTEMAFromConfig)
+
+	// P1-2: Additional Technical Indicators (Batch 2 - Oscillators)
+	lib.RegisterFactory("williams_r", NewWilliamsRFromConfig)
+	lib.RegisterFactory("stochastic", NewStochasticFromConfig)
+	lib.RegisterFactory("cci", NewCCIFromConfig)
+	lib.RegisterFactory("cmo", NewCMOFromConfig)
+	lib.RegisterFactory("adx", NewADXFromConfig)
+
+	// P1-2: Additional Technical Indicators (Batch 3 - Trend Following)
+	lib.RegisterFactory("trix", NewTRIXFromConfig)
+	lib.RegisterFactory("aroon", NewAroonFromConfig)
+	lib.RegisterFactory("supertrend", NewSupertrendFromConfig)
+	lib.RegisterFactory("dmi", NewDMIFromConfig)
+	lib.RegisterFactory("psar", NewParabolicSARFromConfig)
+
+	// P1-2: Additional Technical Indicators (Batch 4 - Volume)
+	lib.RegisterFactory("obv", NewOBVFromConfig)
+	lib.RegisterFactory("mfi", NewMFIFromConfig)
+	lib.RegisterFactory("pvt", NewPVTFromConfig)
+
+	// P1-2: Additional Technical Indicators (Batch 5 - Channels)
+	lib.RegisterFactory("donchian", NewDonchianChannelsFromConfig)
+
 	return lib
 }
 
