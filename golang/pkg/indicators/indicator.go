@@ -226,6 +226,14 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	// Core Technical Indicators (P0 Task #4)
 	lib.RegisterFactory("hma", NewHMAFromConfig)
 	lib.RegisterFactory("return", NewReturnFromConfig)
+	lib.RegisterFactory("correlation_indicator", NewCorrelationIndicatorFromConfig)
+	lib.RegisterFactory("covariance_indicator", NewCovarianceIndicatorFromConfig)
+	lib.RegisterFactory("beta_indicator", NewBetaIndicatorFromConfig)
+	lib.RegisterFactory("sharpe_ratio", NewSharpeRatioIndicatorFromConfig)
+	lib.RegisterFactory("max_drawdown", NewMaxDrawdownIndicatorFromConfig)
+	lib.RegisterFactory("alpha", NewAlphaIndicatorFromConfig)
+	lib.RegisterFactory("information_ratio", NewInformationRatioIndicatorFromConfig)
+	lib.RegisterFactory("cointegration", NewCointegrationIndicatorFromConfig)
 
 	return lib
 }
