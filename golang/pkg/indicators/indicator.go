@@ -223,6 +223,10 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	lib.RegisterFactory("roc", NewROCFromConfig)
 	lib.RegisterFactory("stddev", NewStdDevFromConfig)
 
+	// Core Technical Indicators (P0 Task #4)
+	lib.RegisterFactory("hma", NewHMAFromConfig)
+	lib.RegisterFactory("return", NewReturnFromConfig)
+
 	return lib
 }
 
