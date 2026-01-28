@@ -30,7 +30,7 @@ strategy:
     entry_zscore: 0.5                   # 入场Z-Score阈值（降低以便测试）
     exit_zscore: 0.2                    # 出场Z-Score阈值
     order_size: 1.0                     # 每条腿的下单数量（测试用1手）
-    min_correlation: 0.0                # 最小相关系数（临时设为0以验证订单流转）
+    min_correlation: 0.5                # 最小相关系数（降低以便测试）
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)
