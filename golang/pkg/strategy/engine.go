@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/client"
@@ -89,15 +88,16 @@ func (se *StrategyEngine) Initialize() error {
 	}
 	log.Printf("[StrategyEngine] Connected to NATS: %s", se.config.NATSAddr)
 
-	// Connect to ORS Gateway
-	_, err = grpc.Dial(se.config.ORSGatewayAddr, grpc.WithInsecure())
+	// Initialize ORS client
+	se.orsClient, err = client.NewORSClient(client.ORSClientConfig{
+		GatewayAddr: se.config.ORSGatewayAddr,
+		NATSAddr:    se.config.NATSAddr,
+		StrategyID:  "strategy_engine", // 使用通用ID
+	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to ORS Gateway: %w", err)
+		return fmt.Errorf("failed to initialize ORS client: %w", err)
 	}
-
-	// Initialize ORS client (simplified for now)
-	se.orsClient = &client.ORSClient{}
-	log.Printf("[StrategyEngine] Connected to ORS Gateway: %s", se.config.ORSGatewayAddr)
+	log.Printf("[StrategyEngine] ORS Client initialized: %s", se.config.ORSGatewayAddr)
 
 	return nil
 }
