@@ -238,6 +238,9 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	// P1-2: Additional Technical Indicators (Batch 1 - Moving Averages)
 	lib.RegisterFactory("ema", NewEMAFromConfig)
 	lib.RegisterFactory("tema", NewTEMAFromConfig)
+	lib.RegisterFactory("kama", NewKAMAFromConfig)
+	lib.RegisterFactory("t3", NewT3FromConfig)
+	lib.RegisterFactory("zlema", NewZLEMAFromConfig)
 
 	// P1-2: Additional Technical Indicators (Batch 2 - Oscillators)
 	lib.RegisterFactory("williams_r", NewWilliamsRFromConfig)
