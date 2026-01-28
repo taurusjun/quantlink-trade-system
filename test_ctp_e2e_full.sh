@@ -74,10 +74,10 @@ sleep 2
 
 # 启动Counter Bridge（CTP交易桥接）
 echo -e "${YELLOW}[7/8] 启动Counter Bridge...${NC}"
-./gateway/build/counter_bridge config/ctp/ctp_td.yaml > log/counter_bridge.log 2>&1 &
+./gateway/build/counter_bridge ctp:config/ctp/ctp_td.yaml > log/counter_bridge.log 2>&1 &
 COUNTER_PID=$!
 echo "PID: $COUNTER_PID"
-sleep 2
+sleep 3
 
 # 启动Trader（策略引擎）
 echo -e "${YELLOW}[8/8] 启动Trader（策略引擎）...${NC}"
