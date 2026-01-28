@@ -11,7 +11,8 @@ import (
 // TraderConfig is the complete configuration for the trader
 type TraderConfig struct {
 	System    SystemConfig    `yaml:"system"`
-	Strategy  StrategyConfig  `yaml:"strategy"`
+	Strategy  StrategyConfig  `yaml:"strategy"`            // 单策略配置（向后兼容）
+	Strategies []StrategyItemConfig `yaml:"strategies,omitempty"` // 多策略配置（新增）
 	Session   SessionConfig   `yaml:"session"`
 	Risk      RiskConfig      `yaml:"risk"`
 	Engine    EngineConfig    `yaml:"engine"`
@@ -20,10 +21,26 @@ type TraderConfig struct {
 	Logging   LoggingConfig   `yaml:"logging"`
 }
 
+// StrategyItemConfig 单个策略的配置（用于多策略模式）
+type StrategyItemConfig struct {
+	ID              string                 `yaml:"id"`                // 策略唯一标识
+	Type            string                 `yaml:"type"`              // 策略类型
+	Enabled         bool                   `yaml:"enabled"`           // 是否启用
+	Symbols         []string               `yaml:"symbols"`           // 交易品种
+	Exchanges       []string               `yaml:"exchanges"`         // 交易所
+	Allocation      float64                `yaml:"allocation"`        // 资金分配比例 (0-1)
+	MaxPositionSize int64                  `yaml:"max_position_size"` // 最大持仓
+	MaxExposure     float64                `yaml:"max_exposure"`      // 最大风险敞口
+	Parameters      map[string]interface{} `yaml:"parameters"`        // 策略参数
+	ModelFile       string                 `yaml:"model_file"`        // 模型文件路径
+	HotReload       HotReloadConfig        `yaml:"hot_reload"`        // 热加载配置
+}
+
 // SystemConfig contains system-level configuration
 type SystemConfig struct {
-	StrategyID string `yaml:"strategy_id"`
-	Mode       string `yaml:"mode"` // live, backtest, simulation
+	StrategyID    string `yaml:"strategy_id"`     // 单策略模式的策略ID（向后兼容）
+	Mode          string `yaml:"mode"`            // live, backtest, simulation
+	MultiStrategy bool   `yaml:"multi_strategy"`  // 是否启用多策略模式（自动检测）
 }
 
 // StrategyConfig contains strategy-specific configuration
@@ -126,10 +143,7 @@ func LoadTraderConfig(filepath string) (*TraderConfig, error) {
 
 // Validate validates the configuration
 func (c *TraderConfig) Validate() error {
-	// Validate system config
-	if c.System.StrategyID == "" {
-		return fmt.Errorf("system.strategy_id is required")
-	}
+	// Validate system mode
 	if c.System.Mode == "" {
 		c.System.Mode = "simulation" // default
 	}
@@ -137,32 +151,22 @@ func (c *TraderConfig) Validate() error {
 		return fmt.Errorf("system.mode must be 'live', 'backtest', or 'simulation'")
 	}
 
-	// Validate strategy config
-	if c.Strategy.Type == "" {
-		return fmt.Errorf("strategy.type is required")
-	}
-	validTypes := []string{"passive", "aggressive", "hedging", "pairwise_arb"}
-	validType := false
-	for _, t := range validTypes {
-		if c.Strategy.Type == t {
-			validType = true
-			break
+	// 检测配置模式：多策略 or 单策略
+	if len(c.Strategies) > 0 {
+		// 多策略模式
+		c.System.MultiStrategy = true
+		if err := c.validateMultiStrategy(); err != nil {
+			return err
+		}
+	} else {
+		// 单策略模式（向后兼容）
+		c.System.MultiStrategy = false
+		if err := c.validateSingleStrategy(); err != nil {
+			return err
 		}
 	}
-	if !validType {
-		return fmt.Errorf("strategy.type must be one of: passive, aggressive, hedging, pairwise_arb")
-	}
 
-	if len(c.Strategy.Symbols) == 0 {
-		return fmt.Errorf("strategy.symbols cannot be empty")
-	}
-
-	// Hedging and pairwise_arb strategies require at least 2 symbols
-	if (c.Strategy.Type == "hedging" || c.Strategy.Type == "pairwise_arb") && len(c.Strategy.Symbols) < 2 {
-		return fmt.Errorf("%s strategy requires at least 2 symbols", c.Strategy.Type)
-	}
-
-	// Set defaults
+	// Set engine defaults
 	if c.Engine.OrderQueueSize == 0 {
 		c.Engine.OrderQueueSize = 100
 	}
@@ -177,6 +181,7 @@ func (c *TraderConfig) Validate() error {
 		c.Risk.CheckIntervalMs = 100
 	}
 
+	// Set logging defaults
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
@@ -191,6 +196,144 @@ func (c *TraderConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// validateSingleStrategy 验证单策略配置（向后兼容）
+func (c *TraderConfig) validateSingleStrategy() error {
+	if c.System.StrategyID == "" {
+		return fmt.Errorf("system.strategy_id is required")
+	}
+
+	if c.Strategy.Type == "" {
+		return fmt.Errorf("strategy.type is required")
+	}
+
+	if err := validateStrategyType(c.Strategy.Type); err != nil {
+		return err
+	}
+
+	if len(c.Strategy.Symbols) == 0 {
+		return fmt.Errorf("strategy.symbols cannot be empty")
+	}
+
+	// Hedging and pairwise_arb strategies require at least 2 symbols
+	if (c.Strategy.Type == "hedging" || c.Strategy.Type == "pairwise_arb") && len(c.Strategy.Symbols) < 2 {
+		return fmt.Errorf("%s strategy requires at least 2 symbols", c.Strategy.Type)
+	}
+
+	return nil
+}
+
+// validateMultiStrategy 验证多策略配置
+func (c *TraderConfig) validateMultiStrategy() error {
+	if len(c.Strategies) == 0 {
+		return fmt.Errorf("strategies cannot be empty in multi-strategy mode")
+	}
+
+	ids := make(map[string]bool)
+	totalAllocation := 0.0
+	hasEnabled := false
+
+	for i, s := range c.Strategies {
+		// 验证 ID 唯一性
+		if s.ID == "" {
+			return fmt.Errorf("strategies[%d].id is required", i)
+		}
+		if ids[s.ID] {
+			return fmt.Errorf("duplicate strategy id: %s", s.ID)
+		}
+		ids[s.ID] = true
+
+		// 验证策略类型
+		if s.Type == "" {
+			return fmt.Errorf("strategies[%d].type is required", i)
+		}
+		if err := validateStrategyType(s.Type); err != nil {
+			return fmt.Errorf("strategies[%d]: %w", i, err)
+		}
+
+		// 验证品种
+		if len(s.Symbols) == 0 {
+			return fmt.Errorf("strategies[%d].symbols cannot be empty", i)
+		}
+
+		// 验证需要多品种的策略
+		if (s.Type == "hedging" || s.Type == "pairwise_arb") && len(s.Symbols) < 2 {
+			return fmt.Errorf("strategies[%d]: %s strategy requires at least 2 symbols", i, s.Type)
+		}
+
+		// 统计分配比例
+		if s.Enabled {
+			hasEnabled = true
+			totalAllocation += s.Allocation
+		}
+
+		// 设置默认值
+		if c.Strategies[i].Allocation == 0 && c.Strategies[i].Enabled {
+			c.Strategies[i].Allocation = 1.0 / float64(len(c.Strategies)) // 默认平均分配
+		}
+	}
+
+	// 至少有一个启用的策略
+	if !hasEnabled {
+		return fmt.Errorf("at least one strategy must be enabled")
+	}
+
+	// 分配比例警告（允许超过1.0，但记录警告）
+	if totalAllocation > 1.1 {
+		// 只是警告，不阻止
+		fmt.Printf("[Config] Warning: total allocation %.2f exceeds 1.0\n", totalAllocation)
+	}
+
+	return nil
+}
+
+// validateStrategyType 验证策略类型
+func validateStrategyType(strategyType string) error {
+	validTypes := []string{"passive", "aggressive", "hedging", "pairwise_arb", "trend_following", "grid", "vwap"}
+	for _, t := range validTypes {
+		if strategyType == t {
+			return nil
+		}
+	}
+	return fmt.Errorf("strategy.type must be one of: %v", validTypes)
+}
+
+// GetStrategyConfigs 获取所有策略配置（统一接口）
+// 单策略模式会自动转换为多策略格式
+func (c *TraderConfig) GetStrategyConfigs() []StrategyItemConfig {
+	if c.System.MultiStrategy {
+		return c.Strategies
+	}
+
+	// 单策略模式：转换为多策略格式
+	return []StrategyItemConfig{
+		{
+			ID:              c.System.StrategyID,
+			Type:            c.Strategy.Type,
+			Enabled:         true,
+			Symbols:         c.Strategy.Symbols,
+			Exchanges:       c.Strategy.Exchanges,
+			Allocation:      1.0,
+			MaxPositionSize: c.Strategy.MaxPositionSize,
+			MaxExposure:     c.Strategy.MaxExposure,
+			Parameters:      c.Strategy.Parameters,
+			ModelFile:       c.Strategy.ModelFile,
+			HotReload:       c.Strategy.HotReload,
+		},
+	}
+}
+
+// GetEnabledStrategies 获取所有启用的策略配置
+func (c *TraderConfig) GetEnabledStrategies() []StrategyItemConfig {
+	all := c.GetStrategyConfigs()
+	enabled := make([]StrategyItemConfig, 0, len(all))
+	for _, s := range all {
+		if s.Enabled {
+			enabled = append(enabled, s)
+		}
+	}
+	return enabled
 }
 
 // SaveTraderConfig saves configuration to a YAML file

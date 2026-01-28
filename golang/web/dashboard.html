@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantlinkTrader Dashboard</title>
+    <!-- Vue.js 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #667eea;
+            --primary-dark: #764ba2;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107;
+            --info-color: #17a2b8;
+            --text-color: #212529;
+            --text-muted: #6c757d;
+            --bg-light: #f8f9fa;
+            --border-color: #dee2e6;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-light);
+            min-height: 100vh;
+            color: var(--text-color);
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .header-title h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.connected { background: var(--success-color); }
+        .status-dot.disconnected { background: var(--danger-color); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            padding: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 1200px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* Overview Stats */
+        .overview-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .overview-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .stat-value.positive { color: var(--success-color); }
+        .stat-value.negative { color: var(--danger-color); }
+
+        /* Strategy Cards */
+        .strategies-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+
+        .strategy-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+
+        .strategy-card:hover {
+            box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+        }
+
+        .strategy-card.eligible {
+            border-color: var(--info-color);
+            animation: glow 2s infinite;
+        }
+
+        .strategy-card.active {
+            border-color: var(--success-color);
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 10px rgba(23, 162, 184, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(23, 162, 184, 0.6); }
+        }
+
+        .strategy-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .strategy-name {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .strategy-type {
+            font-size: 12px;
+            color: var(--text-muted);
+            background: var(--bg-light);
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+
+        .strategy-body {
+            padding: 15px 20px;
+        }
+
+        .strategy-symbols {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .symbol-tag {
+            font-size: 11px;
+            padding: 3px 8px;
+            background: var(--bg-light);
+            border-radius: 4px;
+            color: var(--text-muted);
+        }
+
+        .strategy-status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .strategy-status-row:last-child {
+            border-bottom: none;
+        }
+
+        .strategy-status-label {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .strategy-status-value {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-secondary { background: #e2e3e5; color: #383d41; }
+
+        /* Condition Alert */
+        .condition-alert {
+            margin: 12px 0;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .condition-alert.eligible {
+            background: linear-gradient(135deg, #d1ecf1 0%, #cce5ff 100%);
+            color: #004085;
+            font-weight: 600;
+            animation: pulse-bg 2s infinite;
+        }
+
+        @keyframes pulse-bg {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        .condition-alert.not-met {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        /* Indicators Grid */
+        .indicators-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .indicator-item {
+            background: var(--bg-light);
+            padding: 8px 12px;
+            border-radius: 6px;
+            border-left: 3px solid var(--text-muted);
+        }
+
+        .indicator-item.met {
+            border-left-color: var(--success-color);
+            background: #d4edda;
+        }
+
+        .indicator-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .indicator-value {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        /* Strategy Actions */
+        .strategy-actions {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary.highlight {
+            background: linear-gradient(135deg, var(--success-color) 0%, #20c997 100%);
+            animation: btn-glow 1.5s infinite;
+        }
+
+        @keyframes btn-glow {
+            0%, 100% { box-shadow: 0 0 15px rgba(40, 167, 69, 0.4); }
+            50% { box-shadow: 0 0 25px rgba(40, 167, 69, 0.7); }
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+        }
+
+        /* Right Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Positions */
+        .positions-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .position-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .position-item:last-child {
+            border-bottom: none;
+        }
+
+        .position-symbol {
+            font-weight: 600;
+        }
+
+        .position-direction {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .position-direction.long {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .position-direction.short {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .position-details {
+            text-align: right;
+        }
+
+        .position-qty {
+            font-weight: 600;
+        }
+
+        .position-pnl {
+            font-size: 13px;
+        }
+
+        .position-pnl.positive { color: var(--success-color); }
+        .position-pnl.negative { color: var(--danger-color); }
+
+        /* Config Panel */
+        .config-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .config-input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .config-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .btn-connect {
+            background: var(--text-muted);
+            color: white;
+            padding: 10px 20px;
+        }
+
+        .btn-connect:hover:not(:disabled) {
+            background: #5a6268;
+        }
+
+        /* Refresh indicator */
+        .refresh-time {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Loading */
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            animation: slideIn 0.3s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .toast-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .toast-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-title">
+                <h1>QuantlinkTrader Dashboard</h1>
+                <span class="badge" :class="multiStrategy ? 'badge-info' : 'badge-secondary'">
+                    {{ multiStrategy ? 'Multi-Strategy' : 'Single-Strategy' }}
+                </span>
+            </div>
+            <div class="header-status">
+                <div class="status-indicator">
+                    <span class="status-dot" :class="connected ? 'connected' : 'disconnected'"></span>
+                    <span>{{ connected ? 'Connected' : 'Disconnected' }}</span>
+                </div>
+                <span class="refresh-time">{{ lastRefresh }}</span>
+            </div>
+        </header>
+
+        <!-- Toast Container -->
+        <div class="toast-container">
+            <div v-for="(toast, index) in toasts" :key="index"
+                 class="toast" :class="'toast-' + toast.type">
+                {{ toast.message }}
+            </div>
+        </div>
+
+        <!-- Main Container -->
+        <div class="main-container">
+            <!-- Left Column -->
+            <div class="main-content">
+                <!-- Overview Stats -->
+                <div class="overview-stats">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Strategies</div>
+                        <div class="stat-value">{{ overview.totalStrategies }}</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Active / Running</div>
+                        <div class="stat-value">{{ overview.activeStrategies }} / {{ overview.runningStrategies }}</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Realized P&L</div>
+                        <div class="stat-value" :class="overview.totalRealizedPnL >= 0 ? 'positive' : 'negative'">
+                            {{ formatPnL(overview.totalRealizedPnL) }}
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Unrealized P&L</div>
+                        <div class="stat-value" :class="overview.totalUnrealizedPnL >= 0 ? 'positive' : 'negative'">
+                            {{ formatPnL(overview.totalUnrealizedPnL) }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Strategies Section -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Strategies</h2>
+                        <button class="btn btn-connect" @click="refreshData" :disabled="loading">
+                            <span v-if="loading" class="loading-spinner"></span>
+                            <span v-else>Refresh</span>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div v-if="strategies.length === 0" class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <p>No strategies loaded</p>
+                            <p>Connect to API to load strategies</p>
+                        </div>
+                        <div v-else class="strategies-grid">
+                            <div v-for="strategy in strategies" :key="strategy.id"
+                                 class="strategy-card"
+                                 :class="{ 'eligible': strategy.eligible && !strategy.active, 'active': strategy.active }">
+
+                                <!-- Strategy Header -->
+                                <div class="strategy-header">
+                                    <span class="strategy-name">{{ strategy.id }}</span>
+                                    <span class="strategy-type">{{ strategy.type }}</span>
+                                </div>
+
+                                <!-- Strategy Body -->
+                                <div class="strategy-body">
+                                    <!-- Symbols -->
+                                    <div class="strategy-symbols">
+                                        <span v-for="symbol in strategy.symbols" :key="symbol" class="symbol-tag">
+                                            {{ symbol }}
+                                        </span>
+                                    </div>
+
+                                    <!-- Status Rows -->
+                                    <div class="strategy-status-row">
+                                        <span class="strategy-status-label">Status</span>
+                                        <span class="badge" :class="getStatusBadgeClass(strategy)">
+                                            {{ getStatusText(strategy) }}
+                                        </span>
+                                    </div>
+                                    <div class="strategy-status-row">
+                                        <span class="strategy-status-label">Allocation</span>
+                                        <span class="strategy-status-value">{{ (strategy.allocation * 100).toFixed(0) }}%</span>
+                                    </div>
+                                    <div class="strategy-status-row">
+                                        <span class="strategy-status-label">P&L</span>
+                                        <span class="strategy-status-value"
+                                              :class="(strategy.realizedPnL + strategy.unrealizedPnL) >= 0 ? 'positive' : 'negative'">
+                                            {{ formatPnL(strategy.realizedPnL + strategy.unrealizedPnL) }}
+                                        </span>
+                                    </div>
+
+                                    <!-- Condition Alert -->
+                                    <div v-if="strategy.eligible && !strategy.active" class="condition-alert eligible">
+                                        Conditions Met - Ready to Activate!
+                                    </div>
+                                    <div v-else-if="!strategy.conditionsMet && strategy.active" class="condition-alert not-met">
+                                        Waiting for conditions...
+                                    </div>
+
+                                    <!-- Indicators -->
+                                    <div v-if="strategy.indicators && Object.keys(strategy.indicators).length > 0" class="indicators-grid">
+                                        <div v-for="(value, key) in filterIndicators(strategy.indicators)" :key="key"
+                                             class="indicator-item"
+                                             :class="{ 'met': isIndicatorMet(key, value, strategy.indicators) }">
+                                            <div class="indicator-label">{{ formatIndicatorName(key) }}</div>
+                                            <div class="indicator-value">{{ formatIndicatorValue(value) }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Strategy Actions -->
+                                <div class="strategy-actions">
+                                    <button class="btn btn-primary"
+                                            :class="{ 'highlight': strategy.eligible && !strategy.active }"
+                                            @click="activateStrategy(strategy.id)"
+                                            :disabled="strategy.active || processing">
+                                        {{ strategy.active ? 'Active' : 'Activate' }}
+                                    </button>
+                                    <button class="btn btn-danger"
+                                            @click="deactivateStrategy(strategy.id)"
+                                            :disabled="!strategy.active || processing">
+                                        Deactivate
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Sidebar -->
+            <div class="sidebar">
+                <!-- Config Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>API Connection</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="config-row">
+                            <input type="text" class="config-input" v-model="apiHost" placeholder="Host">
+                            <input type="number" class="config-input" v-model="apiPort" placeholder="Port" style="width: 100px;">
+                        </div>
+                        <button class="btn btn-connect" @click="connect" :disabled="loading" style="width: 100%;">
+                            <span v-if="loading" class="loading-spinner"></span>
+                            <span v-else>Connect & Refresh</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Positions Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Positions</h2>
+                        <span class="badge badge-secondary">{{ positionCount }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div v-if="positions.length === 0" class="empty-state">
+                            <div class="empty-state-icon">📋</div>
+                            <p>No positions</p>
+                        </div>
+                        <div v-else class="positions-list">
+                            <div v-for="pos in positions" :key="pos.symbol + pos.direction" class="position-item">
+                                <div>
+                                    <div class="position-symbol">{{ pos.symbol }}</div>
+                                    <span class="position-direction" :class="pos.direction.toLowerCase()">
+                                        {{ pos.direction }}
+                                    </span>
+                                </div>
+                                <div class="position-details">
+                                    <div class="position-qty">{{ pos.volume }} lots</div>
+                                    <div class="position-pnl" :class="pos.profit >= 0 ? 'positive' : 'negative'">
+                                        {{ formatPnL(pos.profit) }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Stats -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>System Info</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="strategy-status-row">
+                            <span class="strategy-status-label">Mode</span>
+                            <span class="strategy-status-value">{{ overview.mode || '-' }}</span>
+                        </div>
+                        <div class="strategy-status-row">
+                            <span class="strategy-status-label">Refresh Rate</span>
+                            <span class="strategy-status-value">{{ refreshInterval / 1000 }}s</span>
+                        </div>
+                        <div class="strategy-status-row">
+                            <span class="strategy-status-label">Total P&L</span>
+                            <span class="strategy-status-value"
+                                  :class="overview.totalPnL >= 0 ? 'positive' : 'negative'">
+                                {{ formatPnL(overview.totalPnL) }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+        createApp({
+            setup() {
+                // State
+                const apiHost = ref('localhost');
+                const apiPort = ref(9201);
+                const connected = ref(false);
+                const loading = ref(false);
+                const processing = ref(false);
+                const multiStrategy = ref(false);
+                const lastRefresh = ref('-');
+                const refreshInterval = ref(5000);
+                const toasts = ref([]);
+
+                // Data
+                const overview = ref({
+                    totalStrategies: 0,
+                    activeStrategies: 0,
+                    runningStrategies: 0,
+                    totalRealizedPnL: 0,
+                    totalUnrealizedPnL: 0,
+                    totalPnL: 0,
+                    mode: ''
+                });
+
+                const strategies = ref([]);
+                const positions = ref([]);
+
+                let refreshTimer = null;
+
+                // Computed
+                const positionCount = computed(() => positions.value.length);
+
+                // Methods
+                const getApiBase = () => `http://${apiHost.value}:${apiPort.value}/api/v1`;
+
+                const showToast = (message, type = 'success') => {
+                    const toast = { message, type };
+                    toasts.value.push(toast);
+                    setTimeout(() => {
+                        const index = toasts.value.indexOf(toast);
+                        if (index > -1) toasts.value.splice(index, 1);
+                    }, 3000);
+                };
+
+                const formatPnL = (value) => {
+                    if (value === undefined || value === null) return '¥0.00';
+                    const prefix = value >= 0 ? '+' : '';
+                    return `${prefix}¥${value.toFixed(2)}`;
+                };
+
+                const formatIndicatorName = (key) => {
+                    const names = {
+                        'z_score': 'Z-Score',
+                        'correlation': 'Correlation',
+                        'spread': 'Spread',
+                        'spread_mean': 'Spread Mean',
+                        'spread_std': 'Spread Std',
+                        'entry_threshold': 'Entry',
+                        'exit_threshold': 'Exit',
+                        'hedge_ratio': 'Hedge Ratio'
+                    };
+                    return names[key] || key;
+                };
+
+                const formatIndicatorValue = (value) => {
+                    if (typeof value === 'number') {
+                        return Math.abs(value) < 10 ? value.toFixed(4) : value.toFixed(2);
+                    }
+                    return value;
+                };
+
+                const filterIndicators = (indicators) => {
+                    const exclude = ['leg1_price', 'leg2_price', 'leg1_position', 'leg2_position'];
+                    const result = {};
+                    for (const [key, value] of Object.entries(indicators)) {
+                        if (!exclude.includes(key)) {
+                            result[key] = value;
+                        }
+                    }
+                    return result;
+                };
+
+                const isIndicatorMet = (key, value, indicators) => {
+                    if (key === 'z_score' && indicators.entry_threshold) {
+                        return Math.abs(value) >= indicators.entry_threshold;
+                    }
+                    if (key === 'correlation' && indicators.min_correlation) {
+                        return value >= indicators.min_correlation;
+                    }
+                    return false;
+                };
+
+                const getStatusBadgeClass = (strategy) => {
+                    if (strategy.active && strategy.running) return 'badge-success';
+                    if (strategy.running) return 'badge-info';
+                    if (strategy.eligible) return 'badge-warning';
+                    return 'badge-secondary';
+                };
+
+                const getStatusText = (strategy) => {
+                    if (strategy.active && strategy.running) return 'Trading';
+                    if (strategy.running) return 'Running';
+                    if (strategy.eligible) return 'Ready';
+                    return 'Inactive';
+                };
+
+                const connect = async () => {
+                    await refreshData();
+                };
+
+                const refreshData = async () => {
+                    loading.value = true;
+                    try {
+                        // Fetch dashboard overview
+                        const overviewRes = await fetch(`${getApiBase()}/dashboard/overview`);
+                        const overviewData = await overviewRes.json();
+
+                        if (overviewData.success) {
+                            const data = overviewData.data;
+                            multiStrategy.value = data.multi_strategy;
+                            overview.value = {
+                                totalStrategies: data.total_strategies || 0,
+                                activeStrategies: data.active_strategies || 0,
+                                runningStrategies: data.running_strategies || 0,
+                                totalRealizedPnL: data.total_realized_pnl || 0,
+                                totalUnrealizedPnL: data.total_unrealized_pnl || 0,
+                                totalPnL: data.total_pnl || 0,
+                                mode: data.mode || ''
+                            };
+
+                            // Update strategies
+                            strategies.value = (data.strategies || []).map(s => ({
+                                id: s.id,
+                                type: s.type,
+                                symbols: s.symbols || [],
+                                running: s.running,
+                                active: s.active,
+                                conditionsMet: s.conditions_met,
+                                eligible: s.eligible,
+                                allocation: s.allocation || 0,
+                                realizedPnL: s.realized_pnl || 0,
+                                unrealizedPnL: s.unrealized_pnl || 0,
+                                indicators: {}
+                            }));
+
+                            connected.value = true;
+                        }
+
+                        // Fetch realtime indicators
+                        const indicatorsRes = await fetch(`${getApiBase()}/indicators/realtime`);
+                        const indicatorsData = await indicatorsRes.json();
+
+                        if (indicatorsData.success && indicatorsData.data.strategies) {
+                            for (const [id, data] of Object.entries(indicatorsData.data.strategies)) {
+                                const strategy = strategies.value.find(s => s.id === id);
+                                if (strategy) {
+                                    strategy.indicators = data.indicators || {};
+                                    strategy.conditionsMet = data.conditions_met;
+                                    strategy.eligible = data.eligible;
+                                }
+                            }
+                        }
+
+                        // Fetch positions
+                        const positionsRes = await fetch(`${getApiBase()}/positions`);
+                        const positionsData = await positionsRes.json();
+
+                        if (positionsData.success) {
+                            const posArray = [];
+                            for (const [exchange, posList] of Object.entries(positionsData.data || {})) {
+                                for (const pos of posList) {
+                                    posArray.push({
+                                        symbol: pos.symbol,
+                                        direction: pos.direction,
+                                        volume: pos.volume,
+                                        profit: pos.position_profit || 0
+                                    });
+                                }
+                            }
+                            positions.value = posArray;
+                        }
+
+                        lastRefresh.value = new Date().toLocaleTimeString();
+
+                    } catch (error) {
+                        connected.value = false;
+                        showToast(`Connection failed: ${error.message}`, 'error');
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const activateStrategy = async (strategyId) => {
+                    if (processing.value) return;
+                    processing.value = true;
+
+                    try {
+                        const response = await fetch(`${getApiBase()}/strategies/${strategyId}/activate`, {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showToast(`Strategy ${strategyId} activated`, 'success');
+                            await refreshData();
+                        } else {
+                            showToast(`Failed: ${data.error}`, 'error');
+                        }
+                    } catch (error) {
+                        showToast(`Error: ${error.message}`, 'error');
+                    } finally {
+                        processing.value = false;
+                    }
+                };
+
+                const deactivateStrategy = async (strategyId) => {
+                    if (processing.value) return;
+                    if (!confirm(`Deactivate strategy ${strategyId}?`)) return;
+
+                    processing.value = true;
+
+                    try {
+                        const response = await fetch(`${getApiBase()}/strategies/${strategyId}/deactivate`, {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showToast(`Strategy ${strategyId} deactivated`, 'success');
+                            await refreshData();
+                        } else {
+                            showToast(`Failed: ${data.error}`, 'error');
+                        }
+                    } catch (error) {
+                        showToast(`Error: ${error.message}`, 'error');
+                    } finally {
+                        processing.value = false;
+                    }
+                };
+
+                // Lifecycle
+                onMounted(() => {
+                    refreshData();
+                    refreshTimer = setInterval(refreshData, refreshInterval.value);
+                });
+
+                onUnmounted(() => {
+                    if (refreshTimer) clearInterval(refreshTimer);
+                });
+
+                return {
+                    // State
+                    apiHost,
+                    apiPort,
+                    connected,
+                    loading,
+                    processing,
+                    multiStrategy,
+                    lastRefresh,
+                    refreshInterval,
+                    toasts,
+                    overview,
+                    strategies,
+                    positions,
+                    positionCount,
+
+                    // Methods
+                    connect,
+                    refreshData,
+                    activateStrategy,
+                    deactivateStrategy,
+                    formatPnL,
+                    formatIndicatorName,
+                    formatIndicatorValue,
+                    filterIndicators,
+                    isIndicatorMet,
+                    getStatusBadgeClass,
+                    getStatusText
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

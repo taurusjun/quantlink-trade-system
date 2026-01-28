@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,6 +98,12 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	// Position query endpoints
 	mux.HandleFunc("/api/v1/positions", api.corsMiddleware(api.handlePositions))
 	mux.HandleFunc("/api/v1/positions/summary", api.corsMiddleware(api.handlePositionsSummary))
+
+	// Multi-strategy management endpoints (P2-12.2)
+	mux.HandleFunc("/api/v1/dashboard/overview", api.corsMiddleware(api.handleDashboardOverview))
+	mux.HandleFunc("/api/v1/strategies", api.corsMiddleware(api.handleStrategies))
+	mux.HandleFunc("/api/v1/strategies/", api.corsMiddleware(api.handleStrategyByID))
+	mux.HandleFunc("/api/v1/indicators/realtime", api.corsMiddleware(api.handleRealtimeIndicators))
 
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
@@ -655,4 +662,517 @@ func (a *APIServer) handlePositionsSummary(w http.ResponseWriter, r *http.Reques
 	}
 
 	a.sendSuccess(w, "Position summary retrieved", summary)
+}
+
+// ==================== Multi-Strategy API Endpoints (P2-12.2) ====================
+
+// DashboardOverview represents the dashboard overview response
+type DashboardOverview struct {
+	MultiStrategy     bool                   `json:"multi_strategy"`
+	Mode              string                 `json:"mode"`
+	TotalStrategies   int                    `json:"total_strategies"`
+	ActiveStrategies  int                    `json:"active_strategies"`
+	RunningStrategies int                    `json:"running_strategies"`
+	TotalRealizedPnL  float64                `json:"total_realized_pnl"`
+	TotalUnrealizedPnL float64               `json:"total_unrealized_pnl"`
+	TotalPnL          float64                `json:"total_pnl"`
+	Strategies        []StrategyOverviewItem `json:"strategies"`
+	Timestamp         string                 `json:"timestamp"`
+}
+
+// StrategyOverviewItem represents a strategy item in the overview
+type StrategyOverviewItem struct {
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	Symbols       []string `json:"symbols"`
+	Running       bool     `json:"running"`
+	Active        bool     `json:"active"`
+	ConditionsMet bool     `json:"conditions_met"`
+	Eligible      bool     `json:"eligible"`
+	Allocation    float64  `json:"allocation"`
+	RealizedPnL   float64  `json:"realized_pnl"`
+	UnrealizedPnL float64  `json:"unrealized_pnl"`
+}
+
+// handleDashboardOverview handles GET /api/v1/dashboard/overview
+// 返回仪表板总览数据（支持多策略）
+func (a *APIServer) handleDashboardOverview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	overview := &DashboardOverview{
+		MultiStrategy: a.trader.IsMultiStrategy(),
+		Mode:          a.trader.Config.System.Mode,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		Strategies:    make([]StrategyOverviewItem, 0),
+	}
+
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		status := mgr.GetStatus()
+
+		overview.TotalStrategies = status.TotalStrategies
+		overview.ActiveStrategies = status.ActiveStrategies
+		overview.RunningStrategies = status.RunningStrategies
+
+		// Get aggregated PNL
+		aggPNL := mgr.GetAggregatedPNL()
+		overview.TotalRealizedPnL = aggPNL.TotalRealizedPnL
+		overview.TotalUnrealizedPnL = aggPNL.TotalUnrealizedPnL
+		overview.TotalPnL = aggPNL.TotalPnL
+
+		// Build strategy list
+		for id, info := range status.StrategyStatuses {
+			item := StrategyOverviewItem{
+				ID:            id,
+				Type:          info.Type,
+				Symbols:       info.Symbols,
+				Running:       info.Running,
+				Active:        info.Active,
+				ConditionsMet: info.ConditionsMet,
+				Eligible:      info.Eligible,
+				Allocation:    info.Allocation,
+			}
+			if info.PNL != nil {
+				item.RealizedPnL = info.PNL.RealizedPnL
+				item.UnrealizedPnL = info.PNL.UnrealizedPnL
+			}
+			overview.Strategies = append(overview.Strategies, item)
+		}
+	} else {
+		// Single-strategy mode
+		overview.TotalStrategies = 1
+
+		baseStrat := a.getBaseStrategy()
+		isActive := false
+		conditionsMet := false
+		eligible := false
+		if baseStrat != nil {
+			isActive = baseStrat.ControlState.IsActive()
+			conditionsMet = baseStrat.ControlState.ConditionsMet
+			eligible = baseStrat.ControlState.Eligible
+		}
+
+		isRunning := a.trader.Strategy.IsRunning()
+		if isRunning {
+			overview.RunningStrategies = 1
+		}
+		if isActive {
+			overview.ActiveStrategies = 1
+		}
+
+		pnl := a.trader.Strategy.GetPNL()
+		if pnl != nil {
+			overview.TotalRealizedPnL = pnl.RealizedPnL
+			overview.TotalUnrealizedPnL = pnl.UnrealizedPnL
+			overview.TotalPnL = pnl.RealizedPnL + pnl.UnrealizedPnL
+		}
+
+		overview.Strategies = append(overview.Strategies, StrategyOverviewItem{
+			ID:            a.trader.Config.System.StrategyID,
+			Type:          a.trader.Config.Strategy.Type,
+			Symbols:       a.trader.Config.Strategy.Symbols,
+			Running:       isRunning,
+			Active:        isActive,
+			ConditionsMet: conditionsMet,
+			Eligible:      eligible,
+			Allocation:    1.0,
+			RealizedPnL:   overview.TotalRealizedPnL,
+			UnrealizedPnL: overview.TotalUnrealizedPnL,
+		})
+	}
+
+	a.sendSuccess(w, "Dashboard overview retrieved", overview)
+}
+
+// StrategyListResponse represents the strategies list response
+type StrategyListResponse struct {
+	MultiStrategy bool                    `json:"multi_strategy"`
+	Count         int                     `json:"count"`
+	Strategies    []StrategyDetailItem    `json:"strategies"`
+}
+
+// StrategyDetailItem represents detailed strategy information
+type StrategyDetailItem struct {
+	ID             string                 `json:"id"`
+	Type           string                 `json:"type"`
+	Symbols        []string               `json:"symbols"`
+	Running        bool                   `json:"running"`
+	Active         bool                   `json:"active"`
+	ConditionsMet  bool                   `json:"conditions_met"`
+	Eligible       bool                   `json:"eligible"`
+	EligibleReason string                 `json:"eligible_reason"`
+	SignalStrength float64                `json:"signal_strength"`
+	Allocation     float64                `json:"allocation"`
+	Indicators     map[string]float64     `json:"indicators"`
+	Position       interface{}            `json:"position"`
+	PNL            interface{}            `json:"pnl"`
+}
+
+// handleStrategies handles GET /api/v1/strategies
+// 返回所有策略列表
+func (a *APIServer) handleStrategies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	response := &StrategyListResponse{
+		MultiStrategy: a.trader.IsMultiStrategy(),
+		Strategies:    make([]StrategyDetailItem, 0),
+	}
+
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		status := mgr.GetStatus()
+
+		response.Count = status.TotalStrategies
+
+		for id, info := range status.StrategyStatuses {
+			item := StrategyDetailItem{
+				ID:            id,
+				Type:          info.Type,
+				Symbols:       info.Symbols,
+				Running:       info.Running,
+				Active:        info.Active,
+				ConditionsMet: info.ConditionsMet,
+				Eligible:      info.Eligible,
+				Allocation:    info.Allocation,
+				Indicators:    info.Indicators,
+				Position:      info.Position,
+				PNL:           info.PNL,
+			}
+			response.Strategies = append(response.Strategies, item)
+		}
+	} else {
+		// Single-strategy mode
+		response.Count = 1
+
+		baseStrat := a.getBaseStrategy()
+		item := StrategyDetailItem{
+			ID:       a.trader.Config.System.StrategyID,
+			Type:     a.trader.Config.Strategy.Type,
+			Symbols:  a.trader.Config.Strategy.Symbols,
+			Running:  a.trader.Strategy.IsRunning(),
+			Position: a.trader.Strategy.GetPosition(),
+			PNL:      a.trader.Strategy.GetPNL(),
+			Allocation: 1.0,
+		}
+
+		if baseStrat != nil {
+			item.Active = baseStrat.ControlState.IsActive()
+			item.ConditionsMet = baseStrat.ControlState.ConditionsMet
+			item.Eligible = baseStrat.ControlState.Eligible
+			item.EligibleReason = baseStrat.ControlState.EligibleReason
+			item.SignalStrength = baseStrat.ControlState.SignalStrength
+			item.Indicators = baseStrat.ControlState.Indicators
+		}
+
+		response.Strategies = append(response.Strategies, item)
+	}
+
+	a.sendSuccess(w, "Strategies list retrieved", response)
+}
+
+// handleStrategyByID handles requests to /api/v1/strategies/{id}
+// Supports:
+//   - GET /api/v1/strategies/{id} - Get strategy details
+//   - POST /api/v1/strategies/{id}/activate - Activate strategy
+//   - POST /api/v1/strategies/{id}/deactivate - Deactivate strategy
+func (a *APIServer) handleStrategyByID(w http.ResponseWriter, r *http.Request) {
+	// Parse strategy ID and action from URL path
+	// Expected paths:
+	//   /api/v1/strategies/{id}
+	//   /api/v1/strategies/{id}/activate
+	//   /api/v1/strategies/{id}/deactivate
+	path := r.URL.Path
+	prefix := "/api/v1/strategies/"
+	if len(path) <= len(prefix) {
+		a.sendError(w, http.StatusBadRequest, "Strategy ID required")
+		return
+	}
+
+	// Extract ID and action
+	remainder := path[len(prefix):]
+	var strategyID, action string
+
+	// Check for action suffix
+	if idx := strings.LastIndex(remainder, "/"); idx != -1 {
+		strategyID = remainder[:idx]
+		action = remainder[idx+1:]
+	} else {
+		strategyID = remainder
+		action = ""
+	}
+
+	// Route based on method and action
+	switch {
+	case r.Method == http.MethodGet && action == "":
+		a.handleGetStrategy(w, r, strategyID)
+	case r.Method == http.MethodPost && action == "activate":
+		a.handleActivateStrategy(w, r, strategyID)
+	case r.Method == http.MethodPost && action == "deactivate":
+		a.handleDeactivateStrategy(w, r, strategyID)
+	default:
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed or invalid action")
+	}
+}
+
+// handleGetStrategy handles GET /api/v1/strategies/{id}
+func (a *APIServer) handleGetStrategy(w http.ResponseWriter, r *http.Request, strategyID string) {
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		info, err := mgr.GetStrategyStatus(strategyID)
+		if err != nil {
+			a.sendError(w, http.StatusNotFound, fmt.Sprintf("Strategy not found: %s", strategyID))
+			return
+		}
+
+		item := StrategyDetailItem{
+			ID:            info.ID,
+			Type:          info.Type,
+			Symbols:       info.Symbols,
+			Running:       info.Running,
+			Active:        info.Active,
+			ConditionsMet: info.ConditionsMet,
+			Eligible:      info.Eligible,
+			Allocation:    info.Allocation,
+			Indicators:    info.Indicators,
+			Position:      info.Position,
+			PNL:           info.PNL,
+		}
+		a.sendSuccess(w, "Strategy details retrieved", item)
+	} else {
+		// Single-strategy mode - check if ID matches
+		if strategyID != a.trader.Config.System.StrategyID {
+			a.sendError(w, http.StatusNotFound, fmt.Sprintf("Strategy not found: %s", strategyID))
+			return
+		}
+
+		baseStrat := a.getBaseStrategy()
+		item := StrategyDetailItem{
+			ID:         a.trader.Config.System.StrategyID,
+			Type:       a.trader.Config.Strategy.Type,
+			Symbols:    a.trader.Config.Strategy.Symbols,
+			Running:    a.trader.Strategy.IsRunning(),
+			Position:   a.trader.Strategy.GetPosition(),
+			PNL:        a.trader.Strategy.GetPNL(),
+			Allocation: 1.0,
+		}
+
+		if baseStrat != nil {
+			item.Active = baseStrat.ControlState.IsActive()
+			item.ConditionsMet = baseStrat.ControlState.ConditionsMet
+			item.Eligible = baseStrat.ControlState.Eligible
+			item.EligibleReason = baseStrat.ControlState.EligibleReason
+			item.SignalStrength = baseStrat.ControlState.SignalStrength
+			item.Indicators = baseStrat.ControlState.Indicators
+		}
+
+		a.sendSuccess(w, "Strategy details retrieved", item)
+	}
+}
+
+// handleActivateStrategy handles POST /api/v1/strategies/{id}/activate
+func (a *APIServer) handleActivateStrategy(w http.ResponseWriter, r *http.Request, strategyID string) {
+	a.commandMu.Lock()
+	defer a.commandMu.Unlock()
+
+	log.Printf("[API] Activating strategy: %s", strategyID)
+
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		if err := mgr.ActivateStrategy(strategyID); err != nil {
+			a.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to activate strategy: %v", err))
+			return
+		}
+
+		log.Printf("[API] ✓ Strategy %s activated", strategyID)
+		a.sendSuccess(w, "Strategy activated successfully", map[string]interface{}{
+			"strategy_id": strategyID,
+			"active":      true,
+		})
+	} else {
+		// Single-strategy mode - check if ID matches
+		if strategyID != a.trader.Config.System.StrategyID {
+			a.sendError(w, http.StatusNotFound, fmt.Sprintf("Strategy not found: %s", strategyID))
+			return
+		}
+
+		// Use existing activate logic
+		baseStrat := a.getBaseStrategy()
+		if baseStrat == nil {
+			a.sendError(w, http.StatusInternalServerError, "Failed to access strategy control state")
+			return
+		}
+
+		baseStrat.ControlState.ExitRequested = false
+		baseStrat.ControlState.CancelPending = false
+		baseStrat.ControlState.FlattenMode = false
+		if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
+			baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
+			baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
+		}
+		baseStrat.ControlState.Activate()
+
+		if !a.trader.Strategy.IsRunning() {
+			if err := a.trader.Strategy.Start(); err != nil {
+				a.sendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to start strategy: %v", err))
+				return
+			}
+		}
+
+		log.Printf("[API] ✓ Strategy %s activated", strategyID)
+		a.sendSuccess(w, "Strategy activated successfully", map[string]interface{}{
+			"strategy_id": strategyID,
+			"active":      true,
+		})
+	}
+}
+
+// handleDeactivateStrategy handles POST /api/v1/strategies/{id}/deactivate
+func (a *APIServer) handleDeactivateStrategy(w http.ResponseWriter, r *http.Request, strategyID string) {
+	a.commandMu.Lock()
+	defer a.commandMu.Unlock()
+
+	log.Printf("[API] Deactivating strategy: %s", strategyID)
+
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		if err := mgr.DeactivateStrategy(strategyID); err != nil {
+			a.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to deactivate strategy: %v", err))
+			return
+		}
+
+		log.Printf("[API] ✓ Strategy %s deactivated", strategyID)
+		a.sendSuccess(w, "Strategy deactivated successfully", map[string]interface{}{
+			"strategy_id": strategyID,
+			"active":      false,
+		})
+	} else {
+		// Single-strategy mode - check if ID matches
+		if strategyID != a.trader.Config.System.StrategyID {
+			a.sendError(w, http.StatusNotFound, fmt.Sprintf("Strategy not found: %s", strategyID))
+			return
+		}
+
+		baseStrat := a.getBaseStrategy()
+		if baseStrat == nil {
+			a.sendError(w, http.StatusInternalServerError, "Failed to access strategy control state")
+			return
+		}
+
+		baseStrat.TriggerFlatten(strategy.FlattenReasonManual, false)
+		baseStrat.ControlState.Deactivate()
+
+		log.Printf("[API] ✓ Strategy %s deactivated", strategyID)
+		a.sendSuccess(w, "Strategy deactivated successfully", map[string]interface{}{
+			"strategy_id": strategyID,
+			"active":      false,
+		})
+	}
+}
+
+// RealtimeIndicatorsResponse represents realtime indicators response
+type RealtimeIndicatorsResponse struct {
+	Timestamp  string                          `json:"timestamp"`
+	Strategies map[string]StrategyIndicators   `json:"strategies"`
+}
+
+// StrategyIndicators represents indicators for a single strategy
+type StrategyIndicators struct {
+	StrategyID    string             `json:"strategy_id"`
+	StrategyType  string             `json:"strategy_type"`
+	Symbols       []string           `json:"symbols"`
+	Active        bool               `json:"active"`
+	ConditionsMet bool               `json:"conditions_met"`
+	Eligible      bool               `json:"eligible"`
+	SignalStrength float64           `json:"signal_strength"`
+	Indicators    map[string]float64 `json:"indicators"`
+	MarketData    map[string]MarketDataSnapshot `json:"market_data"`
+}
+
+// MarketDataSnapshot represents a snapshot of market data for a symbol
+type MarketDataSnapshot struct {
+	Symbol    string  `json:"symbol"`
+	BidPrice  float64 `json:"bid_price"`
+	AskPrice  float64 `json:"ask_price"`
+	LastPrice float64 `json:"last_price"`
+	Spread    float64 `json:"spread"`
+}
+
+// handleRealtimeIndicators handles GET /api/v1/indicators/realtime
+// 返回所有策略的实时指标数据
+func (a *APIServer) handleRealtimeIndicators(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	response := &RealtimeIndicatorsResponse{
+		Timestamp:  time.Now().Format(time.RFC3339),
+		Strategies: make(map[string]StrategyIndicators),
+	}
+
+	if a.trader.IsMultiStrategy() && a.trader.GetStrategyManager() != nil {
+		// Multi-strategy mode
+		mgr := a.trader.GetStrategyManager()
+		mgr.ForEach(func(id string, strat strategy.Strategy) {
+			indicators := StrategyIndicators{
+				StrategyID:   id,
+				StrategyType: strat.GetType(),
+				Indicators:   make(map[string]float64),
+				MarketData:   make(map[string]MarketDataSnapshot),
+			}
+
+			// Get config for symbols
+			if cfg, ok := mgr.GetConfig(id); ok {
+				indicators.Symbols = cfg.Symbols
+			}
+
+			// Get control state info
+			if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
+				baseStrat := accessor.GetBaseStrategy()
+				if baseStrat != nil {
+					indicators.Active = baseStrat.ControlState.IsActive()
+					indicators.ConditionsMet = baseStrat.ControlState.ConditionsMet
+					indicators.Eligible = baseStrat.ControlState.Eligible
+					indicators.SignalStrength = baseStrat.ControlState.SignalStrength
+					indicators.Indicators = baseStrat.ControlState.Indicators
+				}
+			}
+
+			response.Strategies[id] = indicators
+		})
+	} else {
+		// Single-strategy mode
+		strategyID := a.trader.Config.System.StrategyID
+		indicators := StrategyIndicators{
+			StrategyID:   strategyID,
+			StrategyType: a.trader.Config.Strategy.Type,
+			Symbols:      a.trader.Config.Strategy.Symbols,
+			Indicators:   make(map[string]float64),
+			MarketData:   make(map[string]MarketDataSnapshot),
+		}
+
+		baseStrat := a.getBaseStrategy()
+		if baseStrat != nil {
+			indicators.Active = baseStrat.ControlState.IsActive()
+			indicators.ConditionsMet = baseStrat.ControlState.ConditionsMet
+			indicators.Eligible = baseStrat.ControlState.Eligible
+			indicators.SignalStrength = baseStrat.ControlState.SignalStrength
+			indicators.Indicators = baseStrat.ControlState.Indicators
+		}
+
+		response.Strategies[strategyID] = indicators
+	}
+
+	a.sendSuccess(w, "Realtime indicators retrieved", response)
 }

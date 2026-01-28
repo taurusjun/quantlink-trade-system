@@ -24,7 +24,8 @@ type Trader struct {
 
 	// Core components
 	Engine      *strategy.StrategyEngine
-	Strategy    strategy.Strategy
+	Strategy    strategy.Strategy              // 单策略模式（向后兼容）或第一个策略
+	StrategyMgr *strategy.StrategyManager      // 多策略管理器（新增）
 	Portfolio   *portfolio.PortfolioManager
 	RiskManager *risk.RiskManager
 	SessionMgr  *SessionManager
@@ -59,8 +60,13 @@ func NewTrader(cfg *config.TraderConfig) (*Trader, error) {
 
 // Initialize initializes all components
 func (t *Trader) Initialize() error {
-	log.Printf("[Trader] Initializing trader (Strategy ID: %s, Mode: %s)...",
-		t.Config.System.StrategyID, t.Config.System.Mode)
+	if t.Config.System.MultiStrategy {
+		log.Printf("[Trader] Initializing trader (Multi-Strategy Mode, Mode: %s)...",
+			t.Config.System.Mode)
+	} else {
+		log.Printf("[Trader] Initializing trader (Strategy ID: %s, Mode: %s)...",
+			t.Config.System.StrategyID, t.Config.System.Mode)
+	}
 
 	log.Println("[Trader] DEBUG: Starting Initialize()")
 
@@ -141,49 +147,17 @@ func (t *Trader) Initialize() error {
 		log.Println("[Trader] ✓ Strategy Engine initialized")
 	}
 
-	// 4. Create strategy instance
-	log.Printf("[Trader] Creating %s strategy...", t.Config.Strategy.Type)
-	var err error
-	t.Strategy, err = t.createStrategy()
-	if err != nil {
-		return fmt.Errorf("failed to create strategy: %w", err)
-	}
-
-	// Initialize strategy
-	if err := t.Strategy.Initialize(t.toStrategyConfig()); err != nil {
-		return fmt.Errorf("failed to initialize strategy: %w", err)
-	}
-	log.Println("[Trader] ✓ Strategy initialized")
-
-	// Set initial activation state based on config (对应 tbsrc 行为)
-	baseStrat := t.getBaseStrategy()
-	if baseStrat != nil {
-		if t.Config.Session.AutoActivate {
-			// 自动激活：ControlState 设为激活
-			baseStrat.ControlState.Activate()
-			log.Printf("[Trader] Initial state: Activated (auto_activate=true, mode=%s)", t.Config.System.Mode)
-		} else {
-			// 等待手动激活：ControlState 设为未激活
-			baseStrat.ControlState.Deactivate()
-			log.Printf("[Trader] Initial state: NOT activated (auto_activate=false, mode=%s)", t.Config.System.Mode)
+	// 4. Create strategy instance(s)
+	if t.Config.System.MultiStrategy {
+		// 多策略模式：使用 StrategyManager
+		if err := t.initializeMultiStrategy(); err != nil {
+			return fmt.Errorf("failed to initialize multi-strategy: %w", err)
 		}
-	}
-
-	// Add strategy to engine
-	if err := t.Engine.AddStrategy(t.Strategy); err != nil {
-		return fmt.Errorf("failed to add strategy to engine: %w", err)
-	}
-
-	// Add strategy to portfolio (if portfolio manager exists)
-	if t.Portfolio != nil {
-		allocation := 1.0 // default 100% for single strategy
-		if alloc, ok := t.Config.Portfolio.StrategyAllocation[t.Config.System.StrategyID]; ok {
-			allocation = alloc
+	} else {
+		// 单策略模式（向后兼容）
+		if err := t.initializeSingleStrategy(); err != nil {
+			return fmt.Errorf("failed to initialize single strategy: %w", err)
 		}
-		if err := t.Portfolio.AddStrategy(t.Strategy, allocation); err != nil {
-			return fmt.Errorf("failed to add strategy to portfolio: %w", err)
-		}
-		log.Printf("[Trader] ✓ Strategy added to portfolio (allocation: %.2f%%)", allocation*100)
 	}
 
 	// 5. Create Session Manager
@@ -333,7 +307,8 @@ func (t *Trader) Start() error {
 
 		// Subscribe to market data for all configured symbols
 		log.Println("[Trader] Subscribing to market data...")
-		for _, symbol := range t.Config.Strategy.Symbols {
+		symbols := t.getAllSymbols()
+		for _, symbol := range symbols {
 			if err := t.Engine.SubscribeMarketData(symbol); err != nil {
 				log.Printf("[Trader] Warning: Failed to subscribe to %s: %v", symbol, err)
 			} else {
@@ -353,15 +328,25 @@ func (t *Trader) Start() error {
 		log.Println("[Trader] Waiting for manual activation...")
 		log.Println("[Trader] Activate via:")
 		log.Println("[Trader]   - Web UI: POST /api/v1/strategy/activate")
+		log.Println("[Trader]   - Web UI: POST /api/v1/strategies/{id}/activate (multi-strategy)")
 		log.Printf("[Trader]   - Signal: kill -SIGUSR1 %d\n", os.Getpid())
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
 	}
 
 	if autoActivate {
-		if err := t.Strategy.Start(); err != nil {
-			return fmt.Errorf("failed to start strategy: %w", err)
+		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+			// Multi-strategy mode: start all strategies
+			if err := t.StrategyMgr.Start(); err != nil {
+				return fmt.Errorf("failed to start strategies: %w", err)
+			}
+			log.Printf("[Trader] ✓ %d strategies activated and trading", t.StrategyMgr.GetStrategyCount())
+		} else {
+			// Single-strategy mode
+			if err := t.Strategy.Start(); err != nil {
+				return fmt.Errorf("failed to start strategy: %w", err)
+			}
+			log.Println("[Trader] ✓ Strategy activated and trading")
 		}
-		log.Println("[Trader] ✓ Strategy activated and trading")
 	}
 
 	// Start API server (if enabled)
@@ -391,9 +376,19 @@ func (t *Trader) Start() error {
 
 	log.Println("[Trader] ✓ Trader started successfully")
 	log.Println("[Trader] ════════════════════════════════════════════════════════════")
-	log.Printf("[Trader] Strategy: %s (%s)", t.Config.System.StrategyID, t.Config.Strategy.Type)
-	log.Printf("[Trader] Mode: %s", t.Config.System.Mode)
-	log.Printf("[Trader] Symbols: %v", t.Config.Strategy.Symbols)
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		log.Printf("[Trader] Mode: %s (Multi-Strategy)", t.Config.System.Mode)
+		log.Printf("[Trader] Strategies: %d active", t.StrategyMgr.GetStrategyCount())
+		for _, id := range t.StrategyMgr.GetStrategyIDs() {
+			if cfg, ok := t.StrategyMgr.GetConfig(id); ok {
+				log.Printf("[Trader]   - %s (%s): %v", id, cfg.Type, cfg.Symbols)
+			}
+		}
+	} else {
+		log.Printf("[Trader] Strategy: %s (%s)", t.Config.System.StrategyID, t.Config.Strategy.Type)
+		log.Printf("[Trader] Mode: %s", t.Config.System.Mode)
+		log.Printf("[Trader] Symbols: %v", t.Config.Strategy.Symbols)
+	}
 	log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
 	return nil
@@ -429,8 +424,16 @@ func (t *Trader) Stop() error {
 		}
 	}
 
-	// Stop strategy
-	if t.Strategy != nil {
+	// Stop strategies
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		// Multi-strategy mode
+		if err := t.StrategyMgr.Stop(); err != nil {
+			log.Printf("[Trader] Error stopping strategies: %v", err)
+		} else {
+			log.Println("[Trader] ✓ All strategies stopped")
+		}
+	} else if t.Strategy != nil {
+		// Single-strategy mode
 		if err := t.Strategy.Stop(); err != nil {
 			log.Printf("[Trader] Error stopping strategy: %v", err)
 		} else {
@@ -478,15 +481,36 @@ func (t *Trader) IsRunning() bool {
 
 // GetStatus returns the trader status
 func (t *Trader) GetStatus() map[string]interface{} {
-	return map[string]interface{}{
-		"running":     t.IsRunning(),
-		"strategy_id": t.Config.System.StrategyID,
-		"mode":        t.Config.System.Mode,
-		"strategy":    t.Strategy.GetStatus(),
-		"position":    t.Strategy.GetPosition(),
-		"pnl":         t.Strategy.GetPNL(),
-		"risk":        t.Strategy.GetRiskMetrics(),
+	status := map[string]interface{}{
+		"running":        t.IsRunning(),
+		"mode":           t.Config.System.Mode,
+		"multi_strategy": t.Config.System.MultiStrategy,
 	}
+
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		// Multi-strategy mode
+		status["strategy_count"] = t.StrategyMgr.GetStrategyCount()
+		status["manager_status"] = t.StrategyMgr.GetStatus()
+		status["aggregated_pnl"] = t.StrategyMgr.GetAggregatedPNL()
+
+		// For backward compatibility, also include first strategy info
+		if t.Strategy != nil {
+			status["strategy_id"] = t.Strategy.GetID()
+			status["strategy"] = t.Strategy.GetStatus()
+			status["position"] = t.Strategy.GetPosition()
+			status["pnl"] = t.Strategy.GetPNL()
+			status["risk"] = t.Strategy.GetRiskMetrics()
+		}
+	} else {
+		// Single-strategy mode
+		status["strategy_id"] = t.Config.System.StrategyID
+		status["strategy"] = t.Strategy.GetStatus()
+		status["position"] = t.Strategy.GetPosition()
+		status["pnl"] = t.Strategy.GetPNL()
+		status["risk"] = t.Strategy.GetRiskMetrics()
+	}
+
+	return status
 }
 
 // createStrategy creates a strategy instance based on type
@@ -533,6 +557,127 @@ func (t *Trader) toStrategyConfig() *strategy.StrategyConfig {
 	}
 }
 
+// initializeSingleStrategy initializes in single-strategy mode (backward compatible)
+func (t *Trader) initializeSingleStrategy() error {
+	log.Printf("[Trader] Creating %s strategy...", t.Config.Strategy.Type)
+
+	var err error
+	t.Strategy, err = t.createStrategy()
+	if err != nil {
+		return fmt.Errorf("failed to create strategy: %w", err)
+	}
+
+	// Initialize strategy
+	if err := t.Strategy.Initialize(t.toStrategyConfig()); err != nil {
+		return fmt.Errorf("failed to initialize strategy: %w", err)
+	}
+	log.Println("[Trader] ✓ Strategy initialized")
+
+	// Set initial activation state based on config
+	t.setInitialActivationState(t.Strategy)
+
+	// Add strategy to engine
+	if err := t.Engine.AddStrategy(t.Strategy); err != nil {
+		return fmt.Errorf("failed to add strategy to engine: %w", err)
+	}
+
+	// Add strategy to portfolio (if portfolio manager exists)
+	if t.Portfolio != nil {
+		allocation := 1.0 // default 100% for single strategy
+		if alloc, ok := t.Config.Portfolio.StrategyAllocation[t.Config.System.StrategyID]; ok {
+			allocation = alloc
+		}
+		if err := t.Portfolio.AddStrategy(t.Strategy, allocation); err != nil {
+			return fmt.Errorf("failed to add strategy to portfolio: %w", err)
+		}
+		log.Printf("[Trader] ✓ Strategy added to portfolio (allocation: %.2f%%)", allocation*100)
+	}
+
+	return nil
+}
+
+// initializeMultiStrategy initializes in multi-strategy mode
+func (t *Trader) initializeMultiStrategy() error {
+	log.Printf("[Trader] Creating StrategyManager for %d strategies...",
+		len(t.Config.GetEnabledStrategies()))
+
+	// Create StrategyManager
+	t.StrategyMgr = strategy.NewStrategyManager(t.Engine)
+
+	// Load strategies from config
+	strategyConfigs := t.Config.GetEnabledStrategies()
+	if err := t.StrategyMgr.LoadStrategies(strategyConfigs); err != nil {
+		return fmt.Errorf("failed to load strategies: %w", err)
+	}
+
+	// Set t.Strategy to first strategy for backward compatibility
+	t.Strategy = t.StrategyMgr.GetFirstStrategy()
+	if t.Strategy == nil {
+		return fmt.Errorf("no strategies loaded")
+	}
+
+	// Set initial activation state for all strategies
+	t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
+		t.setInitialActivationState(strat)
+	})
+
+	// Add strategies to portfolio (if portfolio manager exists)
+	if t.Portfolio != nil {
+		t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
+			allocation := t.StrategyMgr.GetAllocations()[id]
+			if allocation == 0 {
+				allocation = 1.0 / float64(t.StrategyMgr.GetStrategyCount())
+			}
+			if err := t.Portfolio.AddStrategy(strat, allocation); err != nil {
+				log.Printf("[Trader] Warning: Failed to add strategy %s to portfolio: %v", id, err)
+			}
+		})
+		log.Printf("[Trader] ✓ %d strategies added to portfolio", t.StrategyMgr.GetStrategyCount())
+	}
+
+	log.Printf("[Trader] ✓ StrategyManager initialized with %d strategies", t.StrategyMgr.GetStrategyCount())
+	return nil
+}
+
+// setInitialActivationState sets initial activation state based on config
+func (t *Trader) setInitialActivationState(strat strategy.Strategy) {
+	if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
+		baseStrat := accessor.GetBaseStrategy()
+		if baseStrat != nil {
+			if t.Config.Session.AutoActivate {
+				baseStrat.ControlState.Activate()
+				log.Printf("[Trader] Strategy %s: Activated (auto_activate=true)", strat.GetID())
+			} else {
+				baseStrat.ControlState.Deactivate()
+				log.Printf("[Trader] Strategy %s: NOT activated (auto_activate=false)", strat.GetID())
+			}
+		}
+	}
+}
+
+// getAllSymbols returns all unique symbols across all strategies
+func (t *Trader) getAllSymbols() []string {
+	symbolSet := make(map[string]bool)
+
+	if t.Config.System.MultiStrategy {
+		for _, cfg := range t.Config.GetEnabledStrategies() {
+			for _, symbol := range cfg.Symbols {
+				symbolSet[symbol] = true
+			}
+		}
+	} else {
+		for _, symbol := range t.Config.Strategy.Symbols {
+			symbolSet[symbol] = true
+		}
+	}
+
+	symbols := make([]string, 0, len(symbolSet))
+	for symbol := range symbolSet {
+		symbols = append(symbols, symbol)
+	}
+	return symbols
+}
+
 // runSessionManager monitors trading sessions
 func (t *Trader) runSessionManager() {
 	ticker := time.NewTicker(1 * time.Second)
@@ -542,21 +687,42 @@ func (t *Trader) runSessionManager() {
 		<-ticker.C
 
 		inSession := t.SessionMgr.IsInSession()
-		strategyRunning := t.Strategy.IsRunning()
 
-		// Auto-start strategy when session begins
-		if inSession && !strategyRunning && t.Config.Session.AutoStart {
-			log.Println("[Trader] Trading session started - starting strategy")
-			if err := t.Strategy.Start(); err != nil {
-				log.Printf("[Trader] Error starting strategy: %v", err)
+		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+			// Multi-strategy mode
+			t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
+				strategyRunning := strat.IsRunning()
+
+				if inSession && !strategyRunning && t.Config.Session.AutoStart {
+					log.Printf("[Trader] Trading session started - starting strategy %s", id)
+					if err := strat.Start(); err != nil {
+						log.Printf("[Trader] Error starting strategy %s: %v", id, err)
+					}
+				}
+
+				if !inSession && strategyRunning && t.Config.Session.AutoStop {
+					log.Printf("[Trader] Trading session ended - stopping strategy %s", id)
+					if err := strat.Stop(); err != nil {
+						log.Printf("[Trader] Error stopping strategy %s: %v", id, err)
+					}
+				}
+			})
+		} else {
+			// Single-strategy mode
+			strategyRunning := t.Strategy.IsRunning()
+
+			if inSession && !strategyRunning && t.Config.Session.AutoStart {
+				log.Println("[Trader] Trading session started - starting strategy")
+				if err := t.Strategy.Start(); err != nil {
+					log.Printf("[Trader] Error starting strategy: %v", err)
+				}
 			}
-		}
 
-		// Auto-stop strategy when session ends
-		if !inSession && strategyRunning && t.Config.Session.AutoStop {
-			log.Println("[Trader] Trading session ended - stopping strategy")
-			if err := t.Strategy.Stop(); err != nil {
-				log.Printf("[Trader] Error stopping strategy: %v", err)
+			if !inSession && strategyRunning && t.Config.Session.AutoStop {
+				log.Println("[Trader] Trading session ended - stopping strategy")
+				if err := t.Strategy.Stop(); err != nil {
+					log.Printf("[Trader] Error stopping strategy: %v", err)
+				}
 			}
 		}
 	}
@@ -570,35 +736,47 @@ func (t *Trader) runRiskMonitoring() {
 	for t.IsRunning() {
 		<-ticker.C
 
-		if !t.Strategy.IsRunning() {
-			continue
+		var strategies map[string]strategy.Strategy
+
+		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+			// Multi-strategy mode: get all strategies
+			strategies = t.StrategyMgr.GetAllStrategies()
+		} else {
+			// Single-strategy mode
+			if !t.Strategy.IsRunning() {
+				continue
+			}
+			strategies = map[string]strategy.Strategy{
+				t.Config.System.StrategyID: t.Strategy,
+			}
 		}
 
-		// Check strategy risk
-		strategyAlerts := t.RiskManager.CheckStrategy(t.Strategy)
-		for _, alert := range strategyAlerts {
-			t.RiskManager.AddAlert(&alert)
+		// Check each strategy's risk
+		for id, strat := range strategies {
+			if !strat.IsRunning() {
+				continue
+			}
 
-			// Take action based on alert
-			if alert.Action == "stop" {
-				log.Printf("[Trader] RISK ALERT: Stopping strategy due to %s", alert.Message)
-				if err := t.Strategy.Stop(); err != nil {
-					log.Printf("[Trader] Error stopping strategy: %v", err)
+			strategyAlerts := t.RiskManager.CheckStrategy(strat)
+			for _, alert := range strategyAlerts {
+				t.RiskManager.AddAlert(&alert)
+
+				if alert.Action == "stop" {
+					log.Printf("[Trader] RISK ALERT: Stopping strategy %s due to %s", id, alert.Message)
+					if err := strat.Stop(); err != nil {
+						log.Printf("[Trader] Error stopping strategy %s: %v", id, err)
+					}
 				}
 			}
 		}
 
 		// Check global limits
-		strategies := map[string]strategy.Strategy{
-			t.Config.System.StrategyID: t.Strategy,
-		}
 		globalAlerts := t.RiskManager.CheckGlobal(strategies)
 		for _, alert := range globalAlerts {
 			t.RiskManager.AddAlert(&alert)
 
 			if alert.Action == "emergency_stop" && !t.RiskManager.IsEmergencyStop() {
 				log.Println("[Trader] EMERGENCY STOP triggered by global risk limits!")
-				// Stop all strategies
 				if err := t.Stop(); err != nil {
 					log.Printf("[Trader] Error during emergency stop: %v", err)
 				}
@@ -631,60 +809,73 @@ func (t *Trader) handleControlSignals() {
 		switch sig {
 		case syscall.SIGUSR1:
 			// Activate strategy (对应 tbsrc SIGUSR1)
-			// tbsrc: Strategy->m_Active = true
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
-			log.Println("[Trader] Received SIGUSR1: Activating strategy")
+			log.Println("[Trader] Received SIGUSR1: Activating all strategies")
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
-			// Get BaseStrategy through type assertion
-			baseStrat := t.getBaseStrategy()
-			if baseStrat == nil {
-				log.Println("[Trader] Error: Failed to access strategy control state")
-				continue
-			}
-
-			// Reset control state (对应 tbsrc)
-			baseStrat.ControlState.ExitRequested = false
-			baseStrat.ControlState.CancelPending = false
-			baseStrat.ControlState.FlattenMode = false
-			// 重置 RunState 以便可以重新 Start
-			if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
-				baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
-				baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
-			}
-			baseStrat.ControlState.Activate()
-
-			// Start strategy if not running
-			if !t.Strategy.IsRunning() {
-				if err := t.Strategy.Start(); err != nil {
-					log.Printf("[Trader] Error starting strategy: %v", err)
+			if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+				// Multi-strategy mode: activate all
+				if err := t.StrategyMgr.ActivateAll(); err != nil {
+					log.Printf("[Trader] Error activating strategies: %v", err)
 				} else {
-					log.Println("[Trader] ✓ Strategy activated and trading")
+					log.Printf("[Trader] ✓ %d strategies activated", t.StrategyMgr.GetStrategyCount())
 				}
 			} else {
-				log.Println("[Trader] ✓ Strategy already running, re-activated")
+				// Single-strategy mode
+				baseStrat := t.getBaseStrategy()
+				if baseStrat == nil {
+					log.Println("[Trader] Error: Failed to access strategy control state")
+					continue
+				}
+
+				// Reset control state
+				baseStrat.ControlState.ExitRequested = false
+				baseStrat.ControlState.CancelPending = false
+				baseStrat.ControlState.FlattenMode = false
+				if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
+					baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
+					baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
+				}
+				baseStrat.ControlState.Activate()
+
+				if !t.Strategy.IsRunning() {
+					if err := t.Strategy.Start(); err != nil {
+						log.Printf("[Trader] Error starting strategy: %v", err)
+					} else {
+						log.Println("[Trader] ✓ Strategy activated and trading")
+					}
+				} else {
+					log.Println("[Trader] ✓ Strategy already running, re-activated")
+				}
 			}
 
 		case syscall.SIGUSR2:
 			// Deactivate strategy and squareoff (对应 tbsrc SIGTSTP)
-			// tbsrc: Strategy->m_onExit = true, m_onCancel = true, m_onFlat = true, m_Active = false
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
-			log.Println("[Trader] Received SIGUSR2: Deactivating strategy (squareoff)")
+			log.Println("[Trader] Received SIGUSR2: Deactivating all strategies (squareoff)")
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
-			// Get BaseStrategy through type assertion
-			baseStrat := t.getBaseStrategy()
-			if baseStrat == nil {
-				log.Println("[Trader] Error: Failed to access strategy control state")
-				continue
+			if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+				// Multi-strategy mode: deactivate all
+				if err := t.StrategyMgr.DeactivateAll(); err != nil {
+					log.Printf("[Trader] Error deactivating strategies: %v", err)
+				} else {
+					log.Printf("[Trader] ✓ %d strategies deactivated", t.StrategyMgr.GetStrategyCount())
+				}
+			} else {
+				// Single-strategy mode
+				baseStrat := t.getBaseStrategy()
+				if baseStrat == nil {
+					log.Println("[Trader] Error: Failed to access strategy control state")
+					continue
+				}
+
+				baseStrat.TriggerFlatten(strategy.FlattenReasonManual, false)
+				baseStrat.ControlState.Deactivate()
 			}
 
-			// Trigger flatten mode (对应 tbsrc HandleSquareoff)
-			baseStrat.TriggerFlatten(strategy.FlattenReasonManual, false)
-			baseStrat.ControlState.Deactivate()
-
-			log.Println("[Trader] ✓ Strategy deactivated, positions being closed")
-			log.Println("[Trader] Strategy will stop trading but process continues running")
+			log.Println("[Trader] ✓ Strategies deactivated, positions being closed")
+			log.Println("[Trader] Strategies will stop trading but process continues running")
 			log.Printf("[Trader] To re-activate: kill -SIGUSR1 %d\n", os.Getpid())
 		}
 	}
@@ -697,6 +888,16 @@ func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
 	}
 	log.Printf("[Trader] Error: Strategy does not implement BaseStrategyAccessor")
 	return nil
+}
+
+// GetStrategyManager returns the strategy manager (for API access)
+func (t *Trader) GetStrategyManager() *strategy.StrategyManager {
+	return t.StrategyMgr
+}
+
+// IsMultiStrategy returns whether running in multi-strategy mode
+func (t *Trader) IsMultiStrategy() bool {
+	return t.Config.System.MultiStrategy && t.StrategyMgr != nil
 }
 
 // onModelReload handles model hot reload callback

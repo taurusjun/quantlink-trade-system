@@ -1,6 +1,56 @@
 # QuantlinkTrader Web 控制台使用说明
 
-## 方案1 实现完成 ✅
+## 页面说明
+
+| 文件 | 用途 | 说明 |
+|------|------|------|
+| `control.html` | 单策略控制台 | 适用于单策略模式，简洁直观 |
+| `dashboard.html` | **多策略仪表板** | 适用于多策略模式，支持实时指标、条件高亮 |
+
+---
+
+## Dashboard (多策略仪表板) - 新增
+
+### 功能特性
+
+- **多策略总览** - 显示所有策略状态、PnL 汇总
+- **实时指标** - Z-Score、相关性等指标实时展示
+- **条件高亮** - 策略满足交易条件时闪烁提示
+- **持仓展示** - 实时持仓列表及盈亏
+- **一键激活/停止** - 每个策略独立控制
+- **自动刷新** - 5秒自动刷新数据
+
+### 打开方式
+
+```bash
+# macOS
+open web/dashboard.html
+
+# Linux
+xdg-open web/dashboard.html
+
+# 或直接双击文件
+```
+
+### API 端点依赖
+
+Dashboard 使用以下 API：
+- `GET /api/v1/dashboard/overview` - 总览数据
+- `GET /api/v1/strategies` - 策略列表
+- `GET /api/v1/indicators/realtime` - 实时指标
+- `GET /api/v1/positions` - 持仓数据
+- `POST /api/v1/strategies/{id}/activate` - 激活策略
+- `POST /api/v1/strategies/{id}/deactivate` - 停止策略
+
+### 技术栈
+
+- Vue.js 3 (CDN)
+- 纯前端，无需构建
+- 响应式布局
+
+---
+
+## Control (单策略控制台) - 原有
 
 ### 包含内容
 

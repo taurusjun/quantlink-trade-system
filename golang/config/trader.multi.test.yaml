@@ -1,0 +1,125 @@
+# QuantlinkTrader Multi-Strategy Test Configuration
+# 多策略测试配置 - 用于测试 StrategyManager 和 Dashboard
+# 使用方法: ./bin/trader -config config/trader.multi.test.yaml
+
+# ═══════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════
+system:
+  mode: "simulation"                    # 运行模式: live, backtest, simulation
+  # 注意：multi_strategy 会自动检测（如果有 strategies 数组则为多策略模式）
+
+# ═══════════════════════════════════════════════════════════
+# Multi-Strategy Configuration (多策略配置)
+# ═══════════════════════════════════════════════════════════
+strategies:
+  # 策略1：白银配对套利
+  - id: "ag_pairwise"
+    type: "pairwise_arb"
+    enabled: true
+    symbols:
+      - "ag2603"
+      - "ag2605"
+    exchanges:
+      - "SHFE"
+    allocation: 0.4                     # 40% 资金分配
+    max_position_size: 50
+    parameters:
+      spread_type: "difference"
+      lookback_period: 100.0
+      entry_zscore: 0.5                 # 测试阈值，便于触发
+      exit_zscore: 0.2
+      order_size: 5.0
+      min_correlation: 0.3
+
+  # 策略2：被动做市策略
+  - id: "cu_passive"
+    type: "passive"
+    enabled: true
+    symbols:
+      - "cu2603"
+    exchanges:
+      - "SHFE"
+    allocation: 0.3                     # 30% 资金分配
+    max_position_size: 20
+    parameters:
+      spread_multiplier: 0.5
+      order_size: 2.0
+
+  # 策略3：激进策略
+  - id: "al_aggressive"
+    type: "aggressive"
+    enabled: true
+    symbols:
+      - "al2603"
+    exchanges:
+      - "SHFE"
+    allocation: 0.3                     # 30% 资金分配
+    max_position_size: 30
+    parameters:
+      momentum_threshold: 0.1
+      order_size: 3.0
+
+# ═══════════════════════════════════════════════════════════
+# Trading Session Configuration
+# ═══════════════════════════════════════════════════════════
+session:
+  start_time: "00:00:00"                # 测试模式：全天运行
+  end_time: "23:59:59"
+  timezone: "Asia/Shanghai"
+  auto_start: true
+  auto_stop: false
+  auto_activate: false                  # 需要手动激活
+
+# ═══════════════════════════════════════════════════════════
+# Risk Management Configuration
+# ═══════════════════════════════════════════════════════════
+risk:
+  max_drawdown: 10000.0
+  stop_loss: 50000.0
+  max_loss: 100000.0
+  daily_loss_limit: 200000.0
+  max_reject_count: 10
+  check_interval_ms: 100
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Engine Configuration
+# ═══════════════════════════════════════════════════════════
+engine:
+  ors_gateway_addr: "localhost:50052"
+  nats_addr: "nats://localhost:4222"
+  order_queue_size: 100
+  timer_interval: 5s
+  max_concurrent_orders: 10
+
+# ═══════════════════════════════════════════════════════════
+# Portfolio Management Configuration
+# ═══════════════════════════════════════════════════════════
+portfolio:
+  total_capital: 1000000.0
+  rebalance_interval_sec: 3600
+  min_allocation: 0.05
+  max_allocation: 0.50
+  enable_auto_rebalance: false
+  enable_correlation_calc: false
+
+# ═══════════════════════════════════════════════════════════
+# API Configuration
+# ═══════════════════════════════════════════════════════════
+api:
+  enabled: true
+  port: 9301                            # 使用不同端口避免冲突
+  host: "localhost"
+
+# ═══════════════════════════════════════════════════════════
+# Logging Configuration
+# ═══════════════════════════════════════════════════════════
+logging:
+  level: "info"
+  file: "./log/trader.multi.test.log"
+  max_size_mb: 100
+  max_backups: 10
+  max_age_days: 30
+  compress: true
+  console: true
+  json_format: false
