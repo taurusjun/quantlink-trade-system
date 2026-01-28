@@ -260,6 +260,9 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 
 	// P1-2: Additional Technical Indicators (Batch 5 - Channels)
 	lib.RegisterFactory("donchian", NewDonchianChannelsFromConfig)
+	lib.RegisterFactory("keltner", NewKeltnerChannelsFromConfig)
+	lib.RegisterFactory("price_channel", NewPriceChannelFromConfig)
+	lib.RegisterFactory("envelopes", NewEnvelopesFromConfig)
 
 	return lib
 }
