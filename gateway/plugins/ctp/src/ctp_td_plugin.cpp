@@ -731,10 +731,14 @@ bool CTPTDPlugin::QueryPositions(std::vector<PositionInfo>& positions) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_query_mutex);
-    m_query_finished = false;
-    m_cached_positions.clear();
+    // 准备查询（需要锁保护）
+    {
+        std::lock_guard<std::mutex> lock(m_query_mutex);
+        m_query_finished = false;
+        m_cached_positions.clear();
+    }
 
+    // 发送查询请求
     CThostFtdcQryInvestorPositionField req = {};
     strncpy(req.BrokerID, m_config.broker_id.c_str(), sizeof(req.BrokerID) - 1);
     strncpy(req.InvestorID, m_config.investor_id.c_str(), sizeof(req.InvestorID) - 1);

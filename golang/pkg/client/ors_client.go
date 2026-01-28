@@ -2,8 +2,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -15,6 +18,19 @@ import (
 	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 )
 
+// PositionInfo 持仓信息
+type PositionInfo struct {
+	Symbol          string  `json:"symbol"`
+	Exchange        string  `json:"exchange"`
+	Direction       string  `json:"direction"` // "long" or "short"
+	Volume          int64   `json:"volume"`
+	TodayVolume     int64   `json:"today_volume"`
+	YesterdayVolume int64   `json:"yesterday_volume"`
+	AvgPrice        float64 `json:"avg_price"`
+	PositionProfit  float64 `json:"position_profit"`
+	Margin          float64 `json:"margin"`
+}
+
 // ORSClient ORS Gateway客户端
 type ORSClient struct {
 	// gRPC连接
@@ -25,31 +41,36 @@ type ORSClient struct {
 	natsConn *nats.Conn
 	natsSub  *nats.Subscription
 
+	// Counter Bridge地址（用于持仓查询）
+	counterBridgeAddr string
+
 	// 订单回调
 	onOrderUpdate func(*orspb.OrderUpdate)
 
 	// 状态
-	mu        sync.RWMutex
-	connected bool
+	mu         sync.RWMutex
+	connected  bool
 	strategyID string
 
 	// 统计
-	ordersSent    int64
+	ordersSent     int64
 	ordersAccepted int64
 	ordersRejected int64
 }
 
 // ORSClientConfig 客户端配置
 type ORSClientConfig struct {
-	GatewayAddr string // ORS Gateway地址 (例如: localhost:50052)
-	NATSAddr    string // NATS服务器地址 (例如: nats://localhost:4222)
-	StrategyID  string // 策略ID
+	GatewayAddr       string // ORS Gateway地址 (例如: localhost:50052)
+	NATSAddr          string // NATS服务器地址 (例如: nats://localhost:4222)
+	CounterBridgeAddr string // Counter Bridge地址 (例如: localhost:8080)
+	StrategyID        string // 策略ID
 }
 
 // NewORSClient 创建ORS客户端
 func NewORSClient(config ORSClientConfig) (*ORSClient, error) {
 	client := &ORSClient{
-		strategyID: config.StrategyID,
+		strategyID:        config.StrategyID,
+		counterBridgeAddr: config.CounterBridgeAddr,
 	}
 
 	// 1. 连接gRPC
@@ -275,4 +296,73 @@ func (c *ORSClient) SendOrderSync(symbol string, side orspb.OrderSide, price flo
 	}
 
 	return c.SendOrder(ctx, req)
+}
+
+// QueryPositions 查询持仓（从Counter Bridge）
+func (c *ORSClient) QueryPositions(ctx context.Context, symbol string, exchange string) (map[string][]PositionInfo, error) {
+	c.mu.RLock()
+	if !c.connected {
+		c.mu.RUnlock()
+		return nil, fmt.Errorf("client not connected")
+	}
+	bridgeAddr := c.counterBridgeAddr
+	c.mu.RUnlock()
+
+	// 如果没有配置Counter Bridge地址，返回错误
+	if bridgeAddr == "" {
+		return nil, fmt.Errorf("counter bridge address not configured")
+	}
+
+	// 构建URL
+	url := fmt.Sprintf("http://%s/positions", bridgeAddr)
+	if symbol != "" || exchange != "" {
+		url += "?"
+		if symbol != "" {
+			url += fmt.Sprintf("symbol=%s", symbol)
+		}
+		if exchange != "" {
+			if symbol != "" {
+				url += "&"
+			}
+			url += fmt.Sprintf("exchange=%s", exchange)
+		}
+	}
+
+	// 创建HTTP请求
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 发送请求
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query positions: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// 解析JSON响应
+	var result struct {
+		Success bool                          `json:"success"`
+		Data    map[string][]PositionInfo `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if !result.Success {
+		return nil, fmt.Errorf("position query failed")
+	}
+
+	log.Printf("[ORSClient] Queried %d exchanges with positions", len(result.Data))
+	return result.Data, nil
 }

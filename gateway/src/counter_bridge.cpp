@@ -15,10 +15,12 @@
 #include <map>
 #include <mutex>
 #include <vector>
+#include <sstream>
 
 #include "plugin/td_plugin_interface.h"
 #include "shm_queue.h"
 #include "ors_gateway.h"
+#include "../third_party/httplib.h"
 
 // CTP插件（如果启用）
 #if defined(ENABLE_CTP_PLUGIN)
@@ -174,6 +176,148 @@ ITDPlugin* GetBrokerForSymbol(const std::string& symbol) {
     }
 
     return nullptr;
+}
+
+// HTTP服务器 - 用于持仓查询
+std::unique_ptr<httplib::Server> g_http_server;
+std::thread g_http_thread;
+
+// JSON转义辅助函数
+std::string JsonEscape(const std::string& str) {
+    std::string escaped;
+    for (char c : str) {
+        switch (c) {
+            case '"':  escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b";  break;
+            case '\f': escaped += "\\f";  break;
+            case '\n': escaped += "\\n";  break;
+            case '\r': escaped += "\\r";  break;
+            case '\t': escaped += "\\t";  break;
+            default:   escaped += c;      break;
+        }
+    }
+    return escaped;
+}
+
+// 处理持仓查询请求
+void HandlePositionQuery(const httplib::Request& req, httplib::Response& res) {
+    std::cout << "[HTTP] Position query received" << std::endl;
+
+    // 从查询参数获取过滤条件（可选）
+    std::string symbol = req.has_param("symbol") ? req.get_param_value("symbol") : "";
+    std::string exchange = req.has_param("exchange") ? req.get_param_value("exchange") : "";
+
+    // 按交易所分组的持仓数据
+    std::map<std::string, std::vector<hft::plugin::PositionInfo>> positions_by_exchange;
+
+    // 遍历所有券商插件，查询持仓
+    for (auto& [broker_name, broker] : g_brokers) {
+        if (!broker || !broker->IsLoggedIn()) {
+            std::cout << "[HTTP] Skipping " << broker_name << " (not logged in)" << std::endl;
+            continue;
+        }
+
+        std::vector<hft::plugin::PositionInfo> positions;
+        if (broker->QueryPositions(positions)) {
+            std::cout << "[HTTP] " << broker_name << " returned " << positions.size() << " positions" << std::endl;
+
+            // 按交易所分组
+            for (const auto& pos : positions) {
+                std::string pos_exchange(pos.exchange);
+                std::string pos_symbol(pos.symbol);
+
+                // 应用过滤条件
+                if (!exchange.empty() && pos_exchange != exchange) continue;
+                if (!symbol.empty() && pos_symbol != symbol) continue;
+
+                positions_by_exchange[pos_exchange].push_back(pos);
+            }
+        } else {
+            std::cerr << "[HTTP] Failed to query positions from " << broker_name << std::endl;
+        }
+    }
+
+    // 构建JSON响应
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"success\": true,\n";
+    json << "  \"data\": {\n";
+
+    bool first_exchange = true;
+    for (const auto& [exch, positions] : positions_by_exchange) {
+        if (!first_exchange) json << ",\n";
+        first_exchange = false;
+
+        json << "    \"" << JsonEscape(exch) << "\": [\n";
+
+        bool first_pos = true;
+        for (const auto& pos : positions) {
+            if (!first_pos) json << ",\n";
+            first_pos = false;
+
+            std::string direction = (pos.direction == hft::plugin::OrderDirection::BUY) ? "long" : "short";
+
+            json << "      {\n";
+            json << "        \"symbol\": \"" << JsonEscape(pos.symbol) << "\",\n";
+            json << "        \"exchange\": \"" << JsonEscape(pos.exchange) << "\",\n";
+            json << "        \"direction\": \"" << direction << "\",\n";
+            json << "        \"volume\": " << pos.volume << ",\n";
+            json << "        \"today_volume\": " << pos.today_volume << ",\n";
+            json << "        \"yesterday_volume\": " << pos.yesterday_volume << ",\n";
+            json << "        \"avg_price\": " << pos.avg_price << ",\n";
+            json << "        \"position_profit\": " << pos.position_profit << ",\n";
+            json << "        \"margin\": " << pos.margin << "\n";
+            json << "      }";
+        }
+
+        json << "\n    ]";
+    }
+
+    json << "\n  }\n";
+    json << "}\n";
+
+    res.set_content(json.str(), "application/json");
+    std::cout << "[HTTP] Position query response sent" << std::endl;
+}
+
+// 启动HTTP服务器
+void StartHTTPServer(int port = 8080) {
+    g_http_server = std::make_unique<httplib::Server>();
+
+    // 注册endpoint
+    g_http_server->Get("/positions", HandlePositionQuery);
+
+    // 健康检查endpoint
+    g_http_server->Get("/health", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content("{\"status\":\"ok\"}", "application/json");
+    });
+
+    std::cout << "[HTTP] Starting HTTP server on port " << port << "..." << std::endl;
+
+    // 在单独的线程中运行服务器
+    g_http_thread = std::thread([port]() {
+        if (!g_http_server->listen("0.0.0.0", port)) {
+            std::cerr << "[HTTP] Failed to start HTTP server on port " << port << std::endl;
+        }
+    });
+
+    std::cout << "[HTTP] ✅ HTTP server started on port " << port << std::endl;
+    std::cout << "[HTTP] Position query endpoint: http://localhost:" << port << "/positions" << std::endl;
+}
+
+// 停止HTTP服务器
+void StopHTTPServer() {
+    if (g_http_server) {
+        std::cout << "[HTTP] Stopping HTTP server..." << std::endl;
+        g_http_server->stop();
+    }
+
+    if (g_http_thread.joinable()) {
+        g_http_thread.join();
+    }
+
+    std::cout << "[HTTP] ✅ HTTP server stopped" << std::endl;
 }
 
 // 订单请求处理线程
@@ -398,30 +542,43 @@ int main(int argc, char** argv) {
     std::cout << "\n[Main] Waiting for broker systems ready (3 seconds)..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
-    // 4. 启动订单处理线程
+    // 4. 启动HTTP服务器（用于持仓查询）
+    std::cout << "\n[Main] Starting HTTP server..." << std::endl;
+    StartHTTPServer(8080);
+
+    // 5. 启动订单处理线程
     std::cout << "\n[Main] Starting order processor thread..." << std::endl;
     std::thread processor_thread(OrderRequestProcessor, req_queue);
 
-    // 5. 打印状态
+    // 6. 打印状态
     std::cout << "\n╔════════════════════════════════════════════════════════════╗" << std::endl;
     std::cout << "║ Counter Bridge started successfully                        ║" << std::endl;
     std::cout << "╠════════════════════════════════════════════════════════════╣" << std::endl;
     std::cout << "║ Request Queue:  ors_request                                ║" << std::endl;
     std::cout << "║ Response Queue: ors_response                               ║" << std::endl;
+    std::cout << "║ HTTP Server:    http://localhost:8080                      ║" << std::endl;
     std::cout << "║ Active Brokers: " << g_brokers.size() << " broker(s)                                 ║" << std::endl;
     for (const auto& [name, broker] : g_brokers) {
         std::cout << "║   - " << name << " (" << broker->GetPluginName() << ")";
         std::cout << std::string(49 - name.length() - broker->GetPluginName().length(), ' ') << "║" << std::endl;
     }
     std::cout << "╚════════════════════════════════════════════════════════════╝" << std::endl;
+    std::cout << "\nEndpoints:" << std::endl;
+    std::cout << "  - Position Query: http://localhost:8080/positions" << std::endl;
+    std::cout << "  - Health Check:   http://localhost:8080/health" << std::endl;
     std::cout << "\nWaiting for orders from ORS Gateway..." << std::endl;
     std::cout << "Press Ctrl+C to stop...\n" << std::endl;
 
-    // 6. 等待退出信号
+    // 7. 等待退出信号
     processor_thread.join();
 
-    // 7. 清理
+    // 8. 清理
     std::cout << "\n[Main] Cleaning up..." << std::endl;
+
+    // 停止HTTP服务器
+    StopHTTPServer();
+
+    // 登出所有券商
     for (auto& [name, broker] : g_brokers) {
         std::cout << "[Main] Logging out " << name << "..." << std::endl;
         broker->Logout();

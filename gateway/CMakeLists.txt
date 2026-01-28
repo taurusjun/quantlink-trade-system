@@ -262,6 +262,7 @@ if(BUILD_CTP_PLUGIN AND APPLE AND HAS_YAML_CPP)
     target_include_directories(counter_bridge PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ctp/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
         ${GENERATED_PROTOBUF_PATH}
         ${CTP_FRAMEWORK_DIR}/include
         /opt/homebrew/include

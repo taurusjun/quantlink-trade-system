@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yourusername/quantlink-trade-system/pkg/client"
 	"github.com/yourusername/quantlink-trade-system/pkg/config"
 	"github.com/yourusername/quantlink-trade-system/pkg/portfolio"
 	"github.com/yourusername/quantlink-trade-system/pkg/risk"
@@ -30,6 +32,10 @@ type Trader struct {
 
 	// Model hot reload
 	ModelWatcher *ModelWatcher
+
+	// Positions (按交易所分组)
+	positionsByExchange map[string][]client.PositionInfo
+	positionsMu         sync.RWMutex
 
 	// State
 	mu             sync.RWMutex
@@ -214,8 +220,81 @@ func (t *Trader) Initialize() error {
 		}
 	}
 
+	// 8. Query initial positions (查询初始持仓)
+	if err := t.queryInitialPositions(); err != nil {
+		log.Printf("[Trader] Warning: Failed to query initial positions: %v", err)
+		// 不阻断启动，仅记录警告
+	}
+
 	log.Println("[Trader] ✓ All components initialized successfully")
 	return nil
+}
+
+// queryInitialPositions queries initial positions from broker
+func (t *Trader) queryInitialPositions() error {
+	log.Println("[Trader] Querying initial positions from broker...")
+
+	// 检查Engine是否有ORS Client
+	if t.Engine == nil || t.Engine.GetORSClient() == nil {
+		log.Println("[Trader] Warning: ORS Client not available, skipping position query")
+		return nil
+	}
+
+	orsClient := t.Engine.GetORSClient()
+
+	// 调用Counter Bridge查询持仓
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	positions, err := orsClient.QueryPositions(ctx, "", "")
+	if err != nil {
+		return fmt.Errorf("failed to query positions: %w", err)
+	}
+
+	// 存储持仓数据（按交易所分组）
+	t.positionsMu.Lock()
+	t.positionsByExchange = positions
+	t.positionsMu.Unlock()
+
+	// 统计持仓信息
+	totalPositions := 0
+	for _, posList := range positions {
+		totalPositions += len(posList)
+	}
+
+	log.Printf("[Trader] ✓ Loaded %d positions from %d exchanges", totalPositions, len(positions))
+
+	// 打印持仓摘要
+	t.printPositionSummary()
+
+	return nil
+}
+
+// printPositionSummary prints position summary
+func (t *Trader) printPositionSummary() {
+	t.positionsMu.RLock()
+	defer t.positionsMu.RUnlock()
+
+	if len(t.positionsByExchange) == 0 {
+		log.Println("[Trader] No positions found")
+		return
+	}
+
+	log.Println("[Trader] ════════════════════════════════════════════════════════════")
+	log.Println("[Trader] Position Summary:")
+	log.Println("[Trader] ════════════════════════════════════════════════════════════")
+
+	for exchange, positions := range t.positionsByExchange {
+		log.Printf("[Trader] %s Exchange:", exchange)
+		for _, pos := range positions {
+			log.Printf("[Trader]   - %s %s: %d lots (today: %d, yesterday: %d)",
+				pos.Symbol, pos.Direction, pos.Volume, pos.TodayVolume, pos.YesterdayVolume)
+			log.Printf("[Trader]     Avg Price: %.2f, P&L: %.2f, Margin: %.2f",
+				pos.AvgPrice, pos.PositionProfit, pos.Margin)
+		}
+	}
+
+	log.Println("[Trader] ════════════════════════════════════════════════════════════")
 }
 
 // Start starts the trader

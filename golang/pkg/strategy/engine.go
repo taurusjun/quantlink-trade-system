@@ -90,9 +90,10 @@ func (se *StrategyEngine) Initialize() error {
 
 	// Initialize ORS client
 	se.orsClient, err = client.NewORSClient(client.ORSClientConfig{
-		GatewayAddr: se.config.ORSGatewayAddr,
-		NATSAddr:    se.config.NATSAddr,
-		StrategyID:  "strategy_engine", // 使用通用ID
+		GatewayAddr:       se.config.ORSGatewayAddr,
+		NATSAddr:          se.config.NATSAddr,
+		CounterBridgeAddr: "localhost:8080", // Counter Bridge地址（用于持仓查询）
+		StrategyID:        "strategy_engine", // 使用通用ID
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize ORS client: %w", err)
@@ -623,4 +624,9 @@ func (se *StrategyEngine) PrintStatistics() {
 	}
 
 	fmt.Println("════════════════════════════════════════════════════════════")
+}
+
+// GetORSClient returns the ORS client instance
+func (se *StrategyEngine) GetORSClient() *client.ORSClient {
+	return se.orsClient
 }

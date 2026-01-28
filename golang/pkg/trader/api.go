@@ -94,6 +94,10 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	mux.HandleFunc("/api/v1/model/status", api.corsMiddleware(api.handleModelStatus))
 	mux.HandleFunc("/api/v1/model/history", api.corsMiddleware(api.handleModelHistory))
 
+	// Position query endpoints
+	mux.HandleFunc("/api/v1/positions", api.corsMiddleware(api.handlePositions))
+	mux.HandleFunc("/api/v1/positions/summary", api.corsMiddleware(api.handlePositionsSummary))
+
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      mux,
@@ -540,4 +544,115 @@ func (a *APIServer) handleModelHistory(w http.ResponseWriter, r *http.Request) {
 		"history": history,
 		"count":   len(history),
 	})
+}
+
+// handlePositions handles GET /api/v1/positions
+// 返回所有持仓（按交易所分组）
+func (a *APIServer) handlePositions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 可选：支持查询参数过滤
+	exchange := r.URL.Query().Get("exchange") // 例如: ?exchange=SHFE
+	symbol := r.URL.Query().Get("symbol")     // 例如: ?symbol=ag2603
+
+	// 获取持仓数据
+	a.trader.positionsMu.RLock()
+	positions := a.trader.positionsByExchange
+	a.trader.positionsMu.RUnlock()
+
+	// 应用过滤逻辑
+	filtered := make(map[string][]interface{})
+	for exch, posList := range positions {
+		// 过滤交易所
+		if exchange != "" && exch != exchange {
+			continue
+		}
+
+		var filteredPositions []interface{}
+		for _, pos := range posList {
+			// 过滤品种
+			if symbol != "" && pos.Symbol != symbol {
+				continue
+			}
+
+			filteredPositions = append(filteredPositions, map[string]interface{}{
+				"symbol":           pos.Symbol,
+				"exchange":         pos.Exchange,
+				"direction":        pos.Direction,
+				"volume":           pos.Volume,
+				"today_volume":     pos.TodayVolume,
+				"yesterday_volume": pos.YesterdayVolume,
+				"avg_price":        pos.AvgPrice,
+				"position_profit":  pos.PositionProfit,
+				"margin":           pos.Margin,
+			})
+		}
+
+		if len(filteredPositions) > 0 {
+			filtered[exch] = filteredPositions
+		}
+	}
+
+	a.sendSuccess(w, "Positions retrieved", filtered)
+}
+
+// handlePositionsSummary handles GET /api/v1/positions/summary
+// 返回持仓摘要统计
+func (a *APIServer) handlePositionsSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 获取持仓数据
+	a.trader.positionsMu.RLock()
+	positions := a.trader.positionsByExchange
+	a.trader.positionsMu.RUnlock()
+
+	// 计算统计数据
+	var totalPositions int
+	var totalVolume int64
+	var totalProfit float64
+	var totalMargin float64
+	exchangeStats := make(map[string]map[string]interface{})
+
+	for exch, posList := range positions {
+		var exchVolume int64
+		var exchProfit float64
+		var exchMargin float64
+		exchPositionCount := len(posList)
+
+		for _, pos := range posList {
+			totalVolume += pos.Volume
+			totalProfit += pos.PositionProfit
+			totalMargin += pos.Margin
+
+			exchVolume += pos.Volume
+			exchProfit += pos.PositionProfit
+			exchMargin += pos.Margin
+		}
+
+		totalPositions += exchPositionCount
+
+		exchangeStats[exch] = map[string]interface{}{
+			"position_count": exchPositionCount,
+			"total_volume":   exchVolume,
+			"total_profit":   exchProfit,
+			"total_margin":   exchMargin,
+		}
+	}
+
+	summary := map[string]interface{}{
+		"total_positions":  totalPositions,
+		"exchange_count":   len(positions),
+		"total_volume":     totalVolume,
+		"total_profit":     totalProfit,
+		"total_margin":     totalMargin,
+		"by_exchange":      exchangeStats,
+	}
+
+	a.sendSuccess(w, "Position summary retrieved", summary)
 }
