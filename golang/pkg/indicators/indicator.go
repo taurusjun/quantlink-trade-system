@@ -199,6 +199,16 @@ func NewIndicatorLibrary() *IndicatorLibrary {
 	lib.RegisterFactory("quote_update_frequency", NewQuoteUpdateFrequencyFromConfig)
 	lib.RegisterFactory("order_arrival_rate", NewOrderArrivalRateFromConfig)
 
+	// Core Orderbook Indicators (P0 Task #3)
+	lib.RegisterFactory("avg_book_size", NewAvgBookSizeFromConfig)
+	lib.RegisterFactory("avg_bid_qty", NewAvgBidQtyFromConfig)
+	lib.RegisterFactory("avg_ask_qty", NewAvgAskQtyFromConfig)
+	lib.RegisterFactory("avg_spread", NewAvgSpreadFromConfig)
+	lib.RegisterFactory("bbd", NewBBDFromConfig)
+	lib.RegisterFactory("bad", NewBADFromConfig)
+	lib.RegisterFactory("msw_price", NewMSWPriceFromConfig)
+	lib.RegisterFactory("mow_price", NewMOWPriceFromConfig)
+
 	// Legacy orderbook indicators (kept for compatibility)
 	lib.RegisterFactory("mid_price", NewMidPriceFromConfig)
 	lib.RegisterFactory("weighted_mid_price", NewWeightedMidPriceFromConfig)
