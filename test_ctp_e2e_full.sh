@@ -60,7 +60,7 @@ echo -e "${GREEN}✓ CTP行情网关运行中${NC}"
 
 # 启动MD Gateway（共享内存 → NATS）
 echo -e "${YELLOW}[5/8] 启动MD Gateway...${NC}"
-./gateway/build/md_gateway > log/md_gateway.log 2>&1 &
+./gateway/build/md_gateway md_queue > log/md_gateway.log 2>&1 &
 MD_GATEWAY_PID=$!
 echo "PID: $MD_GATEWAY_PID"
 sleep 2

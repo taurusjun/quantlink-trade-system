@@ -89,7 +89,7 @@ private:
 // 共享内存管理器
 class ShmManager {
 public:
-    static constexpr size_t QUEUE_SIZE = 32768;  // 队列大小（从4096增加到32768以支持高频行情）
+    static constexpr size_t QUEUE_SIZE = 4096;  // 队列大小（保持原值，另寻方案优化）
     using Queue = SPSCQueue<MarketDataRaw, QUEUE_SIZE>;
 
     // 创建共享内存（生产者使用）
