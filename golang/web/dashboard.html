@@ -664,8 +664,8 @@
                                             <div class="indicator-label">{{ formatIndicatorName(key) }}</div>
                                             <div class="indicator-value">
                                                 {{ formatIndicatorValue(value) }}
-                                                <span v-if="strategy.thresholds && strategy.thresholds[key]" style="font-size: 11px; color: #6c757d;">
-                                                    / {{ formatIndicatorValue(strategy.thresholds[key]) }}
+                                                <span v-if="getThresholdForIndicator(key, strategy.thresholds)" style="font-size: 11px; color: #6c757d;">
+                                                    / {{ key === 'z_score' ? '±' : '' }}{{ formatIndicatorValue(getThresholdForIndicator(key, strategy.thresholds)) }}
                                                 </span>
                                             </div>
                                         </div>
@@ -873,7 +873,12 @@
                 };
 
                 const filterIndicators = (indicators) => {
-                    const exclude = ['leg1_price', 'leg2_price', 'leg1_position', 'leg2_position'];
+                    // Exclude position/price details and threshold values that will be shown alongside indicators
+                    const exclude = [
+                        'leg1_price', 'leg2_price', 'leg1_position', 'leg2_position',
+                        'entry_threshold', 'exit_threshold', 'entry_zscore', 'exit_zscore',
+                        'min_correlation', 'min_spread'
+                    ];
                     const result = {};
                     for (const [key, value] of Object.entries(indicators)) {
                         if (!exclude.includes(key)) {
@@ -881,6 +886,29 @@
                         }
                     }
                     return result;
+                };
+
+                const getThresholdForIndicator = (indicatorKey, thresholds) => {
+                    if (!thresholds) return null;
+
+                    // Direct match
+                    if (thresholds[indicatorKey]) {
+                        return thresholds[indicatorKey];
+                    }
+
+                    // Mapping for special cases
+                    const mapping = {
+                        'z_score': 'entry_zscore',        // z_score显示entry阈值
+                        'correlation': 'min_correlation',  // correlation显示最小要求
+                        'spread': 'min_spread',           // spread显示最小价差
+                    };
+
+                    const mappedKey = mapping[indicatorKey];
+                    if (mappedKey && thresholds[mappedKey]) {
+                        return thresholds[mappedKey];
+                    }
+
+                    return null;
                 };
 
                 const isIndicatorMet = (key, value, indicators, thresholds) => {
@@ -1225,6 +1253,7 @@
                     formatIndicatorName,
                     formatIndicatorValue,
                     filterIndicators,
+                    getThresholdForIndicator,
                     isIndicatorMet,
                     getStatusBadgeClass,
                     getStatusText
