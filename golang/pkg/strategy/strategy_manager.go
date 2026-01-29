@@ -123,6 +123,7 @@ func (sm *StrategyManager) toStrategyConfig(cfg config.StrategyItemConfig) *Stra
 		StrategyType:    cfg.Type,
 		Symbols:         cfg.Symbols,
 		MaxPositionSize: cfg.MaxPositionSize,
+		Allocation:      cfg.Allocation,
 		Parameters:      cfg.Parameters,
 		Enabled:         cfg.Enabled,
 	}

@@ -303,12 +303,19 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 				}
 			}()
 
-			// 1. Call market data callback
+			// 1. Update LastMarketData for WebSocket push
+			if accessor, ok := s.(BaseStrategyAccessor); ok {
+				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
+					baseStrat.LastMarketData = md
+				}
+			}
+
+			// 2. Call market data callback
 			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous
 			// For now, always call OnMarketData
 			s.OnMarketData(md)
 
-			// 2. Immediately collect signals
+			// 3. Immediately collect signals
 			signals := s.GetSignals()
 
 			// 3. Send orders immediately (synchronous) - but check state first
@@ -369,6 +376,13 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 					log.Printf("[StrategyEngine] Panic in strategy %s: %v", s.GetID(), r)
 				}
 			}()
+
+			// Update LastMarketData for WebSocket push
+			if accessor, ok := s.(BaseStrategyAccessor); ok {
+				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
+					baseStrat.LastMarketData = md
+				}
+			}
 
 			// Call market data callback
 			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous

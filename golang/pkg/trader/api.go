@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/websocket"
+
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
@@ -18,6 +20,7 @@ import (
 type APIServer struct {
 	trader    *Trader
 	server    *http.Server
+	wsHub     *WebSocketHub // WebSocket hub for real-time data push
 	mu        sync.RWMutex
 	commandMu sync.Mutex // 命令互斥锁，防止并发激活/停止
 	running   bool
@@ -79,6 +82,9 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 		running: false,
 	}
 
+	// Create WebSocket hub
+	api.wsHub = NewWebSocketHub(trader)
+
 	mux := http.NewServeMux()
 
 	// Register endpoints with CORS
@@ -105,6 +111,9 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	mux.HandleFunc("/api/v1/strategies/", api.corsMiddleware(api.handleStrategyByID))
 	mux.HandleFunc("/api/v1/indicators/realtime", api.corsMiddleware(api.handleRealtimeIndicators))
 
+	// WebSocket endpoint for real-time dashboard
+	mux.Handle("/api/v1/ws/dashboard", websocket.Handler(api.wsHub.HandleWebSocket))
+
 	api.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      mux,
@@ -125,8 +134,12 @@ func (a *APIServer) Start() error {
 	a.running = true
 	a.mu.Unlock()
 
+	// Start WebSocket hub
+	a.wsHub.Start()
+
 	log.Printf("[API] Starting HTTP API server on %s", a.server.Addr)
 	log.Printf("[API] DEBUG: Test endpoints registered: /api/v1/test/ping and /api/v1/test/market-data")
+	log.Printf("[API] WebSocket endpoint: ws://%s/api/v1/ws/dashboard", a.server.Addr)
 
 	go func() {
 		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -149,6 +162,10 @@ func (a *APIServer) Stop() error {
 	a.mu.Unlock()
 
 	log.Println("[API] Stopping HTTP API server...")
+
+	// Stop WebSocket hub first
+	a.wsHub.Stop()
+
 	if err := a.server.Close(); err != nil {
 		return fmt.Errorf("failed to stop server: %w", err)
 	}

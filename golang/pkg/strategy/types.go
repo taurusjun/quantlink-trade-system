@@ -208,6 +208,7 @@ type StrategyConfig struct {
 	Exchanges       []string               // Exchanges
 	MaxPositionSize int64                  // Maximum position size
 	MaxExposure     float64                // Maximum exposure value
+	Allocation      float64                // Capital allocation (0-1)
 	RiskLimits      map[string]float64     // Risk limits
 	Parameters      map[string]interface{} // Strategy parameters
 	Enabled         bool                   // Is strategy enabled

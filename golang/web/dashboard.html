@@ -660,9 +660,14 @@
                                     <div v-if="strategy.indicators && Object.keys(strategy.indicators).length > 0" class="indicators-grid">
                                         <div v-for="(value, key) in filterIndicators(strategy.indicators)" :key="key"
                                              class="indicator-item"
-                                             :class="{ 'met': isIndicatorMet(key, value, strategy.indicators) }">
+                                             :class="{ 'met': isIndicatorMet(key, value, strategy.indicators, strategy.thresholds) }">
                                             <div class="indicator-label">{{ formatIndicatorName(key) }}</div>
-                                            <div class="indicator-value">{{ formatIndicatorValue(value) }}</div>
+                                            <div class="indicator-value">
+                                                {{ formatIndicatorValue(value) }}
+                                                <span v-if="strategy.thresholds && strategy.thresholds[key]" style="font-size: 11px; color: #6c757d;">
+                                                    / {{ formatIndicatorValue(strategy.thresholds[key]) }}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -699,10 +704,36 @@
                             <input type="text" class="config-input" v-model="apiHost" placeholder="Host">
                             <input type="number" class="config-input" v-model="apiPort" placeholder="Port" style="width: 100px;">
                         </div>
-                        <button class="btn btn-connect" @click="connect" :disabled="loading" style="width: 100%;">
-                            <span v-if="loading" class="loading-spinner"></span>
-                            <span v-else>Connect & Refresh</span>
+                        <button class="btn btn-connect" @click="connect" style="width: 100%;">
+                            <span v-if="!connected">Connect WebSocket</span>
+                            <span v-else>✓ Connected</span>
                         </button>
+                    </div>
+                </div>
+
+                <!-- Market Data Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Market Data</h2>
+                        <span class="badge badge-secondary">{{ Object.keys(marketData).length }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div v-if="Object.keys(marketData).length === 0" class="empty-state">
+                            <div class="empty-state-icon">📈</div>
+                            <p>No market data</p>
+                        </div>
+                        <div v-else class="positions-list">
+                            <div v-for="(data, symbol) in marketData" :key="symbol" class="position-item">
+                                <div>
+                                    <div class="position-symbol">{{ symbol }}</div>
+                                    <span class="symbol-tag">{{ data.exchange }}</span>
+                                </div>
+                                <div class="position-details">
+                                    <div class="position-qty">¥{{ data.last_price.toFixed(2) }}</div>
+                                    <div class="indicator-label">Bid: {{ data.bid_price.toFixed(2) }} | Ask: {{ data.ask_price.toFixed(2) }}</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -792,14 +823,18 @@
 
                 const strategies = ref([]);
                 const positions = ref([]);
+                const marketData = ref({});
 
                 let refreshTimer = null;
+                let ws = null;
+                let wsReconnectTimer = null;
 
                 // Computed
                 const positionCount = computed(() => positions.value.length);
 
                 // Methods
                 const getApiBase = () => `http://${apiHost.value}:${apiPort.value}/api/v1`;
+                const getWsUrl = () => `ws://${apiHost.value}:${apiPort.value}/api/v1/ws/dashboard`;
 
                 const showToast = (message, type = 'success') => {
                     const toast = { message, type };
@@ -848,7 +883,20 @@
                     return result;
                 };
 
-                const isIndicatorMet = (key, value, indicators) => {
+                const isIndicatorMet = (key, value, indicators, thresholds) => {
+                    // Check against thresholds first
+                    if (thresholds) {
+                        if (key === 'z_score' && thresholds.entry_zscore) {
+                            return Math.abs(value) >= thresholds.entry_zscore;
+                        }
+                        if (key === 'correlation' && thresholds.min_correlation) {
+                            return value >= thresholds.min_correlation;
+                        }
+                        if (key === 'spread' && thresholds.min_spread) {
+                            return value >= thresholds.min_spread;
+                        }
+                    }
+                    // Fallback to legacy indicators-based check
                     if (key === 'z_score' && indicators.entry_threshold) {
                         return Math.abs(value) >= indicators.entry_threshold;
                     }
@@ -872,8 +920,143 @@
                     return 'Inactive';
                 };
 
-                const connect = async () => {
-                    await refreshData();
+                const connectWebSocket = () => {
+                    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                        return; // Already connected or connecting
+                    }
+
+                    try {
+                        ws = new WebSocket(getWsUrl());
+
+                        ws.onopen = () => {
+                            connected.value = true;
+                            showToast('WebSocket connected', 'success');
+                            // Clear any reconnect timer
+                            if (wsReconnectTimer) {
+                                clearTimeout(wsReconnectTimer);
+                                wsReconnectTimer = null;
+                            }
+                        };
+
+                        ws.onmessage = (event) => {
+                            try {
+                                const message = JSON.parse(event.data);
+
+                                if (message.type === 'dashboard_update') {
+                                    handleDashboardUpdate(message.data);
+                                    lastRefresh.value = new Date().toLocaleTimeString();
+                                } else if (message.type === 'ping') {
+                                    // Send pong back
+                                    if (ws && ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({ type: 'pong' }));
+                                    }
+                                }
+                            } catch (error) {
+                                console.error('Failed to parse WebSocket message:', error);
+                            }
+                        };
+
+                        ws.onerror = (error) => {
+                            console.error('WebSocket error:', error);
+                            connected.value = false;
+                        };
+
+                        ws.onclose = () => {
+                            connected.value = false;
+                            showToast('WebSocket disconnected, reconnecting...', 'error');
+                            // Attempt to reconnect after 3 seconds
+                            wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+                        };
+                    } catch (error) {
+                        console.error('Failed to create WebSocket:', error);
+                        connected.value = false;
+                    }
+                };
+
+                const disconnectWebSocket = () => {
+                    if (wsReconnectTimer) {
+                        clearTimeout(wsReconnectTimer);
+                        wsReconnectTimer = null;
+                    }
+                    if (ws) {
+                        ws.close();
+                        ws = null;
+                    }
+                    connected.value = false;
+                };
+
+                const handleDashboardUpdate = (data) => {
+                    // Update overview
+                    if (data.overview) {
+                        const ov = data.overview;
+                        multiStrategy.value = ov.multi_strategy;
+                        overview.value = {
+                            totalStrategies: ov.total_strategies || 0,
+                            activeStrategies: ov.active_strategies || 0,
+                            runningStrategies: ov.running_strategies || 0,
+                            totalRealizedPnL: ov.total_realized_pnl || 0,
+                            totalUnrealizedPnL: ov.total_unrealized_pnl || 0,
+                            totalPnL: ov.total_pnl || 0,
+                            mode: ov.mode || ''
+                        };
+
+                        // Update strategies from overview
+                        if (ov.strategies) {
+                            const updatedStrategies = ov.strategies.map(s => ({
+                                id: s.id,
+                                type: s.type,
+                                symbols: s.symbols || [],
+                                running: s.running,
+                                active: s.active,
+                                conditionsMet: s.conditions_met,
+                                eligible: s.eligible,
+                                allocation: s.allocation || 0,
+                                realizedPnL: s.realized_pnl || 0,
+                                unrealizedPnL: s.unrealized_pnl || 0,
+                                indicators: {},
+                                thresholds: {}
+                            }));
+                            strategies.value = updatedStrategies;
+                        }
+                    }
+
+                    // Update strategy realtime data (indicators + thresholds)
+                    if (data.strategies) {
+                        for (const [id, stratData] of Object.entries(data.strategies)) {
+                            const strategy = strategies.value.find(s => s.id === id);
+                            if (strategy) {
+                                strategy.indicators = stratData.indicators || {};
+                                strategy.thresholds = stratData.thresholds || {};
+                                strategy.conditionsMet = stratData.conditions_met;
+                                strategy.eligible = stratData.eligible;
+                            }
+                        }
+                    }
+
+                    // Update market data
+                    if (data.market_data) {
+                        marketData.value = data.market_data;
+                    }
+
+                    // Update positions
+                    if (data.positions) {
+                        const posArray = [];
+                        for (const [exchange, posList] of Object.entries(data.positions)) {
+                            for (const pos of posList) {
+                                posArray.push({
+                                    symbol: pos.symbol,
+                                    direction: pos.direction,
+                                    volume: pos.volume,
+                                    profit: pos.position_profit || 0
+                                });
+                            }
+                        }
+                        positions.value = posArray;
+                    }
+                };
+
+                const connect = () => {
+                    connectWebSocket();
                 };
 
                 const refreshData = async () => {
@@ -1008,11 +1191,11 @@
 
                 // Lifecycle
                 onMounted(() => {
-                    refreshData();
-                    refreshTimer = setInterval(refreshData, refreshInterval.value);
+                    connectWebSocket();
                 });
 
                 onUnmounted(() => {
+                    disconnectWebSocket();
                     if (refreshTimer) clearInterval(refreshTimer);
                 });
 
@@ -1030,6 +1213,7 @@
                     overview,
                     strategies,
                     positions,
+                    marketData,
                     positionCount,
 
                     // Methods

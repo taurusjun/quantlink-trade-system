@@ -117,6 +117,7 @@ type BaseStrategy struct {
 	ControlState       *StrategyControlState         // State control (aligned with tbsrc)
 	PendingSignals     []*TradingSignal
 	Orders             map[string]*orspb.OrderUpdate // order_id -> OrderUpdate
+	LastMarketData     *mdpb.MarketDataUpdate        // Last received market data (for WebSocket push)
 
 	// Concrete strategy instance (for parameter updates)
 	// This is set by concrete strategies in their constructors
