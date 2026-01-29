@@ -409,12 +409,23 @@
 
         .position-symbol {
             font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .position-strategy {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin: 2px 0;
         }
 
         .position-direction {
             font-size: 12px;
             padding: 2px 8px;
             border-radius: 4px;
+            margin-top: 4px;
+            display: inline-block;
         }
 
         .position-direction.long {
@@ -429,6 +440,21 @@
 
         .position-details {
             text-align: right;
+        }
+
+        .position-price {
+            font-size: 12px;
+            margin: 4px 0;
+        }
+
+        .position-qty {
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+
+        .position-pnl {
+            font-weight: 600;
+            margin-top: 4px;
         }
 
         .position-qty {
@@ -749,17 +775,25 @@
                             <p>No positions</p>
                         </div>
                         <div v-else class="positions-list">
-                            <div v-for="pos in positions" :key="pos.symbol + pos.direction" class="position-item">
+                            <div v-for="pos in positions" :key="pos.strategy_id + '_' + pos.symbol + '_' + pos.leg_index" class="position-item">
                                 <div>
-                                    <div class="position-symbol">{{ pos.symbol }}</div>
+                                    <div class="position-symbol">
+                                        {{ pos.symbol }}
+                                        <span v-if="pos.leg_index > 0" class="symbol-tag">Leg{{ pos.leg_index }}</span>
+                                    </div>
+                                    <div class="position-strategy">{{ pos.strategy_id }}</div>
                                     <span class="position-direction" :class="pos.direction.toLowerCase()">
                                         {{ pos.direction }}
                                     </span>
                                 </div>
                                 <div class="position-details">
                                     <div class="position-qty">{{ pos.volume }} lots</div>
-                                    <div class="position-pnl" :class="pos.profit >= 0 ? 'positive' : 'negative'">
-                                        {{ formatPnL(pos.profit) }}
+                                    <div class="position-price">
+                                        <span style="font-size: 11px; color: #6c757d;">Avg:</span> {{ pos.avg_price.toFixed(2) }}
+                                        <span style="font-size: 11px; color: #6c757d;">| Now:</span> {{ pos.current_price.toFixed(2) }}
+                                    </div>
+                                    <div class="position-pnl" :class="pos.unrealized_pnl >= 0 ? 'positive' : 'negative'">
+                                        {{ formatPnL(pos.unrealized_pnl) }}
                                     </div>
                                 </div>
                             </div>
@@ -1068,18 +1102,7 @@
 
                     // Update positions
                     if (data.positions) {
-                        const posArray = [];
-                        for (const [exchange, posList] of Object.entries(data.positions)) {
-                            for (const pos of posList) {
-                                posArray.push({
-                                    symbol: pos.symbol,
-                                    direction: pos.direction,
-                                    volume: pos.volume,
-                                    profit: pos.position_profit || 0
-                                });
-                            }
-                        }
-                        positions.value = posArray;
+                        positions.value = data.positions;
                     }
                 };
 

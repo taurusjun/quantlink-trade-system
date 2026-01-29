@@ -7,7 +7,6 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/yourusername/quantlink-trade-system/pkg/client"
 	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
@@ -20,10 +19,10 @@ type WebSocketMessage struct {
 
 // DashboardWSUpdate contains all data for dashboard real-time update via WebSocket
 type DashboardWSUpdate struct {
-	Overview   *DashboardOverview                     `json:"overview"`
-	Strategies map[string]*StrategyRealtimeData       `json:"strategies"`
-	MarketData map[string]*MarketDataDetail           `json:"market_data"`
-	Positions  map[string][]client.PositionInfo       `json:"positions"`
+	Overview   *DashboardOverview               `json:"overview"`
+	Strategies map[string]*StrategyRealtimeData `json:"strategies"`
+	MarketData map[string]*MarketDataDetail     `json:"market_data"`
+	Positions  []*PositionDetail                `json:"positions"`
 }
 
 // StrategyRealtimeData contains real-time strategy data including thresholds
@@ -59,6 +58,19 @@ type MarketDataDetail struct {
 	Turnover     float64 `json:"turnover"`
 	OpenInterest int64   `json:"open_interest"`
 	UpdateTime   string  `json:"update_time"`
+}
+
+// PositionDetail contains detailed position information for dashboard
+type PositionDetail struct {
+	StrategyID    string  `json:"strategy_id"`    // Which strategy holds this position
+	Symbol        string  `json:"symbol"`         // Symbol
+	Exchange      string  `json:"exchange"`       // Exchange
+	Direction     string  `json:"direction"`      // LONG or SHORT
+	Volume        int64   `json:"volume"`         // Position quantity
+	AvgPrice      float64 `json:"avg_price"`      // Average open price
+	CurrentPrice  float64 `json:"current_price"`  // Current market price
+	UnrealizedPnL float64 `json:"unrealized_pnl"` // Unrealized P&L
+	LegIndex      int     `json:"leg_index"`      // For pairwise strategies: 1 or 2, 0 for single-leg
 }
 
 // WebSocketHub manages all websocket connections
@@ -220,7 +232,7 @@ func (h *WebSocketHub) collectDashboardData() *DashboardWSUpdate {
 	update := &DashboardWSUpdate{
 		Strategies: make(map[string]*StrategyRealtimeData),
 		MarketData: make(map[string]*MarketDataDetail),
-		Positions:  make(map[string][]client.PositionInfo),
+		Positions:  make([]*PositionDetail, 0),
 	}
 
 	// Collect overview data
@@ -453,52 +465,210 @@ func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 }
 
 // collectPositions collects current positions from strategies
-func (h *WebSocketHub) collectPositions() map[string][]client.PositionInfo {
-	positions := make(map[string][]client.PositionInfo)
+func (h *WebSocketHub) collectPositions() []*PositionDetail {
+	positions := make([]*PositionDetail, 0)
 
 	// Collect positions from strategies
 	if h.trader.IsMultiStrategy() && h.trader.GetStrategyManager() != nil {
 		mgr := h.trader.GetStrategyManager()
 		mgr.ForEach(func(id string, strat strategy.Strategy) {
-			if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
-				base := accessor.GetBaseStrategy()
-				if base != nil && base.Position != nil && !base.Position.IsFlat() {
-					// Get exchange from config (use first exchange if available)
-					exchange := "SHFE" // Default
-					if len(base.Config.Exchanges) > 0 {
-						exchange = base.Config.Exchanges[0]
-					}
+			stratType := strat.GetType()
 
-					// Convert to PositionInfo
-					if _, exists := positions[exchange]; !exists {
-						positions[exchange] = make([]client.PositionInfo, 0)
-					}
-
-					// Determine direction
-					direction := "LONG"
-					volume := base.Position.LongQty
-					avgPrice := base.Position.AvgLongPrice
-					if base.Position.IsShort() {
-						direction = "SHORT"
-						volume = base.Position.ShortQty
-						avgPrice = base.Position.AvgShortPrice
-					}
-
-					symbol := ""
-					if len(base.Config.Symbols) > 0 {
-						symbol = base.Config.Symbols[0]
-					}
-
-					positions[exchange] = append(positions[exchange], client.PositionInfo{
-						Symbol:         symbol,
-						Exchange:       exchange,
-						Direction:      direction,
-						Volume:         volume,
-						AvgPrice:       avgPrice,
-						PositionProfit: base.PNL.UnrealizedPnL,
-					})
-				}
+			// Handle PairwiseArbStrategy (has two legs)
+			if stratType == "pairwise_arb" {
+				positions = append(positions, h.collectPairwisePositions(id, strat)...)
+			} else {
+				// Handle single-leg strategies
+				positions = append(positions, h.collectSingleLegPositions(id, strat)...)
 			}
+		})
+	}
+
+	return positions
+}
+
+// collectPairwisePositions collects positions for pairwise arbitrage strategy
+func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strategy.Strategy) []*PositionDetail {
+	positions := make([]*PositionDetail, 0, 2)
+
+	accessor, ok := strat.(strategy.BaseStrategyAccessor)
+	if !ok {
+		return positions
+	}
+
+	base := accessor.GetBaseStrategy()
+	if base == nil || base.Config == nil || len(base.Config.Symbols) < 2 {
+		return positions
+	}
+
+	// Get exchange
+	exchange := "SHFE"
+	if len(base.Config.Exchanges) > 0 {
+		exchange = base.Config.Exchanges[0]
+	}
+
+	// Get leg positions from indicators (stored by PairwiseArb)
+	leg1Pos := int64(0)
+	leg2Pos := int64(0)
+	if base.ControlState != nil && base.ControlState.Indicators != nil {
+		if val, ok := base.ControlState.Indicators["leg1_position"]; ok {
+			leg1Pos = int64(val)
+		}
+		if val, ok := base.ControlState.Indicators["leg2_position"]; ok {
+			leg2Pos = int64(val)
+		}
+	}
+
+	// Get current prices from LastMarketData
+	price1 := 0.0
+	price2 := 0.0
+	if base.LastMarketData != nil {
+		if md1, ok := base.LastMarketData[base.Config.Symbols[0]]; ok {
+			price1 = md1.LastPrice
+		}
+		if md2, ok := base.LastMarketData[base.Config.Symbols[1]]; ok {
+			price2 = md2.LastPrice
+		}
+	}
+
+	// Leg 1
+	if leg1Pos != 0 {
+		direction := "LONG"
+		volume := leg1Pos
+		if leg1Pos < 0 {
+			direction = "SHORT"
+			volume = -leg1Pos
+		}
+
+		avgPrice := 0.0
+		if base.ControlState != nil && base.ControlState.Indicators != nil {
+			if val, ok := base.ControlState.Indicators["leg1_price"]; ok {
+				avgPrice = val
+			}
+		}
+
+		unrealizedPnL := 0.0
+		if avgPrice > 0 && price1 > 0 {
+			if leg1Pos > 0 {
+				unrealizedPnL = float64(leg1Pos) * (price1 - avgPrice)
+			} else {
+				unrealizedPnL = float64(-leg1Pos) * (avgPrice - price1)
+			}
+		}
+
+		positions = append(positions, &PositionDetail{
+			StrategyID:    strategyID,
+			Symbol:        base.Config.Symbols[0],
+			Exchange:      exchange,
+			Direction:     direction,
+			Volume:        volume,
+			AvgPrice:      avgPrice,
+			CurrentPrice:  price1,
+			UnrealizedPnL: unrealizedPnL,
+			LegIndex:      1,
+		})
+	}
+
+	// Leg 2
+	if leg2Pos != 0 {
+		direction := "LONG"
+		volume := leg2Pos
+		if leg2Pos < 0 {
+			direction = "SHORT"
+			volume = -leg2Pos
+		}
+
+		avgPrice := 0.0
+		if base.ControlState != nil && base.ControlState.Indicators != nil {
+			if val, ok := base.ControlState.Indicators["leg2_price"]; ok {
+				avgPrice = val
+			}
+		}
+
+		unrealizedPnL := 0.0
+		if avgPrice > 0 && price2 > 0 {
+			if leg2Pos > 0 {
+				unrealizedPnL = float64(leg2Pos) * (price2 - avgPrice)
+			} else {
+				unrealizedPnL = float64(-leg2Pos) * (avgPrice - price2)
+			}
+		}
+
+		positions = append(positions, &PositionDetail{
+			StrategyID:    strategyID,
+			Symbol:        base.Config.Symbols[1],
+			Exchange:      exchange,
+			Direction:     direction,
+			Volume:        volume,
+			AvgPrice:      avgPrice,
+			CurrentPrice:  price2,
+			UnrealizedPnL: unrealizedPnL,
+			LegIndex:      2,
+		})
+	}
+
+	return positions
+}
+
+// collectSingleLegPositions collects positions for single-leg strategies
+func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strategy.Strategy) []*PositionDetail {
+	positions := make([]*PositionDetail, 0)
+
+	accessor, ok := strat.(strategy.BaseStrategyAccessor)
+	if !ok {
+		return positions
+	}
+
+	base := accessor.GetBaseStrategy()
+	if base == nil || base.Position == nil || base.Position.IsFlat() {
+		return positions
+	}
+
+	// Get exchange
+	exchange := "SHFE"
+	if len(base.Config.Exchanges) > 0 {
+		exchange = base.Config.Exchanges[0]
+	}
+
+	symbol := ""
+	if len(base.Config.Symbols) > 0 {
+		symbol = base.Config.Symbols[0]
+	}
+
+	// Get current price
+	currentPrice := 0.0
+	if base.LastMarketData != nil {
+		if md, ok := base.LastMarketData[symbol]; ok {
+			currentPrice = md.LastPrice
+		}
+	}
+
+	// Determine direction and collect position
+	if base.Position.IsLong() {
+		positions = append(positions, &PositionDetail{
+			StrategyID:    strategyID,
+			Symbol:        symbol,
+			Exchange:      exchange,
+			Direction:     "LONG",
+			Volume:        base.Position.LongQty,
+			AvgPrice:      base.Position.AvgLongPrice,
+			CurrentPrice:  currentPrice,
+			UnrealizedPnL: base.PNL.UnrealizedPnL,
+			LegIndex:      0,
+		})
+	}
+
+	if base.Position.IsShort() {
+		positions = append(positions, &PositionDetail{
+			StrategyID:    strategyID,
+			Symbol:        symbol,
+			Exchange:      exchange,
+			Direction:     "SHORT",
+			Volume:        base.Position.ShortQty,
+			AvgPrice:      base.Position.AvgShortPrice,
+			CurrentPrice:  currentPrice,
+			UnrealizedPnL: base.PNL.UnrealizedPnL,
+			LegIndex:      0,
 		})
 	}
 
