@@ -89,11 +89,15 @@ private:
         static double shared_base_price = 7950.0;  // Shared base price for correlation
         static double price_momentum = 0.0;         // Random walk component
 
-        bool is_symbol1 = (counter++ % 2 == 0);
-        if (is_symbol1) {
-            std::strncpy(md.symbol, "ag2602", sizeof(md.symbol));
+        int symbol_index = counter++ % 4;
+        if (symbol_index == 0) {
+            std::strncpy(md.symbol, "ag2603", sizeof(md.symbol));
+        } else if (symbol_index == 1) {
+            std::strncpy(md.symbol, "ag2605", sizeof(md.symbol));
+        } else if (symbol_index == 2) {
+            std::strncpy(md.symbol, "au2604", sizeof(md.symbol));
         } else {
-            std::strncpy(md.symbol, "ag2604", sizeof(md.symbol));
+            std::strncpy(md.symbol, "au2606", sizeof(md.symbol));
         }
         std::strncpy(md.exchange, "SHFE", sizeof(md.exchange));
         md.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -102,18 +106,30 @@ private:
         md.seq_num = ++m_seq_num;
 
         // 生成高度相关的价格（共享随机游走 + 小价差）
-        // Update shared price with random walk every other tick
-        if (is_symbol1) {
-            std::uniform_real_distribution<double> walk_dist(-0.2, 0.2);
-            price_momentum = 0.8 * price_momentum + walk_dist(m_rng);  // AR(1) process
-            shared_base_price += price_momentum;
+        // Update shared price with random walk
+        std::uniform_real_distribution<double> walk_dist(-0.2, 0.2);
+        price_momentum = 0.8 * price_momentum + walk_dist(m_rng);  // AR(1) process
+
+        // Choose base price depending on symbol type (ag vs au)
+        static double ag_price = 7950.0;  // Separate tracking for ag
+        static double au_price = 580.0;   // Separate tracking for au
+
+        double base_price;
+        double symbol_spread;
+        if (symbol_index <= 1) {  // ag symbols
+            ag_price += price_momentum;
+            base_price = ag_price;
+            symbol_spread = (symbol_index == 0) ? 0.0 : 1.5;  // ag2605 slightly higher
+        } else {  // au symbols
+            au_price += price_momentum * 0.1;  // Smaller movements for au
+            base_price = au_price;
+            symbol_spread = (symbol_index == 2) ? 0.0 : 0.5;  // au2606 slightly higher
         }
 
-        // Add small independent noise and spread between symbols
+        // Add small independent noise
         std::uniform_real_distribution<double> noise_dist(-0.05, 0.05);
-        double symbol_spread = is_symbol1 ? 0.0 : 1.5;  // ag2504 slightly higher
-        double base_bid = shared_base_price + symbol_spread + noise_dist(m_rng);
-        double base_ask = base_bid + 1.0;
+        double base_bid = base_price + symbol_spread + noise_dist(m_rng);
+        double base_ask = base_bid + ((symbol_index <= 1) ? 1.0 : 0.1);  // Narrower spread for au
 
         // 生成10档买卖盘
         for (int i = 0; i < 10; ++i) {

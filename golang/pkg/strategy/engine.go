@@ -306,7 +306,10 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 			// 1. Update LastMarketData for WebSocket push
 			if accessor, ok := s.(BaseStrategyAccessor); ok {
 				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
-					baseStrat.LastMarketData = md
+					if baseStrat.LastMarketData == nil {
+						baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
+					}
+					baseStrat.LastMarketData[md.GetSymbol()] = md
 				}
 			}
 
@@ -380,7 +383,10 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 			// Update LastMarketData for WebSocket push
 			if accessor, ok := s.(BaseStrategyAccessor); ok {
 				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
-					baseStrat.LastMarketData = md
+					if baseStrat.LastMarketData == nil {
+						baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
+					}
+					baseStrat.LastMarketData[md.GetSymbol()] = md
 				}
 			}
 

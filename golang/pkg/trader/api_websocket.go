@@ -166,6 +166,7 @@ func (h *WebSocketHub) run() {
 
 // periodicBroadcast sends data to all clients periodically
 func (h *WebSocketHub) periodicBroadcast() {
+	log.Printf("[WebSocket] periodicBroadcast() goroutine started")
 	ticker := time.NewTicker(1 * time.Second) // 1秒推送一次
 	defer ticker.Stop()
 
@@ -179,10 +180,13 @@ func (h *WebSocketHub) periodicBroadcast() {
 			clientCount := len(h.clients)
 			h.mu.RUnlock()
 
+			log.Printf("[WebSocket] Periodic broadcast tick, clients: %d", clientCount)
+
 			if clientCount == 0 {
 				continue // No clients, skip data collection
 			}
 
+			log.Printf("[WebSocket] Calling collectDashboardData()...")
 			data := h.collectDashboardData()
 			if data != nil {
 				h.broadcast <- &WebSocketMessage{
@@ -234,7 +238,9 @@ func (h *WebSocketHub) collectDashboardData() *DashboardWSUpdate {
 	}
 
 	// Collect market data for subscribed symbols
+	log.Printf("[WebSocket] About to call collectMarketData()")
 	update.MarketData = h.collectMarketData()
+	log.Printf("[WebSocket] collectMarketData() returned %d symbols", len(update.MarketData))
 
 	// Collect positions
 	update.Positions = h.collectPositions()
@@ -382,42 +388,57 @@ func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 	// Get all subscribed symbols and their latest market data
 	if h.trader.IsMultiStrategy() && h.trader.GetStrategyManager() != nil {
 		mgr := h.trader.GetStrategyManager()
+		strategyCount := 0
+		withMarketData := 0
+
 		mgr.ForEach(func(id string, strat strategy.Strategy) {
+			strategyCount++
 			if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
 				base := accessor.GetBaseStrategy()
-				if base != nil && base.LastMarketData != nil {
-					md := base.LastMarketData
-					symbol := md.GetSymbol()
-
-					// Only create snapshot if we haven't already for this symbol
-					if _, exists := marketData[symbol]; !exists {
-						snapshot := &MarketDataDetail{
-							Symbol:       symbol,
-							Exchange:     md.Exchange,
-							LastPrice:    md.LastPrice,
-							Volume:       int64(md.TotalVolume),
-							Turnover:     md.Turnover,
-							OpenInterest: 0, // Not available in protobuf
-							UpdateTime:   time.Unix(0, int64(md.Timestamp)).Format(time.RFC3339),
+				if base != nil {
+					if base.LastMarketData != nil && len(base.LastMarketData) > 0 {
+						withMarketData++
+						// Iterate through all market data in the map
+						for symbol, md := range base.LastMarketData {
+							// Only create snapshot if we haven't already for this symbol
+							if _, exists := marketData[symbol]; !exists {
+								snapshot := &MarketDataDetail{
+									Symbol:       symbol,
+									Exchange:     md.Exchange,
+									LastPrice:    md.LastPrice,
+									Volume:       int64(md.TotalVolume),
+									Turnover:     md.Turnover,
+									OpenInterest: 0, // Not available in protobuf
+									UpdateTime:   time.Unix(0, int64(md.Timestamp)).Format(time.RFC3339),
+								}
+								// Set bid/ask if available
+								if len(md.BidPrice) > 0 {
+									snapshot.BidPrice = md.BidPrice[0]
+								}
+								if len(md.AskPrice) > 0 {
+									snapshot.AskPrice = md.AskPrice[0]
+								}
+								if len(md.BidQty) > 0 {
+									snapshot.BidVolume = int64(md.BidQty[0])
+								}
+								if len(md.AskQty) > 0 {
+									snapshot.AskVolume = int64(md.AskQty[0])
+								}
+								marketData[symbol] = snapshot
+								log.Printf("[WebSocket] Collected market data for %s: LastPrice=%.2f", symbol, md.LastPrice)
+							}
 						}
-						// Set bid/ask if available
-						if len(md.BidPrice) > 0 {
-							snapshot.BidPrice = md.BidPrice[0]
-						}
-						if len(md.AskPrice) > 0 {
-							snapshot.AskPrice = md.AskPrice[0]
-						}
-						if len(md.BidQty) > 0 {
-							snapshot.BidVolume = int64(md.BidQty[0])
-						}
-						if len(md.AskQty) > 0 {
-							snapshot.AskVolume = int64(md.AskQty[0])
-						}
-						marketData[symbol] = snapshot
+					} else {
+						log.Printf("[WebSocket] Strategy %s has empty LastMarketData", id)
 					}
+				} else {
+					log.Printf("[WebSocket] Strategy %s has nil BaseStrategy", id)
 				}
 			}
 		})
+
+		log.Printf("[WebSocket] collectMarketData: checked %d strategies, %d have market data, collected %d symbols",
+			strategyCount, withMarketData, len(marketData))
 	}
 
 	return marketData
