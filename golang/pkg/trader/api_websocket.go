@@ -23,6 +23,7 @@ type DashboardWSUpdate struct {
 	Strategies map[string]*StrategyRealtimeData `json:"strategies"`
 	MarketData map[string]*MarketDataDetail     `json:"market_data"`
 	Positions  []*PositionDetail                `json:"positions"`
+	Orders     []*OrderDetail                   `json:"orders"`
 }
 
 // StrategyRealtimeData contains real-time strategy data including thresholds
@@ -71,6 +72,24 @@ type PositionDetail struct {
 	CurrentPrice  float64 `json:"current_price"`  // Current market price
 	UnrealizedPnL float64 `json:"unrealized_pnl"` // Unrealized P&L
 	LegIndex      int     `json:"leg_index"`      // For pairwise strategies: 1 or 2, 0 for single-leg
+}
+
+// OrderDetail contains detailed order information for dashboard
+type OrderDetail struct {
+	StrategyID   string  `json:"strategy_id"`   // Which strategy created this order
+	OrderID      string  `json:"order_id"`      // Order ID
+	Symbol       string  `json:"symbol"`        // Symbol
+	Exchange     string  `json:"exchange"`      // Exchange
+	Side         string  `json:"side"`          // BUY or SELL
+	OrderType    string  `json:"order_type"`    // LIMIT, MARKET, etc.
+	Status       string  `json:"status"`        // NEW, FILLED, CANCELED, REJECTED
+	Price        float64 `json:"price"`         // Order price
+	Quantity     int64   `json:"quantity"`      // Order quantity
+	FilledQty    int64   `json:"filled_qty"`    // Filled quantity
+	AvgPrice     float64 `json:"avg_price"`     // Average fill price
+	CreateTime   string  `json:"create_time"`   // Order creation time
+	UpdateTime   string  `json:"update_time"`   // Last update time
+	RejectReason string  `json:"reject_reason"` // Rejection reason if rejected
 }
 
 // WebSocketHub manages all websocket connections
@@ -256,6 +275,9 @@ func (h *WebSocketHub) collectDashboardData() *DashboardWSUpdate {
 
 	// Collect positions
 	update.Positions = h.collectPositions()
+
+	// Collect orders
+	update.Orders = h.collectOrders()
 
 	return update
 }
@@ -683,6 +705,100 @@ func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strate
 	}
 
 	return positions
+}
+
+// collectOrders collects all orders from all strategies
+func (h *WebSocketHub) collectOrders() []*OrderDetail {
+	orders := make([]*OrderDetail, 0)
+
+	if !h.trader.IsMultiStrategy() || h.trader.GetStrategyManager() == nil {
+		return orders
+	}
+
+	mgr := h.trader.GetStrategyManager()
+	mgr.ForEach(func(id string, strat strategy.Strategy) {
+		// Get base strategy to access Orders map
+		accessor, ok := strat.(strategy.BaseStrategyAccessor)
+		if !ok {
+			return
+		}
+
+		base := accessor.GetBaseStrategy()
+		if base == nil || base.Orders == nil {
+			return
+		}
+
+		// Iterate through all orders for this strategy
+		for orderID, orderUpdate := range base.Orders {
+			// Map order side
+			var side string
+			switch orderUpdate.Side {
+			case 1: // BUY
+				side = "BUY"
+			case 2: // SELL
+				side = "SELL"
+			default:
+				side = "UNKNOWN"
+			}
+
+			// Map order status
+			var status string
+			switch orderUpdate.Status {
+			case 1: // NEW
+				status = "NEW"
+			case 2: // PARTIAL
+				status = "PARTIAL"
+			case 3: // FILLED
+				status = "FILLED"
+			case 4: // CANCELED
+				status = "CANCELED"
+			case 5: // REJECTED
+				status = "REJECTED"
+			default:
+				status = "UNKNOWN"
+			}
+
+			// Map exchange enum to string
+			var exchange string
+			switch orderUpdate.Exchange {
+			case 1:
+				exchange = "SHFE"
+			case 2:
+				exchange = "DCE"
+			case 3:
+				exchange = "CZCE"
+			case 4:
+				exchange = "CFFEX"
+			case 5:
+				exchange = "INE"
+			default:
+				exchange = "UNKNOWN"
+			}
+
+			// Convert timestamps to readable format
+			createTime := time.Unix(0, int64(orderUpdate.Timestamp)).Format("15:04:05.000")
+			updateTime := createTime // Use same timestamp for now
+
+			orders = append(orders, &OrderDetail{
+				StrategyID:   id,
+				OrderID:      orderID,
+				Symbol:       orderUpdate.Symbol,
+				Exchange:     exchange,
+				Side:         side,
+				OrderType:    "LIMIT", // Default to LIMIT
+				Status:       status,
+				Price:        orderUpdate.Price,
+				Quantity:     orderUpdate.Quantity,
+				FilledQty:    orderUpdate.FilledQty,
+				AvgPrice:     orderUpdate.AvgPrice,
+				CreateTime:   createTime,
+				UpdateTime:   updateTime,
+				RejectReason: orderUpdate.ErrorMsg,
+			})
+		}
+	})
+
+	return orders
 }
 
 // HandleWebSocket handles websocket connections

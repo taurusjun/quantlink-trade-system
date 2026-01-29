@@ -468,6 +468,103 @@
         .position-pnl.positive { color: var(--success-color); }
         .position-pnl.negative { color: var(--danger-color); }
 
+        /* Orders */
+        .orders-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .order-item {
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: white;
+        }
+
+        .order-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .order-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 8px;
+        }
+
+        .order-symbol {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .order-strategy {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .order-status {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        .order-status.new {
+            background: #cce5ff;
+            color: #004085;
+        }
+
+        .order-status.partial {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .order-status.filled {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .order-status.canceled {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .order-status.rejected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .order-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            font-size: 12px;
+        }
+
+        .order-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+        }
+
+        .order-label {
+            color: var(--text-muted);
+        }
+
+        .order-value {
+            font-weight: 500;
+        }
+
+        .order-value.buy {
+            color: var(--success-color);
+        }
+
+        .order-value.sell {
+            color: var(--danger-color);
+        }
+
         /* Config Panel */
         .config-row {
             display: flex;
@@ -801,6 +898,51 @@
                     </div>
                 </div>
 
+                <!-- Orders Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Orders</h2>
+                        <span class="badge badge-secondary">{{ orderCount }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div v-if="orders.length === 0" class="empty-state">
+                            <div class="empty-state-icon">📝</div>
+                            <p>No orders</p>
+                        </div>
+                        <div v-else class="orders-list">
+                            <div v-for="order in orders" :key="order.order_id" class="order-item">
+                                <div class="order-header">
+                                    <div>
+                                        <div class="order-symbol">{{ order.symbol }}</div>
+                                        <div class="order-strategy">{{ order.strategy_id }}</div>
+                                    </div>
+                                    <span class="order-status" :class="getOrderStatusClass(order.status)">
+                                        {{ order.status }}
+                                    </span>
+                                </div>
+                                <div class="order-details">
+                                    <div class="order-info-row">
+                                        <span class="order-label">Side:</span>
+                                        <span class="order-value" :class="order.side.toLowerCase()">{{ order.side }}</span>
+                                    </div>
+                                    <div class="order-info-row">
+                                        <span class="order-label">Price:</span>
+                                        <span class="order-value">{{ order.price.toFixed(2) }}</span>
+                                    </div>
+                                    <div class="order-info-row">
+                                        <span class="order-label">Qty:</span>
+                                        <span class="order-value">{{ order.filled_qty }}/{{ order.quantity }}</span>
+                                    </div>
+                                    <div class="order-info-row">
+                                        <span class="order-label">Time:</span>
+                                        <span class="order-value">{{ order.create_time }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Quick Stats -->
                 <div class="card">
                     <div class="card-header">
@@ -857,6 +999,7 @@
 
                 const strategies = ref([]);
                 const positions = ref([]);
+                const orders = ref([]);
                 const marketData = ref({});
 
                 let refreshTimer = null;
@@ -865,6 +1008,7 @@
 
                 // Computed
                 const positionCount = computed(() => positions.value.length);
+                const orderCount = computed(() => orders.value.length);
 
                 // Methods
                 const getApiBase = () => `http://${apiHost.value}:${apiPort.value}/api/v1`;
@@ -904,6 +1048,10 @@
                         return Math.abs(value) < 10 ? value.toFixed(4) : value.toFixed(2);
                     }
                     return value;
+                };
+
+                const getOrderStatusClass = (status) => {
+                    return status.toLowerCase();
                 };
 
                 const filterIndicators = (indicators) => {
@@ -1104,6 +1252,11 @@
                     if (data.positions) {
                         positions.value = data.positions;
                     }
+
+                    // Update orders
+                    if (data.orders) {
+                        orders.value = data.orders;
+                    }
                 };
 
                 const connect = () => {
@@ -1264,8 +1417,10 @@
                     overview,
                     strategies,
                     positions,
+                    orders,
                     marketData,
                     positionCount,
+                    orderCount,
 
                     // Methods
                     connect,
@@ -1279,7 +1434,8 @@
                     getThresholdForIndicator,
                     isIndicatorMet,
                     getStatusBadgeClass,
-                    getStatusText
+                    getStatusText,
+                    getOrderStatusClass
                 };
             }
         }).mount('#app');
