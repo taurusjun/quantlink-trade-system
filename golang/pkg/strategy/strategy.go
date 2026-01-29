@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
@@ -118,6 +119,7 @@ type BaseStrategy struct {
 	PendingSignals     []*TradingSignal
 	Orders             map[string]*orspb.OrderUpdate              // order_id -> OrderUpdate
 	LastMarketData     map[string]*mdpb.MarketDataUpdate          // symbol -> Last market data (for WebSocket push)
+	MarketDataMu       sync.RWMutex                               // Protects LastMarketData map
 
 	// Concrete strategy instance (for parameter updates)
 	// This is set by concrete strategies in their constructors

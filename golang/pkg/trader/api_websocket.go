@@ -416,8 +416,13 @@ func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 			if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
 				base := accessor.GetBaseStrategy()
 				if base != nil {
-					if base.LastMarketData != nil && len(base.LastMarketData) > 0 {
+					base.MarketDataMu.RLock()
+					hasData := base.LastMarketData != nil && len(base.LastMarketData) > 0
+					base.MarketDataMu.RUnlock()
+
+					if hasData {
 						withMarketData++
+						base.MarketDataMu.RLock()
 						// Iterate through all market data in the map
 						for symbol, md := range base.LastMarketData {
 							// Only create snapshot if we haven't already for this symbol
@@ -448,6 +453,7 @@ func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 								log.Printf("[WebSocket] Collected market data for %s: LastPrice=%.2f", symbol, md.LastPrice)
 							}
 						}
+						base.MarketDataMu.RUnlock()
 					} else {
 						log.Printf("[WebSocket] Strategy %s has empty LastMarketData", id)
 					}
@@ -522,6 +528,7 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 	// Get current prices from LastMarketData
 	price1 := 0.0
 	price2 := 0.0
+	base.MarketDataMu.RLock()
 	if base.LastMarketData != nil {
 		if md1, ok := base.LastMarketData[base.Config.Symbols[0]]; ok {
 			price1 = md1.LastPrice
@@ -530,6 +537,7 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 			price2 = md2.LastPrice
 		}
 	}
+	base.MarketDataMu.RUnlock()
 
 	// Leg 1
 	if leg1Pos != 0 {
@@ -637,11 +645,13 @@ func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strate
 
 	// Get current price
 	currentPrice := 0.0
+	base.MarketDataMu.RLock()
 	if base.LastMarketData != nil {
 		if md, ok := base.LastMarketData[symbol]; ok {
 			currentPrice = md.LastPrice
 		}
 	}
+	base.MarketDataMu.RUnlock()
 
 	// Determine direction and collect position
 	if base.Position.IsLong() {
