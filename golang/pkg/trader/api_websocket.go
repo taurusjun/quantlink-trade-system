@@ -712,24 +712,44 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 	orders := make([]*OrderDetail, 0)
 
 	if !h.trader.IsMultiStrategy() || h.trader.GetStrategyManager() == nil {
+		log.Printf("[WebSocket] collectOrders: not multi-strategy or no manager")
 		return orders
 	}
 
 	mgr := h.trader.GetStrategyManager()
+	orderCount := 0
 	mgr.ForEach(func(id string, strat strategy.Strategy) {
 		// Get base strategy to access Orders map
 		accessor, ok := strat.(strategy.BaseStrategyAccessor)
 		if !ok {
+			log.Printf("[WebSocket] Strategy %s does not implement BaseStrategyAccessor", id)
 			return
 		}
 
 		base := accessor.GetBaseStrategy()
-		if base == nil || base.Orders == nil {
+		if base == nil {
+			log.Printf("[WebSocket] Strategy %s has nil base", id)
 			return
 		}
 
+		if base.Orders == nil {
+			log.Printf("[WebSocket] Strategy %s has nil Orders map", id)
+			return
+		}
+
+		stratOrderCount := len(base.Orders)
+		orderCount += stratOrderCount
+		log.Printf("[WebSocket] Strategy %s has %d orders", id, stratOrderCount)
+
 		// Iterate through all orders for this strategy
+		orderIdx := 0
 		for orderID, orderUpdate := range base.Orders {
+			// Debug: log first 3 orders
+			if orderIdx < 3 {
+				log.Printf("[WebSocket] DEBUG Order %s: Status=%d, Side=%d, Symbol=%s", orderID, orderUpdate.Status, orderUpdate.Side, orderUpdate.Symbol)
+			}
+			orderIdx++
+
 			// Map order side
 			var side string
 			switch orderUpdate.Side {
@@ -741,21 +761,35 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 				side = "UNKNOWN"
 			}
 
-			// Map order status
+			// Map order status (from protobuf OrderStatus enum)
 			var status string
+			if orderIdx < 5 {
+				log.Printf("[WebSocket] Order %s raw status value: %d", orderID, orderUpdate.Status)
+			}
 			switch orderUpdate.Status {
-			case 1: // NEW
-				status = "NEW"
-			case 2: // PARTIAL
+			case 1: // PENDING
+				status = "PENDING"
+			case 2: // SUBMITTED
+				status = "SUBMITTED"
+			case 3: // ACCEPTED
+				status = "ACCEPTED"
+			case 4: // PARTIALLY_FILLED
 				status = "PARTIAL"
-			case 3: // FILLED
+			case 5: // FILLED
 				status = "FILLED"
-			case 4: // CANCELED
+			case 6: // CANCELING
+				status = "CANCELING"
+			case 7: // CANCELED
 				status = "CANCELED"
-			case 5: // REJECTED
+			case 8: // REJECTED
 				status = "REJECTED"
+			case 9: // EXPIRED
+				status = "EXPIRED"
 			default:
 				status = "UNKNOWN"
+			}
+			if orderIdx < 5 {
+				log.Printf("[WebSocket] Order %s mapped to status: %s", orderID, status)
 			}
 
 			// Map exchange enum to string
@@ -798,6 +832,7 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 		}
 	})
 
+	log.Printf("[WebSocket] collectOrders: collected %d orders from %d total", len(orders), orderCount)
 	return orders
 }
 

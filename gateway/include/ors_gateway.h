@@ -45,9 +45,14 @@ struct OrderRequestRaw {
 
 // 订单响应（从共享内存读取）
 struct OrderResponseRaw {
+    char strategy_id[32];       // 策略ID
     char order_id[32];          // 系统订单ID
     char client_order_id[32];   // 客户端订单ID
     uint64_t client_token;      // 客户端Token
+
+    char symbol[16];            // 合约代码
+    char exchange[8];           // 交易所
+    uint8_t side;               // 买卖方向 (1=买, 2=卖)
 
     uint8_t status;             // 订单状态
     uint8_t error_code;         // 错误码

@@ -6,31 +6,34 @@
 # System Configuration
 # ═══════════════════════════════════════════════════════════
 system:
-  strategy_id: "test_92201"             # 策略唯一标识符（测试专用）
   mode: "live"                          # 运行模式: live, backtest, simulation
+  multi_strategy: true                  # 启用多策略模式（用于订单和持仓追踪）
 
 # ═══════════════════════════════════════════════════════════
-# Strategy Configuration
+# Strategy Configuration (Multi-Strategy Mode)
 # ═══════════════════════════════════════════════════════════
-strategy:
-  type: "pairwise_arb"                  # 策略类型: passive, aggressive, hedging, pairwise_arb
-  symbols:                              # 交易品种（配对交易需要两个）
-    - "ag2603"                          # 白银 2026年3月
-    - "ag2605"                          # 白银 2026年5月
-  exchanges:                            # 交易所
-    - "SHFE"                            # 上期所
-  max_position_size: 100                # 最大持仓数量
-  max_exposure: 1000000.0               # 最大风险敞口
+strategies:
+  - id: "test_92201"                    # 策略唯一标识符（测试专用）
+    type: "pairwise_arb"                # 策略类型: passive, aggressive, hedging, pairwise_arb
+    enabled: true                       # 是否启用此策略
+    allocation: 0.5                     # 资金分配比例 (50%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "ag2603"                        # 白银 2026年3月
+      - "ag2605"                        # 白银 2026年5月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 100              # 最大持仓数量
+    max_exposure: 1000000.0             # 最大风险敞口
 
-  # Strategy-specific parameters (策略特定参数)
-  parameters:
-    # Pairwise Arbitrage Strategy Parameters (配对套利策略参数)
-    spread_type: "difference"           # 价差类型: difference, ratio, log
-    lookback_period: 100.0              # 回看周期
-    entry_zscore: 0.5                   # 入场Z-Score阈值（降低以便测试）
-    exit_zscore: 0.2                    # 出场Z-Score阈值
-    order_size: 1.0                     # 每条腿的下单数量（测试用1手）
-    min_correlation: 0.5                # 最小相关系数（降低以便测试）
+    # Strategy-specific parameters (策略特定参数)
+    parameters:
+      # Pairwise Arbitrage Strategy Parameters (配对套利策略参数)
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 100.0            # 回看周期
+      entry_zscore: 0.5                 # 入场Z-Score阈值（降低以便测试）
+      exit_zscore: 0.2                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.5              # 最小相关系数（降低以便测试）
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <signal.h>
 #include <cstring>
+#include <map>
+#include <mutex>
 
 #include "counter_api.h"
 #include "simulated_counter.h"
@@ -13,10 +15,19 @@
 using OrderReqQueue = hft::shm::SPSCQueue<hft::ors::OrderRequestRaw, 4096>;
 using OrderRespQueue = hft::shm::SPSCQueue<hft::ors::OrderResponseRaw, 4096>;
 
+// 订单信息缓存
+struct CachedOrderInfo {
+    std::string symbol;
+    std::string exchange;
+    uint8_t side;
+};
+
 // 全局变量
 static std::atomic<bool> g_running{true};
 static std::unique_ptr<hft::counter::ICounterAPI> g_counter;
 static OrderRespQueue* g_response_queue = nullptr;
+static std::map<std::string, CachedOrderInfo> g_order_cache;  // order_id -> 订单信息
+static std::mutex g_cache_mutex;
 
 void SignalHandler(int signal) {
     std::cout << "\n[Main] Received signal " << signal << ", shutting down..." << std::endl;
@@ -42,14 +53,28 @@ public:
         , m_fill_count(0)
     {}
 
-    void OnOrderAccept(const std::string& order_id,
+    void OnOrderAccept(const std::string& strategy_id,
+                       const std::string& order_id,
                        const std::string& exchange_order_id) override {
         hft::ors::OrderResponseRaw resp;
         std::memset(&resp, 0, sizeof(resp));
 
         // 填充响应
+        std::strncpy(resp.strategy_id, strategy_id.c_str(), sizeof(resp.strategy_id) - 1);
         std::strncpy(resp.order_id, order_id.c_str(), sizeof(resp.order_id) - 1);
         std::strncpy(resp.client_order_id, order_id.c_str(), sizeof(resp.client_order_id) - 1);
+
+        // 从缓存中获取订单信息
+        {
+            std::lock_guard<std::mutex> lock(g_cache_mutex);
+            auto it = g_order_cache.find(order_id);
+            if (it != g_order_cache.end()) {
+                std::strncpy(resp.symbol, it->second.symbol.c_str(), sizeof(resp.symbol) - 1);
+                std::strncpy(resp.exchange, it->second.exchange.c_str(), sizeof(resp.exchange) - 1);
+                resp.side = it->second.side;
+            }
+        }
+
         resp.status = static_cast<uint8_t>(hft::ors::OrderStatus::ACCEPTED);
         resp.error_code = 0;
         resp.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -64,13 +89,15 @@ public:
         }
     }
 
-    void OnOrderReject(const std::string& order_id,
+    void OnOrderReject(const std::string& strategy_id,
+                      const std::string& order_id,
                       uint8_t error_code,
                       const std::string& error_msg) override {
         hft::ors::OrderResponseRaw resp;
         std::memset(&resp, 0, sizeof(resp));
 
         // 填充响应
+        std::strncpy(resp.strategy_id, strategy_id.c_str(), sizeof(resp.strategy_id) - 1);
         std::strncpy(resp.order_id, order_id.c_str(), sizeof(resp.order_id) - 1);
         std::strncpy(resp.client_order_id, order_id.c_str(), sizeof(resp.client_order_id) - 1);
         resp.status = static_cast<uint8_t>(hft::ors::OrderStatus::REJECTED);
@@ -89,7 +116,8 @@ public:
         }
     }
 
-    void OnOrderFilled(const std::string& order_id,
+    void OnOrderFilled(const std::string& strategy_id,
+                      const std::string& order_id,
                       const std::string& exec_id,
                       double price,
                       int64_t quantity,
@@ -98,9 +126,21 @@ public:
         std::memset(&resp, 0, sizeof(resp));
 
         // 填充响应
+        std::strncpy(resp.strategy_id, strategy_id.c_str(), sizeof(resp.strategy_id) - 1);
         std::strncpy(resp.order_id, order_id.c_str(), sizeof(resp.order_id) - 1);
         std::strncpy(resp.client_order_id, order_id.c_str(), sizeof(resp.client_order_id) - 1);
         std::strncpy(resp.exec_id, exec_id.c_str(), sizeof(resp.exec_id) - 1);
+
+        // 从缓存中获取订单信息
+        {
+            std::lock_guard<std::mutex> lock(g_cache_mutex);
+            auto it = g_order_cache.find(order_id);
+            if (it != g_order_cache.end()) {
+                std::strncpy(resp.symbol, it->second.symbol.c_str(), sizeof(resp.symbol) - 1);
+                std::strncpy(resp.exchange, it->second.exchange.c_str(), sizeof(resp.exchange) - 1);
+                resp.side = it->second.side;
+            }
+        }
 
         resp.status = static_cast<uint8_t>(hft::ors::OrderStatus::FILLED);
         resp.error_code = 0;
@@ -125,11 +165,13 @@ public:
         }
     }
 
-    void OnOrderCanceled(const std::string& order_id) override {
+    void OnOrderCanceled(const std::string& strategy_id,
+                        const std::string& order_id) override {
         hft::ors::OrderResponseRaw resp;
         std::memset(&resp, 0, sizeof(resp));
 
         // 填充响应
+        std::strncpy(resp.strategy_id, strategy_id.c_str(), sizeof(resp.strategy_id) - 1);
         std::strncpy(resp.order_id, order_id.c_str(), sizeof(resp.order_id) - 1);
         std::strncpy(resp.client_order_id, order_id.c_str(), sizeof(resp.client_order_id) - 1);
         resp.status = static_cast<uint8_t>(hft::ors::OrderStatus::CANCELED);
@@ -166,12 +208,33 @@ void RequestQueueReaderThread(OrderReqQueue* req_queue,
 
     while (g_running.load()) {
         if (req_queue->Pop(raw_req)) {
+            // 保存订单信息到缓存
+            {
+                std::lock_guard<std::mutex> lock(g_cache_mutex);
+                CachedOrderInfo info;
+                info.symbol = raw_req.symbol;
+                info.exchange = raw_req.exchange;
+                info.side = raw_req.side;
+                // 先用 client_order_id 作为 key，稍后收到 exchange order_id 时更新
+                g_order_cache[raw_req.client_order_id] = info;
+            }
+
             // 发送到柜台
             std::string order_id;
             int ret = counter->SendOrder(raw_req, order_id);
 
             if (ret == 0) {
                 read_count++;
+
+                // 用 exchange order_id 更新缓存
+                {
+                    std::lock_guard<std::mutex> lock(g_cache_mutex);
+                    auto it = g_order_cache.find(raw_req.client_order_id);
+                    if (it != g_order_cache.end()) {
+                        g_order_cache[order_id] = it->second;
+                        // 保留 client_order_id 的映射以便后续查找
+                    }
+                }
 
                 // 定期打印统计
                 auto now = std::chrono::steady_clock::now();
@@ -228,22 +291,20 @@ int main(int argc, char** argv) {
 
     // 1. 打开共享内存队列
     std::cout << "[Main] Opening request queue: " << req_queue_name << std::endl;
-    auto* req_queue_raw = hft::shm::ShmManager::CreateOrOpen(req_queue_name);
-    if (!req_queue_raw) {
+    auto* req_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderRequestRaw, 4096>(req_queue_name);
+    if (!req_queue) {
         std::cerr << "[Main] Failed to open request queue" << std::endl;
         return 1;
     }
-    auto* req_queue = reinterpret_cast<OrderReqQueue*>(req_queue_raw);
     std::cout << "[Main] Request queue ready" << std::endl;
 
     std::cout << "[Main] Creating response queue: " << resp_queue_name << std::endl;
-    auto* resp_queue_raw = hft::shm::ShmManager::CreateOrOpen(resp_queue_name);
-    if (!resp_queue_raw) {
+    auto* resp_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderResponseRaw, 4096>(resp_queue_name);
+    if (!resp_queue) {
         std::cerr << "[Main] Failed to create response queue" << std::endl;
-        munmap(req_queue_raw, sizeof(OrderReqQueue));
+        munmap(req_queue, sizeof(OrderReqQueue));
         return 1;
     }
-    auto* resp_queue = reinterpret_cast<OrderRespQueue*>(resp_queue_raw);
     g_response_queue = resp_queue;
     std::cout << "[Main] Response queue ready" << std::endl;
 
@@ -264,8 +325,8 @@ int main(int argc, char** argv) {
         g_counter = std::move(sim_counter);
     } else {
         std::cerr << "[Main] Unsupported counter type: " << counter_type << std::endl;
-        munmap(req_queue_raw, sizeof(OrderReqQueue));
-        munmap(resp_queue_raw, sizeof(OrderRespQueue));
+        munmap(req_queue, sizeof(OrderReqQueue));
+        munmap(resp_queue, sizeof(OrderRespQueue));
         return 1;
     }
 
@@ -276,8 +337,8 @@ int main(int argc, char** argv) {
     // 4. 连接Counter
     if (!g_counter->Connect()) {
         std::cerr << "[Main] Failed to connect to counter" << std::endl;
-        munmap(req_queue_raw, sizeof(OrderReqQueue));
-        munmap(resp_queue_raw, sizeof(OrderRespQueue));
+        munmap(req_queue, sizeof(OrderReqQueue));
+        munmap(resp_queue, sizeof(OrderRespQueue));
         return 1;
     }
 
@@ -314,8 +375,8 @@ int main(int argc, char** argv) {
 
     // 关闭共享内存
     std::cout << "[Main] Closing shared memory queues..." << std::endl;
-    munmap(req_queue_raw, sizeof(OrderReqQueue));
-    munmap(resp_queue_raw, sizeof(OrderRespQueue));
+    munmap(req_queue, sizeof(OrderReqQueue));
+    munmap(resp_queue, sizeof(OrderRespQueue));
 
     // 打印统计
     std::cout << "\n╔════════════════════════════════════════════════════════════╗" << std::endl;

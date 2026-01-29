@@ -19,23 +19,27 @@ public:
     virtual ~ICounterCallback() = default;
 
     // 订单接受
-    virtual void OnOrderAccept(const std::string& order_id,
+    virtual void OnOrderAccept(const std::string& strategy_id,
+                               const std::string& order_id,
                                const std::string& exchange_order_id) = 0;
 
     // 订单拒绝
-    virtual void OnOrderReject(const std::string& order_id,
+    virtual void OnOrderReject(const std::string& strategy_id,
+                              const std::string& order_id,
                               uint8_t error_code,
                               const std::string& error_msg) = 0;
 
     // 订单成交
-    virtual void OnOrderFilled(const std::string& order_id,
+    virtual void OnOrderFilled(const std::string& strategy_id,
+                              const std::string& order_id,
                               const std::string& exec_id,
                               double price,
                               int64_t quantity,
                               int64_t filled_qty) = 0;
 
     // 订单撤销确认
-    virtual void OnOrderCanceled(const std::string& order_id) = 0;
+    virtual void OnOrderCanceled(const std::string& strategy_id,
+                                const std::string& order_id) = 0;
 };
 
 // Counter API 抽象接口

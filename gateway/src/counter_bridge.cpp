@@ -31,10 +31,18 @@ using OrderReqQueue = hft::shm::SPSCQueue<hft::ors::OrderRequestRaw, 4096>;
 using OrderRespQueue = hft::shm::SPSCQueue<hft::ors::OrderResponseRaw, 4096>;
 using namespace hft::plugin;
 
+// 订单信息缓存结构
+struct CachedOrderInfo {
+    std::string client_order_id;
+    std::string symbol;
+    std::string exchange;
+    uint8_t side;  // 1=买, 2=卖
+};
+
 // 全局变量
 static std::atomic<bool> g_running{true};
 static OrderRespQueue* g_response_queue = nullptr;
-static std::map<std::string, std::string> g_order_map;  // 券商订单ID -> 客户端订单ID映射
+static std::map<std::string, CachedOrderInfo> g_order_map;  // 券商订单ID -> 订单信息映射
 static std::mutex g_orders_mutex;
 
 // 券商插件注册表
@@ -80,20 +88,27 @@ void OnBrokerOrderCallback(const OrderInfo& order_info) {
     hft::ors::OrderResponseRaw resp;
     std::memset(&resp, 0, sizeof(resp));
 
-    // 订单ID映射：券商订单ID -> 客户端订单ID
-    std::string client_order_id;
+    // 从缓存中获取订单信息
+    CachedOrderInfo cached_info;
     {
         std::lock_guard<std::mutex> lock(g_orders_mutex);
         auto it = g_order_map.find(order_info.order_id);
         if (it != g_order_map.end()) {
-            client_order_id = it->second;
+            cached_info = it->second;
         } else {
-            client_order_id = order_info.client_order_id;
+            // 如果缓存中没有，使用order_info中的信息（降级处理）
+            cached_info.client_order_id = order_info.client_order_id;
+            cached_info.symbol = order_info.symbol;
+            cached_info.exchange = "SHFE";  // 默认值
+            cached_info.side = 1;  // 默认买入
         }
     }
 
     std::strncpy(resp.order_id, order_info.order_id, sizeof(resp.order_id) - 1);
-    std::strncpy(resp.client_order_id, client_order_id.c_str(), sizeof(resp.client_order_id) - 1);
+    std::strncpy(resp.client_order_id, cached_info.client_order_id.c_str(), sizeof(resp.client_order_id) - 1);
+    std::strncpy(resp.symbol, cached_info.symbol.c_str(), sizeof(resp.symbol) - 1);
+    std::strncpy(resp.exchange, cached_info.exchange.c_str(), sizeof(resp.exchange) - 1);
+    resp.side = cached_info.side;
 
     // 状态映射：券商状态 -> ORS状态
     switch (order_info.status) {
@@ -395,10 +410,15 @@ void OrderRequestProcessor(OrderReqQueue* req_queue) {
                 if (!broker_order_id.empty()) {
                     g_stats.success_orders++;
 
-                    // 保存订单ID映射
+                    // 保存完整订单信息
                     {
                         std::lock_guard<std::mutex> lock(g_orders_mutex);
-                        g_order_map[broker_order_id] = raw_req.client_order_id;
+                        CachedOrderInfo info;
+                        info.client_order_id = raw_req.client_order_id;
+                        info.symbol = raw_req.symbol;
+                        info.exchange = raw_req.exchange;
+                        info.side = raw_req.side;
+                        g_order_map[broker_order_id] = info;
                     }
 
                     std::cout << "[Processor] ✅ Order sent, BrokerOrderID: " << broker_order_id << std::endl;

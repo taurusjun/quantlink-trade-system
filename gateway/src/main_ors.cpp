@@ -49,8 +49,28 @@ void PrintUsage(const char* prog_name) {
 
 // 转换函数：OrderResponseRaw -> OrderUpdate
 void ConvertToProtobuf(const hft::ors::OrderResponseRaw& raw_resp, hft::ors::OrderUpdate* proto_update) {
+    proto_update->set_strategy_id(raw_resp.strategy_id);
     proto_update->set_order_id(raw_resp.order_id);
     proto_update->set_client_order_id(raw_resp.client_order_id);
+
+    // 设置 symbol, exchange, side（新增）
+    proto_update->set_symbol(raw_resp.symbol);
+    // 将交易所字符串转换为枚举
+    std::string exchange_str(raw_resp.exchange);
+    if (exchange_str == "SHFE") {
+        proto_update->set_exchange(hft::common::Exchange::SHFE);
+    } else if (exchange_str == "DCE") {
+        proto_update->set_exchange(hft::common::Exchange::DCE);
+    } else if (exchange_str == "CZCE") {
+        proto_update->set_exchange(hft::common::Exchange::CZCE);
+    } else if (exchange_str == "CFFEX") {
+        proto_update->set_exchange(hft::common::Exchange::CFFEX);
+    } else if (exchange_str == "INE") {
+        proto_update->set_exchange(hft::common::Exchange::INE);
+    } else {
+        proto_update->set_exchange(hft::common::Exchange::UNKNOWN_EXCHANGE);
+    }
+    proto_update->set_side(static_cast<hft::ors::OrderSide>(raw_resp.side));
     proto_update->set_status(static_cast<hft::ors::OrderStatus>(raw_resp.status));
 
     proto_update->set_price(raw_resp.price);
@@ -190,13 +210,11 @@ int main(int argc, char** argv) {
 
     // 1. 创建/打开共享内存队列
     std::cout << "[Main] Creating request queue: " << req_queue_name << std::endl;
-    auto* req_queue_raw = hft::shm::ShmManager::CreateOrOpen(req_queue_name);
-    auto* req_queue = reinterpret_cast<OrderReqQueue*>(req_queue_raw);
+    auto* req_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderRequestRaw, 4096>(req_queue_name);
     std::cout << "[Main] Request queue ready" << std::endl;
 
     std::cout << "[Main] Creating response queue: " << resp_queue_name << std::endl;
-    auto* resp_queue_raw = hft::shm::ShmManager::CreateOrOpen(resp_queue_name);
-    auto* resp_queue = reinterpret_cast<OrderRespQueue*>(resp_queue_raw);
+    auto* resp_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderResponseRaw, 4096>(resp_queue_name);
     std::cout << "[Main] Response queue ready" << std::endl;
 
     // 2. 创建ORS Gateway实例
@@ -205,8 +223,8 @@ int main(int argc, char** argv) {
     // 3. 初始化Gateway
     if (!gateway->Initialize(config_file)) {
         std::cerr << "[Main] Failed to initialize ORS Gateway" << std::endl;
-        munmap(req_queue_raw, sizeof(OrderReqQueue));
-        munmap(resp_queue_raw, sizeof(OrderRespQueue));
+        munmap(req_queue, sizeof(OrderReqQueue));
+        munmap(resp_queue, sizeof(OrderRespQueue));
         return 1;
     }
 
@@ -243,8 +261,8 @@ int main(int argc, char** argv) {
         }
 
         gateway->Stop();
-        munmap(req_queue_raw, sizeof(OrderReqQueue));
-        munmap(resp_queue_raw, sizeof(OrderRespQueue));
+        munmap(req_queue, sizeof(OrderReqQueue));
+        munmap(resp_queue, sizeof(OrderRespQueue));
         return 1;
     }
 
@@ -282,8 +300,8 @@ int main(int argc, char** argv) {
 
     // 关闭共享内存
     std::cout << "[Main] Closing shared memory queues..." << std::endl;
-    munmap(req_queue_raw, sizeof(OrderReqQueue));
-    munmap(resp_queue_raw, sizeof(OrderRespQueue));
+    munmap(req_queue, sizeof(OrderReqQueue));
+    munmap(resp_queue, sizeof(OrderRespQueue));
 
     // 打印统计信息
     const auto& stats = gateway->GetStatistics();

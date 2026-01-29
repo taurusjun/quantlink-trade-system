@@ -406,6 +406,9 @@ void ORSGatewayImpl::PublishOrderUpdate(const OrderUpdate& update) {
         return;
     }
 
+    std::cout << "[ORSGateway] Publishing order update: " << subject
+              << " status=" << static_cast<int>(update.status()) << std::endl;
+
     PublishToNATS(subject, data);
 }
 

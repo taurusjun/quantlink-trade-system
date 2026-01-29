@@ -200,6 +200,52 @@ public:
         std::string shm_name = "/hft_md_" + name;
         shm_unlink(shm_name.c_str());
     }
+
+    // 通用的CreateOrOpen模板函数（支持任意SPSCQueue类型）
+    template<typename T, size_t S>
+    static SPSCQueue<T, S>* CreateOrOpenGeneric(const std::string& name, bool* is_creator = nullptr) {
+        using QueueType = SPSCQueue<T, S>;
+        std::string shm_name = "/hft_" + name;  // 使用通用前缀而不是md特定前缀
+
+        // 先尝试创建（O_EXCL确保只有第一个创建成功）
+        int fd = shm_open(shm_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+        bool created = (fd != -1);
+
+        if (!created) {
+            // 创建失败（已存在），则打开
+            fd = shm_open(shm_name.c_str(), O_RDWR, 0666);
+            if (fd == -1) {
+                throw std::runtime_error("Failed to open shared memory: " + shm_name);
+            }
+        } else {
+            // 创建成功，设置大小
+            if (ftruncate(fd, sizeof(QueueType)) == -1) {
+                close(fd);
+                shm_unlink(shm_name.c_str());
+                throw std::runtime_error("Failed to set shared memory size");
+            }
+        }
+
+        // 映射到进程地址空间
+        void* addr = mmap(nullptr, sizeof(QueueType), PROT_READ | PROT_WRITE,
+                         MAP_SHARED, fd, 0);
+        close(fd);
+
+        if (addr == MAP_FAILED) {
+            throw std::runtime_error("Failed to map shared memory");
+        }
+
+        if (is_creator) {
+            *is_creator = created;
+        }
+
+        // 如果是创建者，使用placement new初始化
+        if (created) {
+            return new (addr) QueueType();
+        } else {
+            return reinterpret_cast<QueueType*>(addr);
+        }
+    }
 };
 
 } // namespace shm

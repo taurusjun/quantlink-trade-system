@@ -437,8 +437,12 @@ func (se *StrategyEngine) subscribeOrderUpdates() error {
 	_, err := se.natsConn.Subscribe(subject, func(msg *nats.Msg) {
 		// Parse order update
 		var update orspb.OrderUpdate
-		// Note: Actual unmarshal implementation depends on protobuf version
-		_ = msg.Data
+		if err := proto.Unmarshal(msg.Data, &update); err != nil {
+			log.Printf("[StrategyEngine] Failed to unmarshal order update: %v", err)
+			return
+		}
+
+		log.Printf("[StrategyEngine] Received order update: %s, Status: %v", update.OrderId, update.Status)
 
 		// Dispatch to strategies
 		se.dispatchOrderUpdate(&update)

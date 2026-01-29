@@ -103,10 +103,11 @@ int SimulatedCounter::CancelOrder(const std::string& order_id) {
     std::cout << "[SimCounter] Cancel order: " << order_id << std::endl;
 
     // 简单模拟：延迟后回调撤单确认
+    // Note: In production, we'd need to look up strategy_id from order store
     if (m_callback) {
         std::thread([this, order_id]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            m_callback->OnOrderCanceled(order_id);
+            m_callback->OnOrderCanceled("", order_id);  // Strategy ID not available in cancel
         }).detach();
     }
 
@@ -183,7 +184,8 @@ void SimulatedCounter::SimulateAccept(const Order& order) {
 
     if (m_callback) {
         std::cout << "[SimCounter] Order accepted: " << order.order_id << std::endl;
-        m_callback->OnOrderAccept(order.order_id, order.order_id + "_EX");
+        std::string strategy_id(order.request.strategy_id);
+        m_callback->OnOrderAccept(strategy_id, order.order_id, order.order_id + "_EX");
     }
 }
 
@@ -201,7 +203,9 @@ void SimulatedCounter::SimulateFill(const Order& order) {
                   << " qty=" << order.request.quantity
                   << std::endl;
 
+        std::string strategy_id(order.request.strategy_id);
         m_callback->OnOrderFilled(
+            strategy_id,
             order.order_id,
             exec_id,
             order.request.price,
@@ -217,7 +221,8 @@ void SimulatedCounter::SimulateReject(const Order& order) {
 
     if (m_callback) {
         std::cout << "[SimCounter] Order rejected: " << order.order_id << std::endl;
-        m_callback->OnOrderReject(order.order_id, 99, "Simulated rejection");
+        std::string strategy_id(order.request.strategy_id);
+        m_callback->OnOrderReject(strategy_id, order.order_id, 99, "Simulated rejection");
     }
 }
 

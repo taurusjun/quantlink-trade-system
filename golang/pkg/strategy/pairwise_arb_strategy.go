@@ -416,8 +416,35 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 		return
 	}
 
-	// Update position based on order status
+	// Update base strategy position (for overall PNL tracking)
 	pas.UpdatePosition(update)
+
+	// Update leg-specific positions for pairwise arbitrage
+	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
+		symbol := update.Symbol
+		qty := int64(update.FilledQty)
+
+		// Determine which leg this order belongs to
+		if symbol == pas.symbol1 {
+			// Update leg1 position
+			if update.Side == orspb.OrderSide_BUY {
+				pas.leg1Position += qty
+			} else if update.Side == orspb.OrderSide_SELL {
+				pas.leg1Position -= qty
+			}
+			log.Printf("[PairwiseArb:%s] Leg1 position updated: %s %s %d -> total: %d",
+				pas.ID, symbol, update.Side, qty, pas.leg1Position)
+		} else if symbol == pas.symbol2 {
+			// Update leg2 position
+			if update.Side == orspb.OrderSide_BUY {
+				pas.leg2Position += qty
+			} else if update.Side == orspb.OrderSide_SELL {
+				pas.leg2Position -= qty
+			}
+			log.Printf("[PairwiseArb:%s] Leg2 position updated: %s %s %d -> total: %d",
+				pas.ID, symbol, update.Side, qty, pas.leg2Position)
+		}
+	}
 }
 
 // OnTimer handles timer events
