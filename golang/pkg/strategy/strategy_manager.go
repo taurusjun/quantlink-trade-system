@@ -620,3 +620,87 @@ func (sm *StrategyManager) ForEach(fn func(id string, strategy Strategy)) {
 func (sm *StrategyManager) GetLastUpdateTime() time.Time {
 	return time.Now() // TODO: 实现真实的最后更新时间追踪
 }
+
+// ==================== Model 热加载 ====================
+
+// ReloadStrategyModel 重载单个策略的Model参数
+func (sm *StrategyManager) ReloadStrategyModel(strategyID string) error {
+	sm.mu.RLock()
+	strategy, exists := sm.strategies[strategyID]
+	cfg, cfgExists := sm.configs[strategyID]
+	sm.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("strategy %s not found", strategyID)
+	}
+
+	if !cfgExists || cfg.ModelFile == "" {
+		return fmt.Errorf("strategy %s has no model file configured", strategyID)
+	}
+
+	if !cfg.HotReload.Enabled {
+		return fmt.Errorf("strategy %s hot reload is not enabled", strategyID)
+	}
+
+	log.Printf("[StrategyManager] Reloading model for strategy %s from %s", strategyID, cfg.ModelFile)
+
+	// 解析model文件
+	parser := &config.ModelFileParser{FilePath: cfg.ModelFile}
+	newParams, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf("failed to parse model file: %w", err)
+	}
+
+	// 转换参数
+	strategyParams := config.ConvertModelToStrategyParams(newParams)
+
+	// 应用参数到策略
+	if accessor, ok := strategy.(BaseStrategyAccessor); ok {
+		baseStrategy := accessor.GetBaseStrategy()
+		if baseStrategy != nil {
+			if err := baseStrategy.UpdateParameters(strategyParams); err != nil {
+				return fmt.Errorf("failed to update parameters: %w", err)
+			}
+		}
+	} else {
+		return fmt.Errorf("strategy does not support parameter updates")
+	}
+
+	log.Printf("[StrategyManager] ✓ Strategy %s model reloaded successfully", strategyID)
+	return nil
+}
+
+// GetStrategyModelStatus 获取策略Model状态
+func (sm *StrategyManager) GetStrategyModelStatus(strategyID string) (map[string]interface{}, error) {
+	sm.mu.RLock()
+	cfg, exists := sm.configs[strategyID]
+	sm.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("strategy %s not found", strategyID)
+	}
+
+	if cfg.ModelFile == "" {
+		return map[string]interface{}{
+			"enabled": false,
+			"message": "Model file not configured",
+		}, nil
+	}
+
+	// 获取文件信息
+	fileInfo, err := config.GetFileInfo(cfg.ModelFile)
+	if err != nil {
+		return map[string]interface{}{
+			"enabled":    cfg.HotReload.Enabled,
+			"model_file": cfg.ModelFile,
+			"error":      fmt.Sprintf("Failed to stat file: %v", err),
+		}, nil
+	}
+
+	return map[string]interface{}{
+		"enabled":       cfg.HotReload.Enabled,
+		"model_file":    cfg.ModelFile,
+		"last_mod_time": fileInfo.ModTime(),
+		"file_size":     fileInfo.Size(),
+	}, nil
+}

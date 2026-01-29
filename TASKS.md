@@ -1,7 +1,7 @@
 # QuantlinkTrader 任务跟踪
 
-**最后更新**: 2026-01-29 00:15
-**当前阶段**: P2 阶段进行中，P2-12.1 多策略管理器完成
+**最后更新**: 2026-01-29 16:00
+**当前阶段**: P2 阶段进行中，P2-12完成，P2-13热加载核心完成+PassiveStrategy完成
 
 ---
 
@@ -240,6 +240,442 @@
 
 ---
 
+### 🆕 Model热加载功能 ⭐⭐⭐⭐⭐
+
+#### 任务 P2-13: Model参数热加载
+- **状态**: 🔄 进行中
+- **优先级**: P2-High
+- **预计工作量**: 3-5天
+- **已完成日期**: 2026-01-29 (核心功能)
+- **实际工作量**: 0.5天 (核心实现)
+
+**核心功能已完成** ✅:
+- [x] 多策略模式热加载API设计
+- [x] StrategyManager集成热加载方法
+- [x] PairwiseArbStrategy热加载支持 (2026-01-29)
+- [x] PassiveStrategy热加载支持 (2026-01-29)
+- [x] Model文件解析器
+- [x] 参数验证和回滚机制
+- [x] Model状态查询API
+- [x] 多策略端到端测试验证
+
+**实现成果**:
+- API端点: `POST /api/v1/strategies/{id}/model/reload`
+- API端点: `GET /api/v1/strategies/{id}/model/status`
+- 延迟: <100ms (ag_pairwise: 17ms, ag_passive: 15ms)
+- 并发安全: RWMutex保护
+- 测试状态: ✅ 端到端测试通过
+- 文档:
+  - `docs/多策略热加载实现报告_2026-01-29-15_35.md`
+  - `docs/PassiveStrategy热加载实现报告_2026-01-29-15_45.md`
+  - `docs/多策略热加载端到端测试报告_2026-01-29-15_50.md`
+
+**待完成子任务**:
+
+##### P2-13.1: PassiveStrategy热加载支持 ✅
+- **状态**: ✅ 已完成
+- **完成日期**: 2026-01-29
+- **优先级**: P2-High
+- **实际工作量**: 0.5天
+- **内容**:
+  - [x] 实现PassiveStrategy的ApplyParameters()接口
+  - [x] 添加参数验证逻辑（范围检查、回滚机制）
+  - [x] 测试参数更新流程（端到端测试通过）
+- **实现文件**:
+  - `golang/pkg/strategy/passive_strategy.go` - ApplyParameters() & GetCurrentParameters()
+  - **新增**: ~165行代码（互斥锁、验证、日志）
+- **文档**: `docs/PassiveStrategy热加载实现报告_2026-01-29-15_45.md`
+
+##### P2-13.2: AggressiveStrategy热加载支持 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Medium
+- **预计工作量**: 0.5天
+- **内容**:
+  - [ ] 实现AggressiveStrategy的ApplyParameters()接口
+  - [ ] 添加参数验证逻辑
+  - [ ] 测试参数更新流程
+
+##### P2-13.3: HedgingStrategy热加载支持 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Medium
+- **预计工作量**: 0.5天
+- **内容**:
+  - [ ] 实现HedgingStrategy的ApplyParameters()接口
+  - [ ] 添加参数验证逻辑
+  - [ ] 测试参数更新流程
+
+##### P2-13.4: 热加载历史记录追踪 ⏳
+- **状态**: ⏳ 待开始（暂缓实施）
+- **优先级**: P2-High
+- **预计工作量**: 1-2天
+- **依赖**: P2-13.7 Dashboard UI (用于展示历史记录)
+
+**功能目标**:
+- 追踪所有参数热加载操作
+- 提供历史记录查询和对比
+- 支持审计和回滚
+
+**数据结构设计**:
+```go
+// golang/pkg/strategy/model_history.go
+
+type ModelReloadHistory struct {
+    ID            string                 // 唯一ID
+    StrategyID    string                 // 策略ID
+    Timestamp     time.Time              // 操作时间
+    Operator      string                 // 操作者（API/User/System）
+    Source        string                 // 来源（UI/API/File）
+
+    // 参数变更
+    OldParameters map[string]interface{} // 旧参数
+    NewParameters map[string]interface{} // 新参数
+    ChangedFields []string               // 变更字段列表
+
+    // 操作结果
+    Success       bool                   // 是否成功
+    ErrorMessage  string                 // 错误信息（如果失败）
+    ApplyDuration time.Duration          // 应用耗时
+
+    // 元数据
+    ModelFile     string                 // Model文件路径
+    FileModTime   time.Time              // 文件修改时间
+    RequestIP     string                 // 请求IP（如果通过API）
+}
+
+type ModelHistoryManager struct {
+    mu           sync.RWMutex
+    histories    map[string][]*ModelReloadHistory // strategyID -> histories
+    maxRecords   int                              // 每个策略最大记录数
+    persistence  HistoryPersistence               // 持久化接口
+}
+```
+
+**存储方案**:
+
+**方案A: 内存存储（推荐v1.0）**:
+- 优点: 简单快速，无IO开销
+- 缺点: 重启后丢失
+- 实现: `map[string][]*ModelReloadHistory`
+- 容量: 每个策略保留最近100条记录
+
+**方案B: 文件存储（推荐v2.0）**:
+- 优点: 持久化，支持审计
+- 缺点: 需要处理文件IO
+- 实现: JSON Lines格式
+- 路径: `log/model_reload_history.jsonl`
+- 轮转: 按天轮转，保留30天
+
+**方案C: 数据库存储（可选v3.0）**:
+- 优点: 支持复杂查询
+- 缺点: 引入外部依赖
+- 实现: SQLite/PostgreSQL
+
+**API端点设计**:
+
+```go
+// GET /api/v1/strategies/{id}/model/history
+// 查询历史记录
+type HistoryQueryParams struct {
+    Limit     int       // 返回数量（默认20，最大100）
+    Offset    int       // 偏移量
+    StartTime time.Time // 开始时间
+    EndTime   time.Time // 结束时间
+    Success   *bool     // 成功/失败过滤（null=全部）
+}
+
+// GET /api/v1/strategies/{id}/model/history/{historyId}
+// 获取单条历史详情
+
+// POST /api/v1/strategies/{id}/model/rollback/{historyId}
+// 回滚到某个历史版本（可选功能）
+```
+
+**响应格式**:
+```json
+{
+  "success": true,
+  "data": {
+    "total": 45,
+    "records": [
+      {
+        "id": "hist_20260129154900_abc123",
+        "strategy_id": "ag_pairwise",
+        "timestamp": "2026-01-29T15:49:00+08:00",
+        "operator": "API",
+        "source": "Dashboard",
+        "changes": [
+          {
+            "field": "entry_zscore",
+            "old_value": 2.0,
+            "new_value": 1.0
+          },
+          {
+            "field": "order_size",
+            "old_value": 4,
+            "new_value": 8
+          }
+        ],
+        "success": true,
+        "apply_duration_ms": 17
+      }
+    ]
+  }
+}
+```
+
+**Dashboard UI集成**:
+
+在P2-13.7的模态框中显示：
+```
+┌──────────────────────────────────────┐
+│ ⚙️ Configure ag_pairwise             │
+├──────────────────────────────────────┤
+│ 📊 Strategy Parameters               │
+│ [参数编辑表单]                        │
+├──────────────────────────────────────┤
+│ 📝 Recent Changes (last 5)           │
+│ ┌──────────────────────────────────┐ │
+│ │ 2026-01-29 15:49:00              │ │
+│ │ Entry: 2.0 → 1.0                 │ │
+│ │ Size: 4 → 8                      │ │
+│ │ ✅ Success (17ms)                │ │
+│ ├──────────────────────────────────┤ │
+│ │ 2026-01-29 15:42:39              │ │
+│ │ Size: 2 → 4                      │ │
+│ │ ✅ Success (15ms)                │ │
+│ └──────────────────────────────────┘ │
+│ [View Full History]                  │
+├──────────────────────────────────────┤
+│ [Cancel] [Apply & Reload]            │
+└──────────────────────────────────────┘
+```
+
+**实现步骤**:
+
+**Step 1: 核心数据结构（2小时）**:
+- [ ] 定义ModelReloadHistory结构
+- [ ] 实现ModelHistoryManager
+- [ ] 内存存储实现
+- [ ] 添加记录/查询方法
+
+**Step 2: API端点（2小时）**:
+- [ ] GET /api/v1/strategies/{id}/model/history
+- [ ] 查询参数解析和验证
+- [ ] 分页和过滤实现
+- [ ] 响应格式化
+
+**Step 3: 集成到热加载流程（1小时）**:
+- [ ] 在StrategyManager.ReloadStrategyModel()中记录历史
+- [ ] 捕获参数变更对比
+- [ ] 记录成功/失败状态
+- [ ] 记录耗时
+
+**Step 4: 单元测试（2小时）**:
+- [ ] 历史记录添加测试
+- [ ] 查询和过滤测试
+- [ ] 分页测试
+- [ ] 容量限制测试
+
+**高级功能（可选）**:
+- [ ] 参数回滚功能
+- [ ] 导出历史记录（CSV/JSON）
+- [ ] 历史记录可视化（时间线图表）
+- [ ] 变更频率统计
+
+**安全考虑**:
+- [ ] 记录操作者信息（IP、用户）
+- [ ] 敏感参数脱敏（如API Key）
+- [ ] 访问权限控制
+- [ ] 历史记录防篡改（可选：签名）
+
+**性能优化**:
+- 使用环形缓冲区控制内存使用
+- 异步持久化避免阻塞热加载
+- 历史查询添加索引（如使用数据库）
+- 旧记录定期清理/归档
+
+##### P2-13.5: 参数版本管理 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 1-2天
+- **内容**:
+  - [ ] 参数版本号机制
+  - [ ] 版本回滚功能
+  - [ ] 版本对比功能
+  - [ ] 参数快照管理
+
+##### P2-13.6: 批量热加载API ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 0.5天
+- **内容**:
+  - [ ] POST /api/v1/model/reload/batch 端点
+  - [ ] 支持多策略同时热加载
+  - [ ] 失败策略报告
+
+##### P2-13.7: Dashboard集成热加载控制 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Medium
+- **预计工作量**: 3-4天
+- **设计方案**: 模态对话框 + 内联显示混合方案
+- **技术栈**: Vue 3, 原生Modal, 表单验证
+
+**Phase 1: 核心功能（2小时）**:
+  - [ ] 新增API: `GET /api/v1/strategies/{id}/parameters` - 查询当前参数
+  - [ ] 新增API: `POST /api/v1/strategies/{id}/parameters` - 直接更新参数（可选）
+  - [ ] 策略卡片显示关键参数（只读，内联展示）
+  - [ ] 添加"⚙️ Configure"按钮
+  - [ ] 模态对话框参数编辑表单
+  - [ ] 前端参数验证（类型、范围）
+  - [ ] 调用热加载API应用参数
+  - [ ] Toast提示（成功/失败）
+
+**Phase 2: 增强功能（1小时）**:
+  - [ ] 参数变更预览（对比修改前后）
+  - [ ] 热加载历史记录显示（最近5条）
+  - [ ] 后端参数验证（业务规则）
+  - [ ] 参数持久化选项（是否写回Model文件）
+
+**Phase 3: 高级功能（可选，1-2天）**:
+  - [ ] 参数模板保存/加载
+  - [ ] 批量热加载（多个策略）
+  - [ ] A/B测试支持
+  - [ ] 参数优化建议
+
+**UI设计**:
+```
+策略卡片
+├── Indicators (保留)
+├── Key Parameters (新增，只读)
+│   ├── Entry: 2.0
+│   ├── Exit: 0.5
+│   └── Size: 4
+└── [Activate] [Deactivate] [⚙️ Config]
+     ↓ 点击Config打开模态框
+┌──────────────────────────────────────┐
+│ ⚙️ Configure ag_pairwise             │
+├──────────────────────────────────────┤
+│ 📊 Strategy Parameters               │
+│ Entry Z-Score     [2.0    ]         │
+│ Exit Z-Score      [0.5    ]         │
+│ Order Size        [4      ]         │
+│ Max Position Size [50     ]         │
+├──────────────────────────────────────┤
+│ 📝 Recent Changes (last 5)           │
+│ • 2026-01-29 15:49 Entry: 2.0→1.0    │
+├──────────────────────────────────────┤
+│ [Cancel] [Preview] [Apply & Reload]  │
+└──────────────────────────────────────┘
+```
+
+**参数验证规则**:
+```javascript
+// 不同策略类型的参数约束
+parameterRules = {
+  'pairwise_arb': {
+    entry_zscore: { min: 0.5, max: 5.0, step: 0.1 },
+    exit_zscore: { min: 0.1, max: 2.0, step: 0.1 },
+    order_size: { min: 1, max: 100, step: 1 },
+    max_position_size: { min: 1, max: 1000, step: 1 }
+  },
+  'passive': {
+    order_size: { min: 1, max: 100, step: 1 },
+    spread_multiplier: { min: 0.1, max: 2.0, step: 0.1 }
+  }
+}
+```
+
+**需要讨论的问题**:
+1. 参数修改方式: 修改Model文件 vs 直接API传参
+2. 参数持久化: 是否写回Model文件
+3. 权限控制: 是否需要登录认证
+4. 多用户冲突: 同时修改参数的处理
+
+**热加载任务总工作量**: 3-5天 → **已完成1天** (核心+PassiveStrategy)
+- **已完成**: P2-13核心 + P2-13.1 PassiveStrategy (1天)
+- **剩余**: P2-13.2~P2-13.7 (2-4天)
+
+---
+
+### 🆕 Dashboard功能增强 ⭐⭐⭐
+
+#### 任务 P2-14: Dashboard UI/UX改进
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 5-8天
+
+**已完成** ✅:
+- [x] 基础Dashboard (vue3, 实时监控)
+- [x] 策略卡片展示
+- [x] 条件高亮和动画
+- [x] 持仓显示
+
+**待完成子任务**:
+
+##### P2-14.1: 图表可视化 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 2-3天
+- **内容**:
+  - [ ] 集成ECharts/Chart.js
+  - [ ] K线图展示
+  - [ ] 指标曲线图（Z-Score, 相关系数等）
+  - [ ] PnL曲线图
+  - [ ] 持仓分布饼图
+
+##### P2-14.2: 历史交易记录 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 1-2天
+- **内容**:
+  - [ ] 交易历史表格
+  - [ ] 订单状态追踪
+  - [ ] 成交明细
+  - [ ] 导出CSV功能
+
+##### P2-14.3: 风险警告阈值设置 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Medium
+- **预计工作量**: 1天
+- **内容**:
+  - [ ] 风险阈值配置界面
+  - [ ] 超限告警显示
+  - [ ] 止损止盈设置
+  - [ ] 最大持仓限制
+
+##### P2-14.4: WebSocket实时推送 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Medium
+- **预计工作量**: 1-2天
+- **内容**:
+  - [ ] WebSocket服务端实现
+  - [ ] 前端WebSocket客户端
+  - [ ] 替代当前轮询机制
+  - [ ] 降低延迟到<1秒
+
+##### P2-14.5: 暗色主题 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 0.5天
+- **内容**:
+  - [ ] 暗色主题CSS
+  - [ ] 主题切换按钮
+  - [ ] 保存用户偏好
+
+##### P2-14.6: 策略参数编辑 ⏳
+- **状态**: ⏳ 待开始
+- **优先级**: P2-Low
+- **预计工作量**: 1天
+- **内容**:
+  - [ ] 参数编辑表单
+  - [ ] 结合P2-13热加载功能
+  - [ ] 参数验证
+  - [ ] 预览参数变化
+
+**Dashboard改进总工作量**: 5-8天
+
+---
+
 ### 第二优先级：策略库扩展 ⭐⭐⭐⭐
 
 #### 任务 P2-4: 跨品种套利策略
@@ -330,6 +766,12 @@
 
 | 日期 | 更新内容 |
 |------|---------|
+| 2026-01-29 16:00 | P2-13.7 Dashboard热加载UI任务详细方案设计完成（3个Phase） |
+| 2026-01-29 16:00 | P2-13.1 PassiveStrategy热加载完成（端到端测试通过） |
+| 2026-01-29 15:50 | 完成多策略热加载端到端测试（ag_pairwise & ag_passive验证） |
+| 2026-01-29 15:40 | 新增P2-13 Model热加载任务（7子任务），核心功能已完成 |
+| 2026-01-29 15:40 | 新增P2-14 Dashboard功能增强任务（6子任务） |
+| 2026-01-29 15:35 | P2-13核心热加载功能完成（多策略、API、状态查询） |
 | 2026-01-29 01:30 | **P2-12 交易员页面全部完成**（7子任务，2天，预估8-12天） |
 | 2026-01-29 01:15 | P2-12.7 联调测试完成（7个API测试用例） |
 | 2026-01-29 01:00 | P2-12.3~P2-12.6 前端页面完成（dashboard.html，Vue3） |

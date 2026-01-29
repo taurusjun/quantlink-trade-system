@@ -3,6 +3,7 @@ package strategy
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
@@ -28,6 +29,8 @@ type PassiveStrategy struct {
 	currentMarketState *MarketState
 	bidOrderID        string
 	askOrderID        string
+
+	mu sync.RWMutex
 }
 
 // NewPassiveStrategy creates a new passive strategy
@@ -43,6 +46,10 @@ func NewPassiveStrategy(id string) *PassiveStrategy {
 		orderRefreshMs:    1000,
 		useOrderImbalance: true,
 	}
+
+	// 设置具体策略实例，用于参数热加载
+	ps.BaseStrategy.SetConcreteStrategy(ps)
+
 	return ps
 }
 
@@ -344,4 +351,143 @@ func (ps *PassiveStrategy) GetStrategyInfo() string {
 		ps.orderRefreshMs,
 		ps.useOrderImbalance,
 	)
+}
+
+// ApplyParameters 应用新参数（实现 ParameterUpdatable 接口）
+func (ps *PassiveStrategy) ApplyParameters(params map[string]interface{}) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	log.Printf("[PassiveStrategy:%s] Applying new parameters...", ps.ID)
+
+	// 保存旧参数（用于日志和回滚）
+	oldSpreadMultiplier := ps.spreadMultiplier
+	oldOrderSize := ps.orderSize
+	oldMaxInventory := ps.maxInventory
+	oldInventorySkew := ps.inventorySkew
+	oldMinSpread := ps.minSpread
+	oldOrderRefreshMs := ps.orderRefreshMs
+
+	// 更新参数
+	updated := false
+
+	if val, ok := params["spread_multiplier"].(float64); ok {
+		ps.spreadMultiplier = val
+		updated = true
+	}
+	if val, ok := params["order_size"].(int); ok {
+		ps.orderSize = int64(val)
+		updated = true
+	} else if val, ok := params["order_size"].(float64); ok {
+		ps.orderSize = int64(val)
+		updated = true
+	}
+	if val, ok := params["max_inventory"].(int); ok {
+		ps.maxInventory = int64(val)
+		updated = true
+	} else if val, ok := params["max_inventory"].(float64); ok {
+		ps.maxInventory = int64(val)
+		updated = true
+	}
+	if val, ok := params["inventory_skew"].(float64); ok {
+		ps.inventorySkew = val
+		updated = true
+	}
+	if val, ok := params["min_spread"].(float64); ok {
+		ps.minSpread = val
+		updated = true
+	}
+	if val, ok := params["order_refresh_ms"].(int); ok {
+		ps.orderRefreshMs = int64(val)
+		updated = true
+	} else if val, ok := params["order_refresh_ms"].(float64); ok {
+		ps.orderRefreshMs = int64(val)
+		updated = true
+	}
+	if val, ok := params["use_order_imbalance"].(bool); ok {
+		ps.useOrderImbalance = val
+		updated = true
+	}
+
+	if !updated {
+		return fmt.Errorf("no valid parameters found to update")
+	}
+
+	// 参数验证
+	if ps.spreadMultiplier <= 0 || ps.spreadMultiplier > 2.0 {
+		ps.spreadMultiplier = oldSpreadMultiplier
+		return fmt.Errorf("invalid spread_multiplier (%.2f), must be in (0, 2.0]", ps.spreadMultiplier)
+	}
+
+	if ps.orderSize <= 0 {
+		ps.orderSize = oldOrderSize
+		return fmt.Errorf("invalid order_size (%d), must be > 0", ps.orderSize)
+	}
+
+	if ps.maxInventory <= 0 || ps.orderSize > ps.maxInventory {
+		ps.orderSize = oldOrderSize
+		ps.maxInventory = oldMaxInventory
+		return fmt.Errorf("invalid max_inventory (%d) or order_size (%d), order_size must be <= max_inventory",
+			ps.maxInventory, ps.orderSize)
+	}
+
+	if ps.inventorySkew < 0 || ps.inventorySkew > 1.0 {
+		ps.inventorySkew = oldInventorySkew
+		return fmt.Errorf("invalid inventory_skew (%.2f), must be in [0, 1.0]", ps.inventorySkew)
+	}
+
+	if ps.minSpread < 0 {
+		ps.minSpread = oldMinSpread
+		return fmt.Errorf("invalid min_spread (%.2f), must be >= 0", ps.minSpread)
+	}
+
+	if ps.orderRefreshMs < 100 {
+		ps.orderRefreshMs = oldOrderRefreshMs
+		return fmt.Errorf("invalid order_refresh_ms (%d), must be >= 100ms", ps.orderRefreshMs)
+	}
+
+	// 输出变更日志
+	log.Printf("[PassiveStrategy:%s] ✓ Parameters updated:", ps.ID)
+	if oldSpreadMultiplier != ps.spreadMultiplier {
+		log.Printf("[PassiveStrategy:%s]   spread_multiplier: %.2f -> %.2f",
+			ps.ID, oldSpreadMultiplier, ps.spreadMultiplier)
+	}
+	if oldOrderSize != ps.orderSize {
+		log.Printf("[PassiveStrategy:%s]   order_size: %d -> %d",
+			ps.ID, oldOrderSize, ps.orderSize)
+	}
+	if oldMaxInventory != ps.maxInventory {
+		log.Printf("[PassiveStrategy:%s]   max_inventory: %d -> %d",
+			ps.ID, oldMaxInventory, ps.maxInventory)
+	}
+	if oldInventorySkew != ps.inventorySkew {
+		log.Printf("[PassiveStrategy:%s]   inventory_skew: %.2f -> %.2f",
+			ps.ID, oldInventorySkew, ps.inventorySkew)
+	}
+	if oldMinSpread != ps.minSpread {
+		log.Printf("[PassiveStrategy:%s]   min_spread: %.2f -> %.2f",
+			ps.ID, oldMinSpread, ps.minSpread)
+	}
+	if oldOrderRefreshMs != ps.orderRefreshMs {
+		log.Printf("[PassiveStrategy:%s]   order_refresh_ms: %d -> %d",
+			ps.ID, oldOrderRefreshMs, ps.orderRefreshMs)
+	}
+
+	return nil
+}
+
+// GetCurrentParameters 获取当前参数（用于API查询）
+func (ps *PassiveStrategy) GetCurrentParameters() map[string]interface{} {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+
+	return map[string]interface{}{
+		"spread_multiplier":   ps.spreadMultiplier,
+		"order_size":          ps.orderSize,
+		"max_inventory":       ps.maxInventory,
+		"inventory_skew":      ps.inventorySkew,
+		"min_spread":          ps.minSpread,
+		"order_refresh_ms":    ps.orderRefreshMs,
+		"use_order_imbalance": ps.useOrderImbalance,
+	}
 }

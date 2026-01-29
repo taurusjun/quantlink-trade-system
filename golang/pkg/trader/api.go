@@ -883,12 +883,18 @@ func (a *APIServer) handleStrategies(w http.ResponseWriter, r *http.Request) {
 //   - GET /api/v1/strategies/{id} - Get strategy details
 //   - POST /api/v1/strategies/{id}/activate - Activate strategy
 //   - POST /api/v1/strategies/{id}/deactivate - Deactivate strategy
+//   - POST /api/v1/strategies/{id}/model/reload - Hot reload model
+//   - GET /api/v1/strategies/{id}/model/status - Get model status
+//   - GET /api/v1/strategies/{id}/model/history - Get model reload history
 func (a *APIServer) handleStrategyByID(w http.ResponseWriter, r *http.Request) {
 	// Parse strategy ID and action from URL path
 	// Expected paths:
 	//   /api/v1/strategies/{id}
 	//   /api/v1/strategies/{id}/activate
 	//   /api/v1/strategies/{id}/deactivate
+	//   /api/v1/strategies/{id}/model/reload
+	//   /api/v1/strategies/{id}/model/status
+	//   /api/v1/strategies/{id}/model/history
 	path := r.URL.Path
 	prefix := "/api/v1/strategies/"
 	if len(path) <= len(prefix) {
@@ -898,25 +904,29 @@ func (a *APIServer) handleStrategyByID(w http.ResponseWriter, r *http.Request) {
 
 	// Extract ID and action
 	remainder := path[len(prefix):]
-	var strategyID, action string
-
-	// Check for action suffix
-	if idx := strings.LastIndex(remainder, "/"); idx != -1 {
-		strategyID = remainder[:idx]
-		action = remainder[idx+1:]
-	} else {
-		strategyID = remainder
-		action = ""
-	}
+	parts := strings.Split(remainder, "/")
+	strategyID := parts[0]
 
 	// Route based on method and action
 	switch {
-	case r.Method == http.MethodGet && action == "":
+	case r.Method == http.MethodGet && len(parts) == 1:
+		// GET /api/v1/strategies/{id}
 		a.handleGetStrategy(w, r, strategyID)
-	case r.Method == http.MethodPost && action == "activate":
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "activate":
+		// POST /api/v1/strategies/{id}/activate
 		a.handleActivateStrategy(w, r, strategyID)
-	case r.Method == http.MethodPost && action == "deactivate":
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "deactivate":
+		// POST /api/v1/strategies/{id}/deactivate
 		a.handleDeactivateStrategy(w, r, strategyID)
+	case r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "model" && parts[2] == "reload":
+		// POST /api/v1/strategies/{id}/model/reload
+		a.handleStrategyModelReload(w, r, strategyID)
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[1] == "model" && parts[2] == "status":
+		// GET /api/v1/strategies/{id}/model/status
+		a.handleStrategyModelStatus(w, r, strategyID)
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[1] == "model" && parts[2] == "history":
+		// GET /api/v1/strategies/{id}/model/history
+		a.handleStrategyModelHistory(w, r, strategyID)
 	default:
 		a.sendError(w, http.StatusMethodNotAllowed, "Method not allowed or invalid action")
 	}
@@ -1078,6 +1088,62 @@ func (a *APIServer) handleDeactivateStrategy(w http.ResponseWriter, r *http.Requ
 			"active":      false,
 		})
 	}
+}
+
+// handleStrategyModelReload handles POST /api/v1/strategies/{id}/model/reload
+func (a *APIServer) handleStrategyModelReload(w http.ResponseWriter, r *http.Request, strategyID string) {
+	log.Printf("[API] Model reload requested for strategy: %s", strategyID)
+
+	if !a.trader.IsMultiStrategy() || a.trader.GetStrategyManager() == nil {
+		a.sendError(w, http.StatusBadRequest, "Model hot reload only supported in multi-strategy mode")
+		return
+	}
+
+	mgr := a.trader.GetStrategyManager()
+	if err := mgr.ReloadStrategyModel(strategyID); err != nil {
+		log.Printf("[API] Failed to reload model for strategy %s: %v", strategyID, err)
+		a.sendError(w, http.StatusBadRequest, fmt.Sprintf("Failed to reload model: %v", err))
+		return
+	}
+
+	log.Printf("[API] ✓ Model reloaded successfully for strategy: %s", strategyID)
+	a.sendSuccess(w, "Model reloaded successfully", map[string]interface{}{
+		"strategy_id": strategyID,
+		"timestamp":   time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleStrategyModelStatus handles GET /api/v1/strategies/{id}/model/status
+func (a *APIServer) handleStrategyModelStatus(w http.ResponseWriter, r *http.Request, strategyID string) {
+	if !a.trader.IsMultiStrategy() || a.trader.GetStrategyManager() == nil {
+		a.sendError(w, http.StatusBadRequest, "Model hot reload only supported in multi-strategy mode")
+		return
+	}
+
+	mgr := a.trader.GetStrategyManager()
+	status, err := mgr.GetStrategyModelStatus(strategyID)
+	if err != nil {
+		a.sendError(w, http.StatusNotFound, fmt.Sprintf("Strategy not found: %s", strategyID))
+		return
+	}
+
+	a.sendSuccess(w, "Model status retrieved", status)
+}
+
+// handleStrategyModelHistory handles GET /api/v1/strategies/{id}/model/history
+func (a *APIServer) handleStrategyModelHistory(w http.ResponseWriter, r *http.Request, strategyID string) {
+	if !a.trader.IsMultiStrategy() || a.trader.GetStrategyManager() == nil {
+		a.sendError(w, http.StatusBadRequest, "Model hot reload only supported in multi-strategy mode")
+		return
+	}
+
+	// TODO: 实现model重载历史追踪
+	// 目前返回空历史
+	a.sendSuccess(w, "Model reload history retrieved", map[string]interface{}{
+		"strategy_id": strategyID,
+		"history":     []interface{}{},
+		"count":       0,
+	})
 }
 
 // RealtimeIndicatorsResponse represents realtime indicators response

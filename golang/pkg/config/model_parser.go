@@ -10,19 +10,19 @@ import (
 
 // ModelFileParser model文件解析器
 type ModelFileParser struct {
-	filePath string
+	FilePath string
 }
 
 // NewModelFileParser 创建model文件解析器
 func NewModelFileParser(filePath string) *ModelFileParser {
 	return &ModelFileParser{
-		filePath: filePath,
+		FilePath: filePath,
 	}
 }
 
 // Parse 解析 model 文件
 func (p *ModelFileParser) Parse() (map[string]interface{}, error) {
-	file, err := os.Open(p.filePath)
+	file, err := os.Open(p.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("open model file: %w", err)
 	}
@@ -245,4 +245,9 @@ func GetIntParam(params map[string]interface{}, key string, defaultVal int) int 
 		}
 	}
 	return defaultVal
+}
+
+// GetFileInfo 获取文件信息
+func GetFileInfo(filePath string) (os.FileInfo, error) {
+	return os.Stat(filePath)
 }
