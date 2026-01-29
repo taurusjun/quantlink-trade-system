@@ -60,6 +60,12 @@ type Strategy interface {
 
 	// Reset resets the strategy to initial state
 	Reset()
+
+	// UpdateParameters updates strategy parameters (for hot reload)
+	UpdateParameters(params map[string]interface{}) error
+
+	// GetCurrentParameters returns current strategy parameters
+	GetCurrentParameters() map[string]interface{}
 }
 
 // ParameterUpdatable is an interface for strategies that support hot parameter reload

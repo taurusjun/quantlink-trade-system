@@ -40,11 +40,14 @@ func (m *MockStrategy) Reset()                                          {}
 func (m *MockStrategy) OnMarketData(md *mdpb.MarketDataUpdate)          {}
 func (m *MockStrategy) OnOrderUpdate(update *orspb.OrderUpdate)         {}
 func (m *MockStrategy) OnTimer(now time.Time)                          {}
+func (m *MockStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {}
 func (m *MockStrategy) GetPNL() *strategy.PNL                           { return &m.pnl }
 func (m *MockStrategy) GetPosition() *strategy.Position                 { return &m.position }
 func (m *MockStrategy) GetSignals() []*strategy.TradingSignal          { return nil }
 func (m *MockStrategy) GetRiskMetrics() *strategy.RiskMetrics          { return &m.riskMetrics }
-func (m *MockStrategy) GetStatus() *strategy.StrategyStatus            { return &strategy.StrategyStatus{} }
+func (m *MockStrategy) GetStatus() *strategy.StrategyStatus { return &strategy.StrategyStatus{} }
+func (m *MockStrategy) UpdateParameters(params map[string]interface{}) error { return nil }
+func (m *MockStrategy) GetCurrentParameters() map[string]interface{} { return nil }
 
 func (m *MockStrategy) SetPNL(pnl strategy.PNL) {
 	m.pnl = pnl

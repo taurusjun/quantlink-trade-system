@@ -6,14 +6,14 @@
 # System Configuration
 # ═══════════════════════════════════════════════════════════
 system:
-  mode: "simulation"                    # 运行模式: live, backtest, simulation
+  mode: "live"                          # 运行模式: live, backtest, simulation
   # 注意：multi_strategy 会自动检测（如果有 strategies 数组则为多策略模式）
 
 # ═══════════════════════════════════════════════════════════
 # Multi-Strategy Configuration (多策略配置)
 # ═══════════════════════════════════════════════════════════
 strategies:
-  # 策略1：白银配对套利
+  # 策略1：白银配对套利 (2026年合约)
   - id: "ag_pairwise"
     type: "pairwise_arb"
     enabled: true
@@ -23,42 +23,47 @@ strategies:
     exchanges:
       - "SHFE"
     allocation: 0.4                     # 40% 资金分配
-    max_position_size: 50
+    max_position_size: 16
     parameters:
       spread_type: "difference"
       lookback_period: 100.0
-      entry_zscore: 0.5                 # 测试阈值，便于触发
-      exit_zscore: 0.2
-      order_size: 5.0
-      min_correlation: 0.3
+      entry_zscore: 2.0                 # 实盘阈值
+      exit_zscore: 0.5
+      order_size: 4.0
+      min_correlation: 0.7
 
-  # 策略2：被动做市策略
-  - id: "cu_passive"
+  # 策略2：被动做市策略 (ag2603)
+  - id: "ag_passive"
     type: "passive"
     enabled: true
     symbols:
-      - "cu2603"
+      - "ag2603"
     exchanges:
       - "SHFE"
     allocation: 0.3                     # 30% 资金分配
-    max_position_size: 20
+    max_position_size: 10
     parameters:
       spread_multiplier: 0.5
       order_size: 2.0
 
-  # 策略3：激进策略
-  - id: "al_aggressive"
-    type: "aggressive"
+  # 策略3：黄金配对套利 (au2604/au2606)
+  - id: "au_pairwise"
+    type: "pairwise_arb"
     enabled: true
     symbols:
-      - "al2603"
+      - "au2604"
+      - "au2606"
     exchanges:
       - "SHFE"
     allocation: 0.3                     # 30% 资金分配
-    max_position_size: 30
+    max_position_size: 10
     parameters:
-      momentum_threshold: 0.1
-      order_size: 3.0
+      spread_type: "difference"
+      lookback_period: 20.0             # 降低便于测试
+      entry_zscore: 1.0                 # 降低便于测试
+      exit_zscore: 0.3
+      order_size: 1.0                   # 最小手数
+      min_correlation: 0.0              # 暂时禁用相关性检查
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration

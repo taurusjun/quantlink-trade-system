@@ -90,6 +90,11 @@ func NewPortfolioManager(config *PortfolioConfig) *PortfolioManager {
 		}
 	}
 
+	// Ensure StrategyAllocation map is initialized
+	if config.StrategyAllocation == nil {
+		config.StrategyAllocation = make(map[string]float64)
+	}
+
 	return &PortfolioManager{
 		config:        config,
 		strategies:    make(map[string]strategy.Strategy),

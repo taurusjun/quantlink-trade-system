@@ -91,9 +91,9 @@ private:
 
         bool is_symbol1 = (counter++ % 2 == 0);
         if (is_symbol1) {
-            std::strncpy(md.symbol, "ag2502", sizeof(md.symbol));
+            std::strncpy(md.symbol, "ag2602", sizeof(md.symbol));
         } else {
-            std::strncpy(md.symbol, "ag2504", sizeof(md.symbol));
+            std::strncpy(md.symbol, "ag2604", sizeof(md.symbol));
         }
         std::strncpy(md.exchange, "SHFE", sizeof(md.exchange));
         md.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
