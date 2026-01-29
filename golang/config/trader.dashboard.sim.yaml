@@ -1,0 +1,102 @@
+# Dashboard 模拟器测试配置
+# 使用 md_simulator 生成的 ag2502/ag2504 行情
+
+system:
+  mode: "simulation"
+
+strategies:
+  # 配对套利策略 (ag2602/ag2604)
+  - id: "ag_pairwise"
+    type: "pairwise_arb"
+    enabled: true
+    symbols:
+      - "ag2602"
+      - "ag2604"
+    exchanges:
+      - "SHFE"
+    allocation: 0.5
+        max_position_size: 20
+    model_file: "/Users/user/PWorks/RD/quantlink-trade-system/golang/config/trader.dashboard.sim.yaml"
+    hot_reload:
+      enabled: true
+    parameters:
+      spread_type: "difference"
+      lookback_period: 50.0
+      entry_zscore: 1.5          # 低阈值便于测试触发
+      exit_zscore: 0.3
+      order_size: 2.0
+      min_correlation: 0.5
+
+  # 被动策略 (ag2602)
+  - id: "ag_passive"
+    type: "passive"
+    enabled: true
+    symbols:
+      - "ag2602"
+    exchanges:
+      - "SHFE"
+    allocation: 0.25
+    max_position_size: 10
+    parameters:
+      spread_multiplier: 0.5
+      order_size: 1.0
+
+  # 激进策略 (ag2604)
+  - id: "ag_aggressive"
+    type: "aggressive"
+    enabled: true
+    symbols:
+      - "ag2604"
+    exchanges:
+      - "SHFE"
+    allocation: 0.25
+    max_position_size: 10
+    parameters:
+      momentum_threshold: 0.05
+      order_size: 1.0
+
+session:
+  start_time: "00:00:00"
+  end_time: "23:59:59"
+  timezone: "Asia/Shanghai"
+  auto_start: true
+  auto_stop: false
+  auto_activate: false
+
+risk:
+  max_drawdown: 10000.0
+  stop_loss: 50000.0
+  max_loss: 100000.0
+  daily_loss_limit: 200000.0
+  max_reject_count: 10
+  check_interval_ms: 100
+
+engine:
+  ors_gateway_addr: "localhost:50052"
+  nats_addr: "nats://localhost:4222"
+  order_queue_size: 100
+  timer_interval: 5s
+  max_concurrent_orders: 10
+
+portfolio:
+  total_capital: 500000.0
+  rebalance_interval_sec: 3600
+  min_allocation: 0.05
+  max_allocation: 0.50
+  enable_auto_rebalance: false
+  enable_correlation_calc: false
+
+api:
+  enabled: true
+  port: 9301
+  host: "localhost"
+
+logging:
+  level: "info"
+  file: "./log/trader.dashboard.sim.log"
+  max_size_mb: 100
+  max_backups: 5
+  max_age_days: 7
+  compress: true
+  console: true
+  json_format: false

@@ -904,18 +904,38 @@ func (t *Trader) IsMultiStrategy() bool {
 func (t *Trader) onModelReload(newParams map[string]interface{}) error {
 	log.Printf("[Trader] Processing model hot reload with %d parameters", len(newParams))
 
-	// Get BaseStrategy to call UpdateParameters
-	baseStrat := t.getBaseStrategy()
-	if baseStrat == nil {
-		return fmt.Errorf("failed to access base strategy")
+	if t.IsMultiStrategy() {
+		// Multi-strategy mode: apply to all strategies
+		log.Printf("[Trader] Applying new parameters to all %d strategies...", t.StrategyMgr.GetStrategyCount())
+		var errs []error
+		t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
+			if err := strat.UpdateParameters(newParams); err != nil {
+				errs = append(errs, fmt.Errorf("strategy %s: %w", id, err))
+				log.Printf("[Trader] ✗ Failed to apply parameters to strategy %s: %v", id, err)
+			} else {
+				log.Printf("[Trader] ✓ Successfully applied parameters to strategy %s", id)
+			}
+		})
+
+		if len(errs) > 0 {
+			// In a real scenario, you might want to decide on a rollback strategy
+			return fmt.Errorf("failed to apply parameters to some strategies: %v", errs)
+		}
+
+	} else {
+		// Single-strategy mode (backward compatibility)
+		log.Println("[Trader] Applying new parameters to single strategy...")
+		baseStrat := t.getBaseStrategy()
+		if baseStrat == nil {
+			return fmt.Errorf("failed to access base strategy")
+		}
+
+		if err := baseStrat.UpdateParameters(newParams); err != nil {
+			return fmt.Errorf("failed to apply new parameters: %w", err)
+		}
 	}
 
-	// Apply new parameters (BaseStrategy will delegate to concrete strategy)
-	if err := baseStrat.UpdateParameters(newParams); err != nil {
-		return fmt.Errorf("failed to apply new parameters: %w", err)
-	}
-
-	log.Println("[Trader] ✓ Model parameters reloaded successfully")
+	log.Println("[Trader] ✓ Model parameters reloaded successfully for all applicable strategies")
 	return nil
 }
 
