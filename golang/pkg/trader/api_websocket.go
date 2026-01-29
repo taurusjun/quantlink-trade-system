@@ -326,14 +326,22 @@ func (h *WebSocketHub) collectStrategyData(id string, strat strategy.Strategy) *
 		Allocation:    base.Config.Allocation,
 	}
 
-	// Collect indicator values
+	// Collect indicator values from multiple sources
+	// 1. SharedIndicators (共享指标池)
 	if base.SharedIndicators != nil {
 		for key, value := range base.SharedIndicators.GetAllValues() {
 			data.Indicators[key] = value
 		}
 	}
+	// 2. PrivateIndicators (私有指标)
 	if base.PrivateIndicators != nil {
 		for key, value := range base.PrivateIndicators.GetAllValues() {
+			data.Indicators[key] = value
+		}
+	}
+	// 3. ControlState.Indicators (策略计算的实时指标)
+	if base.ControlState != nil && base.ControlState.Indicators != nil {
+		for key, value := range base.ControlState.Indicators {
 			data.Indicators[key] = value
 		}
 	}
