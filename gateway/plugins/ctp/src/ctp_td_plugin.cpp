@@ -34,9 +34,24 @@ bool CTPTDPlugin::Initialize(const std::string& config_file) {
     std::cout << "[CTPTDPlugin] Initializing with config: " << config_file << std::endl;
 
     try {
+        // 解析配置文件路径 (支持 "config1:config2" 格式)
+        std::string main_config, secret_config;
+        size_t pos = config_file.find(':');
+        if (pos != std::string::npos) {
+            main_config = config_file.substr(0, pos);
+            secret_config = config_file.substr(pos + 1);
+            std::cout << "[CTPTDPlugin] Parsed config files:" << std::endl;
+            std::cout << "[CTPTDPlugin]   Main:   " << main_config << std::endl;
+            std::cout << "[CTPTDPlugin]   Secret: " << secret_config << std::endl;
+        } else {
+            main_config = config_file;
+            secret_config = "config/ctp/ctp_td.secret.yaml"; // 默认secret文件
+            std::cout << "[CTPTDPlugin] Using single config file: " << main_config << std::endl;
+        }
+
         // 加载配置
-        if (!m_config.LoadFromYaml(config_file)) {
-            std::cerr << "[CTPTDPlugin] ❌ Failed to load config file: " << config_file << std::endl;
+        if (!m_config.LoadFromYaml(main_config, secret_config)) {
+            std::cerr << "[CTPTDPlugin] ❌ Failed to load config files" << std::endl;
             return false;
         }
 
