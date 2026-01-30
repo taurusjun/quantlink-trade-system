@@ -148,6 +148,11 @@ func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 // OnOrderUpdate is called when order status changes
 func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
+	// CRITICAL: 检查订单是否属于本策略
+	if update.StrategyId != ps.ID {
+		return
+	}
+
 	if !ps.IsRunning() {
 		return
 	}

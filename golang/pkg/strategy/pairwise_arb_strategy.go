@@ -469,6 +469,13 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 
 // OnOrderUpdate handles order updates
 func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
+	// CRITICAL: 检查订单是否属于本策略
+	// 修复 Bug: 防止策略接收到其他策略的订单回调
+	if update.StrategyId != pas.ID {
+		// 不是本策略的订单，直接忽略
+		return
+	}
+
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 

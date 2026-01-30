@@ -372,6 +372,11 @@ func (as *AggressiveStrategy) generateExitSignal(md *mdpb.MarketDataUpdate, reas
 
 // OnOrderUpdate handles order updates
 func (as *AggressiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
+	// CRITICAL: 检查订单是否属于本策略
+	if update.StrategyId != as.ID {
+		return
+	}
+
 	as.mu.Lock()
 	defer as.mu.Unlock()
 

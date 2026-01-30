@@ -310,6 +310,11 @@ func (hs *HedgingStrategy) rebalance(md *mdpb.MarketDataUpdate) {
 
 // OnOrderUpdate handles order updates
 func (hs *HedgingStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
+	// CRITICAL: 检查订单是否属于本策略
+	if update.StrategyId != hs.ID {
+		return
+	}
+
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
