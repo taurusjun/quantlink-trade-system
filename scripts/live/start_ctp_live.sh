@@ -61,12 +61,82 @@ fi
 
 log_info "✓ 配置文件检查通过"
 
+# 自动同步合约配置：从 trader.live.yaml 提取 symbols 更新到 ctp_md.yaml
+log_info "[2/9] 同步合约配置..."
+sync_instruments() {
+    local TRADER_CONFIG="config/trader.live.yaml"
+    local CTP_MD_CONFIG="config/ctp/ctp_md.yaml"
+
+    # 从 trader 配置提取所有策略使用的 symbols
+    # 使用 awk 只提取 symbols: 部分下的条目，排除 exchanges: 部分
+    local symbols=$(awk '
+        /^    symbols:/ { in_symbols = 1; next }
+        /^    exchanges:/ { in_symbols = 0; next }
+        /^    [a-z_]+:/ { in_symbols = 0; next }
+        /^  - / { in_symbols = 0; next }
+        in_symbols && /^      - "/ {
+            gsub(/.*- "/, "")
+            gsub(/".*/, "")
+            print
+        }
+    ' "$TRADER_CONFIG" | sort -u)
+
+    if [ -z "$symbols" ]; then
+        log_warn "未从 trader 配置中提取到合约，跳过同步"
+        return
+    fi
+
+    # 构建新的 instruments 配置
+    local new_instruments=""
+    for sym in $symbols; do
+        new_instruments="${new_instruments}    - \"${sym}\"\n"
+    done
+
+    # 检查 ctp_md.yaml 中是否已包含所有合约
+    local missing=""
+    for sym in $symbols; do
+        if ! grep -q "\"$sym\"" "$CTP_MD_CONFIG"; then
+            missing="${missing} $sym"
+        fi
+    done
+
+    if [ -n "$missing" ]; then
+        log_info "发现缺失的合约订阅:$missing"
+
+        # 备份原配置
+        cp "$CTP_MD_CONFIG" "${CTP_MD_CONFIG}.bak"
+
+        # 更新 instruments 列表
+        # 使用 sed 替换 instruments 部分
+        local temp_file=$(mktemp)
+        awk -v new_inst="$new_instruments" '
+        /^  instruments:/ {
+            print "  # 订阅合约列表（自动从 trader.live.yaml 同步）"
+            print "  instruments:"
+            printf "%s", new_inst
+            in_instruments = 1
+            next
+        }
+        in_instruments && /^    - "/ { next }
+        in_instruments && /^[^ ]/ { in_instruments = 0 }
+        in_instruments && /^  [^ ]/ { in_instruments = 0 }
+        !in_instruments { print }
+        ' "$CTP_MD_CONFIG" > "$temp_file"
+
+        mv "$temp_file" "$CTP_MD_CONFIG"
+        log_info "✓ 已更新 CTP MD 配置，添加合约:$missing"
+    else
+        log_info "✓ 合约配置已同步 ($(echo $symbols | wc -w | tr -d ' ') 个合约)"
+    fi
+}
+sync_instruments
+
 # 创建目录
-log_info "[2/8] 创建日志目录..."
+log_info "[3/9] 创建日志目录..."
 mkdir -p log data/ctp_positions test_logs
 
 # 启动 NATS
-log_info "[3/8] 启动 NATS server..."
+log_info "[4/9] 启动 NATS server..."
 if pgrep -f nats-server > /dev/null; then
     log_warn "NATS server 已在运行"
 else
@@ -81,7 +151,7 @@ else
 fi
 
 # 启动 CTP MD Gateway
-log_info "[4/8] 启动 CTP 行情网关..."
+log_info "[5/9] 启动 CTP 行情网关..."
 ./gateway/build/ctp_md_gateway \
     -c config/ctp/ctp_md.yaml \
     -s config/ctp/ctp_md.secret.yaml \
@@ -108,7 +178,7 @@ else
 fi
 
 # 启动 MD Gateway
-log_info "[5/8] 启动 MD Gateway..."
+log_info "[6/9] 启动 MD Gateway..."
 ./gateway/build/md_gateway > log/md_gateway.log 2>&1 &
 MD_GW_PID=$!
 sleep 2
@@ -122,7 +192,7 @@ else
 fi
 
 # 启动 ORS Gateway
-log_info "[6/8] 启动 ORS Gateway..."
+log_info "[7/9] 启动 ORS Gateway..."
 ./gateway/build/ors_gateway > log/ors_gateway.log 2>&1 &
 ORS_GW_PID=$!
 sleep 2
@@ -136,7 +206,7 @@ else
 fi
 
 # 启动 Counter Bridge (CTP Plugin)
-log_info "[7/8] 启动 Counter Bridge (CTP Plugin)..."
+log_info "[8/9] 启动 Counter Bridge (CTP Plugin)..."
 ./gateway/build/counter_bridge \
     ctp:config/ctp/ctp_td.yaml:config/ctp/ctp_td.secret.yaml \
     > log/counter_bridge_ctp.log 2>&1 &
@@ -167,7 +237,7 @@ else
 fi
 
 # 启动 Trader (实盘配置)
-log_info "[8/8] 启动 Trader (实盘配置)..."
+log_info "[9/9] 启动 Trader (实盘配置)..."
 ./bin/trader -config config/trader.live.yaml > log/trader.live.log 2>&1 &
 TRADER_PID=$!
 sleep 5
@@ -181,7 +251,7 @@ else
 fi
 
 # 验证系统状态
-log_info "[9/9] 验证系统状态..."
+log_info "[10/10] 验证系统状态..."
 sleep 3
 
 log_section "✓ CTP实盘交易系统启动成功"
