@@ -806,6 +806,49 @@ bool CTPTDPlugin::QueryPositions(std::vector<PositionInfo>& positions) {
     return true;
 }
 
+// 非阻塞获取缓存的持仓信息（用于HTTP查询）
+bool CTPTDPlugin::GetCachedPositions(std::vector<PositionInfo>& positions) {
+    std::lock_guard<std::mutex> lock(m_position_mutex);
+
+    positions.clear();
+
+    // 从 m_positions 构建 PositionInfo 列表
+    // CTPPosition 存储多空分离的持仓，需要分别构建
+    for (const auto& [key, ctp_pos] : m_positions) {
+        // 多头持仓
+        if (ctp_pos.long_position > 0) {
+            PositionInfo pos_info;
+            std::strncpy(pos_info.symbol, ctp_pos.symbol.c_str(), sizeof(pos_info.symbol) - 1);
+            std::strncpy(pos_info.exchange, ctp_pos.exchange.c_str(), sizeof(pos_info.exchange) - 1);
+            pos_info.direction = OrderDirection::BUY;
+            pos_info.volume = ctp_pos.long_position;
+            pos_info.today_volume = ctp_pos.long_today_position;
+            pos_info.yesterday_volume = ctp_pos.long_yesterday_position;
+            pos_info.avg_price = ctp_pos.long_avg_price;
+            pos_info.position_profit = 0.0; // 暂不计算浮动盈亏
+            pos_info.margin = 0.0; // 暂不计算保证金
+            positions.push_back(pos_info);
+        }
+
+        // 空头持仓
+        if (ctp_pos.short_position > 0) {
+            PositionInfo pos_info;
+            std::strncpy(pos_info.symbol, ctp_pos.symbol.c_str(), sizeof(pos_info.symbol) - 1);
+            std::strncpy(pos_info.exchange, ctp_pos.exchange.c_str(), sizeof(pos_info.exchange) - 1);
+            pos_info.direction = OrderDirection::SELL;
+            pos_info.volume = ctp_pos.short_position;
+            pos_info.today_volume = ctp_pos.short_today_position;
+            pos_info.yesterday_volume = ctp_pos.short_yesterday_position;
+            pos_info.avg_price = ctp_pos.short_avg_price;
+            pos_info.position_profit = 0.0; // 暂不计算浮动盈亏
+            pos_info.margin = 0.0; // 暂不计算保证金
+            positions.push_back(pos_info);
+        }
+    }
+
+    return true;
+}
+
 void CTPTDPlugin::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField* pInvestorPosition,
                                            CThostFtdcRspInfoField* pRspInfo,
                                            int nRequestID, bool bIsLast) {

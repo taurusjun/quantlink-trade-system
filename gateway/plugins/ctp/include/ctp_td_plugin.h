@@ -67,6 +67,9 @@ public:
     bool QueryPositions(std::vector<PositionInfo>& positions) override;
     bool QueryOrders(std::vector<OrderInfo>& orders) override;
     bool QueryTrades(std::vector<TradeInfo>& trades) override;
+
+    // 非阻塞获取缓存的持仓信息（用于HTTP查询，避免阻塞HTTP线程）
+    bool GetCachedPositions(std::vector<PositionInfo>& positions);
     bool GetOrder(const std::string& order_id, OrderInfo& order_info) override;
 
     void RegisterOrderCallback(OrderCallback callback) override;

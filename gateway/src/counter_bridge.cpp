@@ -314,9 +314,26 @@ void HandlePositionQuery(const httplib::Request& req, httplib::Response& res) {
         }
 
         std::vector<hft::plugin::PositionInfo> positions;
-        if (broker->QueryPositions(positions)) {
-            std::cout << "[HTTP] " << broker_name << " returned " << positions.size() << " positions" << std::endl;
+        bool query_success = false;
 
+        // 对于CTP，使用非阻塞的缓存查询
+        #if defined(ENABLE_CTP_PLUGIN)
+        if (broker_name == "ctp") {
+            auto* ctp_plugin = dynamic_cast<hft::plugin::ctp::CTPTDPlugin*>(broker.get());
+            if (ctp_plugin) {
+                query_success = ctp_plugin->GetCachedPositions(positions);
+                std::cout << "[HTTP] " << broker_name << " returned " << positions.size()
+                          << " cached positions" << std::endl;
+            }
+        } else
+        #endif
+        {
+            // 其他插件使用标准查询（可能会阻塞）
+            query_success = broker->QueryPositions(positions);
+            std::cout << "[HTTP] " << broker_name << " returned " << positions.size() << " positions" << std::endl;
+        }
+
+        if (query_success) {
             // 按交易所分组
             for (const auto& pos : positions) {
                 std::string pos_exchange(pos.exchange);
