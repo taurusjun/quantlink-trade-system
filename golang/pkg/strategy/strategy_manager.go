@@ -403,7 +403,7 @@ type StrategyStatusInfo struct {
 	ConditionsMet bool               `json:"conditions_met"`
 	Eligible      bool               `json:"eligible"`
 	Indicators    map[string]float64 `json:"indicators"`
-	Position      *Position          `json:"position"`
+	EstimatedPosition *EstimatedPosition `json:"estimated_position"` // Estimated from order fills (NOT real CTP!)
 	PNL           *PNL               `json:"pnl"`
 }
 
@@ -424,11 +424,11 @@ func (sm *StrategyManager) GetStatus() *StrategyManagerStatus {
 
 	for id, strategy := range sm.strategies {
 		info := &StrategyStatusInfo{
-			ID:       id,
-			Type:     strategy.GetType(),
-			Running:  strategy.IsRunning(),
-			Position: strategy.GetPosition(),
-			PNL:      strategy.GetPNL(),
+			ID:                id,
+			Type:              strategy.GetType(),
+			Running:           strategy.IsRunning(),
+			EstimatedPosition: strategy.GetEstimatedPosition(),
+			PNL:               strategy.GetPNL(),
 		}
 
 		// 获取配置信息
@@ -472,11 +472,11 @@ func (sm *StrategyManager) GetStrategyStatus(strategyID string) (*StrategyStatus
 	}
 
 	info := &StrategyStatusInfo{
-		ID:       strategyID,
-		Type:     strategy.GetType(),
-		Running:  strategy.IsRunning(),
-		Position: strategy.GetPosition(),
-		PNL:      strategy.GetPNL(),
+		ID:                strategyID,
+		Type:              strategy.GetType(),
+		Running:           strategy.IsRunning(),
+		EstimatedPosition: strategy.GetEstimatedPosition(),
+		PNL:               strategy.GetPNL(),
 	}
 
 	if cfg, ok := sm.configs[strategyID]; ok {

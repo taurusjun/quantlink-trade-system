@@ -41,7 +41,7 @@ type StrategyStatusResponse struct {
 	Active     bool                   `json:"active"`
 	Mode       string                 `json:"mode"`
 	Symbols    []string               `json:"symbols"`
-	Position   interface{}            `json:"position"`
+	Position   interface{}            `json:"estimated_position"` // Estimated position from order fills
 	PNL        interface{}            `json:"pnl"`
 	Risk       interface{}            `json:"risk"`
 	Uptime     string                 `json:"uptime"`
@@ -303,7 +303,7 @@ func (a *APIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Active:     baseStrat.ControlState.IsActive(),
 		Mode:       a.trader.Config.System.Mode,
 		Symbols:    a.trader.Config.Strategy.Symbols,
-		Position:   a.trader.Strategy.GetPosition(),
+		Position:   a.trader.Strategy.GetEstimatedPosition(),
 		PNL:        a.trader.Strategy.GetPNL(),
 		Risk:       a.trader.Strategy.GetRiskMetrics(),
 		Details: map[string]interface{}{
@@ -830,7 +830,7 @@ type StrategyDetailItem struct {
 	SignalStrength float64                `json:"signal_strength"`
 	Allocation     float64                `json:"allocation"`
 	Indicators     map[string]float64     `json:"indicators"`
-	Position       interface{}            `json:"position"`
+	Position       interface{}            `json:"estimated_position"` // Estimated position from order fills
 	PNL            interface{}            `json:"pnl"`
 }
 
@@ -865,7 +865,7 @@ func (a *APIServer) handleStrategies(w http.ResponseWriter, r *http.Request) {
 				Eligible:      info.Eligible,
 				Allocation:    info.Allocation,
 				Indicators:    info.Indicators,
-				Position:      info.Position,
+				Position:      info.EstimatedPosition, // Estimated position from order fills
 				PNL:           info.PNL,
 			}
 			response.Strategies = append(response.Strategies, item)
@@ -880,7 +880,7 @@ func (a *APIServer) handleStrategies(w http.ResponseWriter, r *http.Request) {
 			Type:     a.trader.Config.Strategy.Type,
 			Symbols:  a.trader.Config.Strategy.Symbols,
 			Running:  a.trader.Strategy.IsRunning(),
-			Position: a.trader.Strategy.GetPosition(),
+			Position: a.trader.Strategy.GetEstimatedPosition(),
 			PNL:      a.trader.Strategy.GetPNL(),
 			Allocation: 1.0,
 		}
@@ -975,7 +975,7 @@ func (a *APIServer) handleGetStrategy(w http.ResponseWriter, r *http.Request, st
 			Eligible:      info.Eligible,
 			Allocation:    info.Allocation,
 			Indicators:    info.Indicators,
-			Position:      info.Position,
+			Position:      info.EstimatedPosition, // Estimated position
 			PNL:           info.PNL,
 		}
 		a.sendSuccess(w, "Strategy details retrieved", item)
@@ -992,7 +992,7 @@ func (a *APIServer) handleGetStrategy(w http.ResponseWriter, r *http.Request, st
 			Type:       a.trader.Config.Strategy.Type,
 			Symbols:    a.trader.Config.Strategy.Symbols,
 			Running:    a.trader.Strategy.IsRunning(),
-			Position:   a.trader.Strategy.GetPosition(),
+			Position:   a.trader.Strategy.GetEstimatedPosition(),
 			PNL:        a.trader.Strategy.GetPNL(),
 			Allocation: 1.0,
 		}

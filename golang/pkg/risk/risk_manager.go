@@ -216,7 +216,7 @@ func (rm *RiskManager) CheckStrategy(s strategy.Strategy) []RiskAlert {
 		return alerts
 	}
 
-	position := s.GetPosition()
+	position := s.GetEstimatedPosition() // Estimated position (NOT real CTP!)
 	pnl := s.GetPNL()
 	riskMetrics := s.GetRiskMetrics()
 
@@ -228,7 +228,7 @@ func (rm *RiskManager) CheckStrategy(s strategy.Strategy) []RiskAlert {
 				Level:        "warning",
 				Type:         RiskLimitPositionSize,
 				TargetID:     s.GetID(),
-				Message:      fmt.Sprintf("Position size %d exceeds limit %.0f", position.NetQty, limit.Value),
+				Message:      fmt.Sprintf("Estimated position size %d exceeds limit %.0f", position.NetQty, limit.Value),
 				CurrentValue: float64(absInt64(position.NetQty)),
 				LimitValue:   limit.Value,
 				Action:       "throttle",

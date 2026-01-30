@@ -223,7 +223,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	// Calculate inventory skew
 	// If we're long, we want to sell more aggressively (tighten ask, widen bid)
 	// If we're short, we want to buy more aggressively (tighten bid, widen ask)
-	inventoryRatio := float64(ps.Position.NetQty) / float64(ps.maxInventory)
+	inventoryRatio := float64(ps.EstimatedPosition.NetQty) / float64(ps.maxInventory)
 	inventorySkewAmount := inventoryRatio * ps.inventorySkew
 
 	// Calculate bid/ask offsets
@@ -251,7 +251,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	// Check risk limits before generating signals
 	if !ps.CheckRiskLimits() {
 		// Risk limits exceeded, only generate closing signals
-		if ps.Position.IsLong() {
+		if ps.EstimatedPosition.IsLong() {
 			// Close long position with sell order
 			ps.AddSignal(&TradingSignal{
 				StrategyID:  ps.ID,
@@ -259,14 +259,14 @@ func (ps *PassiveStrategy) generateSignals() {
 				Exchange:    ps.currentMarketState.Exchange,
 				Side:        OrderSideSell,
 				Price:       midPrice - askOffset,
-				Quantity:    abs(ps.Position.NetQty),
+				Quantity:    abs(ps.EstimatedPosition.NetQty),
 				OrderType:   OrderTypeLimit,
 				TimeInForce: TimeInForceGTC,
 				Signal:      -0.8,
 				Confidence:  0.9,
 				Timestamp:   time.Now(),
 			})
-		} else if ps.Position.IsShort() {
+		} else if ps.EstimatedPosition.IsShort() {
 			// Close short position with buy order
 			ps.AddSignal(&TradingSignal{
 				StrategyID:  ps.ID,
@@ -274,7 +274,7 @@ func (ps *PassiveStrategy) generateSignals() {
 				Exchange:    ps.currentMarketState.Exchange,
 				Side:        OrderSideBuy,
 				Price:       midPrice + bidOffset,
-				Quantity:    abs(ps.Position.NetQty),
+				Quantity:    abs(ps.EstimatedPosition.NetQty),
 				OrderType:   OrderTypeLimit,
 				TimeInForce: TimeInForceGTC,
 				Signal:      0.8,
@@ -286,7 +286,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	}
 
 	// Generate bid signal (only if not at max short)
-	if ps.Position.NetQty > -ps.maxInventory {
+	if ps.EstimatedPosition.NetQty > -ps.maxInventory {
 		bidPrice := midPrice - bidOffset
 		ps.AddSignal(&TradingSignal{
 			StrategyID:  ps.ID,
@@ -309,7 +309,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	}
 
 	// Generate ask signal (only if not at max long)
-	if ps.Position.NetQty < ps.maxInventory {
+	if ps.EstimatedPosition.NetQty < ps.maxInventory {
 		askPrice := midPrice + askOffset
 		ps.AddSignal(&TradingSignal{
 			StrategyID:  ps.ID,

@@ -1,0 +1,90 @@
+# QuantlinkTrader Demo Configuration
+# 演示配置 - 用于快速测试，订单量适中，避免触发风险限制
+# 使用方法: ./scripts/live/start_demo.sh
+
+# ═══════════════════════════════════════════════════════════
+# System Configuration
+# ═══════════════════════════════════════════════════════════
+system:
+  mode: "live"                          # 运行模式: live
+  multi_strategy: true                  # 多策略模式 ✓
+
+# ═══════════════════════════════════════════════════════════
+# Strategy Configuration (Multi-Strategy Mode)
+# ═══════════════════════════════════════════════════════════
+strategies:
+  # 演示策略: 白银配对套利 (ag2603/ag2605)
+  - id: "demo_ag"                       # 策略唯一标识符
+    type: "pairwise_arb"                # 策略类型: 配对套利
+    enabled: true                       # 是否启用
+    allocation: 1.0                     # 资金分配比例 (100%)
+    symbols:                            # 交易品种
+      - "ag2603"                        # 白银 2026年3月
+      - "ag2605"                        # 白银 2026年5月
+    exchanges:                          
+      - "SHFE"                          # 上期所
+    max_position_size: 50               # 最大持仓（减半，控制订单量）
+    max_exposure: 500000.0              # 最大风险敞口
+
+    # Strategy parameters (策略参数 - 优化为适中频率)
+    parameters:
+      spread_type: "difference"         # 价差类型
+      lookback_period: 100.0            # 回看周期
+      entry_zscore: 1.0                 # 入场阈值（适中，容易触发）
+      exit_zscore: 0.3                  # 出场阈值
+      order_size: 2.0                   # 每次下单2手（适中）
+      min_correlation: 0.0              # 最小相关系数
+      slippage_ticks: 0.0               # 滑点
+
+# ═══════════════════════════════════════════════════════════
+# Session Configuration (交易时段)
+# ═══════════════════════════════════════════════════════════
+session:
+  start_time: "00:00:00"                # 全天运行
+  end_time: "23:59:59"                  
+  timezone: "Asia/Shanghai"             
+  auto_start: true                      # 自动启动
+  auto_stop: false                      # 不自动停止
+  auto_activate: false                  # 手动激活策略
+
+# ═══════════════════════════════════════════════════════════
+# Risk Management (风险管理 - 提高限制，避免误触发)
+# ═══════════════════════════════════════════════════════════
+risk:
+  max_drawdown: 50000.0                 # 最大回撤限制（提高）
+  stop_loss: 100000.0                   # 止损金额（提高）
+  max_loss: 500000.0                    # 最大亏损限制（大幅提高）
+  daily_loss_limit: 500000.0            # 每日亏损限制（大幅提高）
+  max_reject_count: 20                  # 最大拒单次数
+  check_interval_ms: 500                # 风险检查间隔（降低频率）
+
+# ═══════════════════════════════════════════════════════════
+# Engine Configuration
+# ═══════════════════════════════════════════════════════════
+engine:
+  nats_addr: "localhost:4222"           # NATS 地址
+  ors_gateway_addr: "localhost:50052"   # ORS Gateway 地址
+  timer_interval: "5s"                  # 定时器间隔
+  order_queue_size: 100                 # 订单队列大小
+
+# ═══════════════════════════════════════════════════════════
+# Logging Configuration
+# ═══════════════════════════════════════════════════════════
+logging:
+  level: "info"                         # 日志级别
+  file: "log/trader.demo.log"           # 日志文件
+  console: true                         # 控制台输出
+
+# ═══════════════════════════════════════════════════════════
+# API Configuration
+# ═══════════════════════════════════════════════════════════
+api:
+  enabled: true                         # 启用 API
+  port: 9201                            # API 端口
+
+# ═══════════════════════════════════════════════════════════
+# Portfolio Configuration
+# ═══════════════════════════════════════════════════════════
+portfolio:
+  initial_capital: 1000000.0            # 初始资金
+  position_verification_interval: "5m"  # 持仓校验间隔

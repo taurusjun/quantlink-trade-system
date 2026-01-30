@@ -162,9 +162,9 @@ func (as *AggressiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Check stop loss and take profit
-	if as.Position.NetQty != 0 && as.entryPrice > 0 {
+	if as.EstimatedPosition.NetQty != 0 && as.entryPrice > 0 {
 		pnlPercent := (midPrice - as.entryPrice) / as.entryPrice
-		if as.Position.NetQty > 0 {
+		if as.EstimatedPosition.NetQty > 0 {
 			// Long position
 			if pnlPercent <= -as.stopLossPercent {
 				// Stop loss hit
@@ -259,11 +259,11 @@ func (as *AggressiveStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	// Check position limits
 	if signal > 0 {
 		// Bullish signal - buy
-		if as.Position.NetQty >= as.maxPositionSize {
+		if as.EstimatedPosition.NetQty >= as.maxPositionSize {
 			return
 		}
-		if as.Position.NetQty+positionSize > as.maxPositionSize {
-			positionSize = as.maxPositionSize - as.Position.NetQty
+		if as.EstimatedPosition.NetQty+positionSize > as.maxPositionSize {
+			positionSize = as.maxPositionSize - as.EstimatedPosition.NetQty
 		}
 
 		// Generate buy signal
@@ -284,17 +284,17 @@ func (as *AggressiveStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 			},
 		}
 		as.BaseStrategy.AddSignal(buySignal)
-		if as.Position.NetQty == 0 {
+		if as.EstimatedPosition.NetQty == 0 {
 			as.entryPrice = buySignal.Price
 		}
 
 	} else {
 		// Bearish signal - sell
-		if as.Position.NetQty <= -as.maxPositionSize {
+		if as.EstimatedPosition.NetQty <= -as.maxPositionSize {
 			return
 		}
-		if as.Position.NetQty-positionSize < -as.maxPositionSize {
-			positionSize = as.Position.NetQty + as.maxPositionSize
+		if as.EstimatedPosition.NetQty-positionSize < -as.maxPositionSize {
+			positionSize = as.EstimatedPosition.NetQty + as.maxPositionSize
 		}
 
 		// Generate sell signal
@@ -315,7 +315,7 @@ func (as *AggressiveStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 			},
 		}
 		as.BaseStrategy.AddSignal(sellSignal)
-		if as.Position.NetQty == 0 {
+		if as.EstimatedPosition.NetQty == 0 {
 			as.entryPrice = sellSignal.Price
 		}
 	}
@@ -323,19 +323,19 @@ func (as *AggressiveStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 
 // generateExitSignal generates an exit signal to close position
 func (as *AggressiveStrategy) generateExitSignal(md *mdpb.MarketDataUpdate, reason string) {
-	if as.Position.NetQty == 0 {
+	if as.EstimatedPosition.NetQty == 0 {
 		return
 	}
 
 	var signal *TradingSignal
-	if as.Position.NetQty > 0 {
+	if as.EstimatedPosition.NetQty > 0 {
 		// Close long position - sell
 		signal = &TradingSignal{
 			StrategyID: as.ID,
 			Symbol:     md.Symbol,
 			Side:       OrderSideSell,
 			Price:      md.BidPrice[0],
-			Quantity:   as.Position.NetQty,
+			Quantity:   as.EstimatedPosition.NetQty,
 			Signal:     -1.0,
 			Confidence: 1.0,
 			Timestamp:  time.Now(),
@@ -351,7 +351,7 @@ func (as *AggressiveStrategy) generateExitSignal(md *mdpb.MarketDataUpdate, reas
 			Symbol:     md.Symbol,
 			Side:       OrderSideBuy,
 			Price:      md.AskPrice[0],
-			Quantity:   -as.Position.NetQty,
+			Quantity:   -as.EstimatedPosition.NetQty,
 			Signal:     1.0,
 			Confidence: 1.0,
 			Timestamp:  time.Now(),

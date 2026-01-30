@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -47,8 +48,8 @@ type Strategy interface {
 	// GetSignals returns pending trading signals
 	GetSignals() []*TradingSignal
 
-	// GetPosition returns current position
-	GetPosition() *Position
+	// GetEstimatedPosition returns current estimated position (NOT real CTP position!)
+	GetEstimatedPosition() *EstimatedPosition
 
 	// GetPNL returns current P&L
 	GetPNL() *PNL
@@ -111,7 +112,7 @@ type BaseStrategy struct {
 	Config             *StrategyConfig
 	SharedIndicators   *indicators.IndicatorLibrary // Shared indicators (read-only, updated by engine)
 	PrivateIndicators  *indicators.IndicatorLibrary // Private indicators (strategy-specific)
-	Position           *Position
+	EstimatedPosition  *EstimatedPosition           // Estimated position (NOT real CTP position!)
 	PNL                *PNL
 	RiskMetrics        *RiskMetrics
 	Status             *StrategyStatus
@@ -132,7 +133,7 @@ func NewBaseStrategy(id string, strategyType string) *BaseStrategy {
 		ID:                id,
 		Type:              strategyType,
 		PrivateIndicators: indicators.NewIndicatorLibrary(),
-		Position:          &Position{},
+		EstimatedPosition: &EstimatedPosition{}, // Estimated position (NOT real CTP!)
 		PNL:               &PNL{},
 		RiskMetrics:       &RiskMetrics{},
 		Status:            &StrategyStatus{StrategyID: id},
@@ -184,9 +185,9 @@ func (bs *BaseStrategy) IsRunning() bool {
 	return bs.ControlState.RunState != StrategyRunStateStopped
 }
 
-// GetPosition returns current position
-func (bs *BaseStrategy) GetPosition() *Position {
-	return bs.Position
+// GetEstimatedPosition returns current estimated position (NOT real CTP position!)
+func (bs *BaseStrategy) GetEstimatedPosition() *EstimatedPosition {
+	return bs.EstimatedPosition
 }
 
 // GetPNL returns current P&L
@@ -202,9 +203,19 @@ func (bs *BaseStrategy) GetRiskMetrics() *RiskMetrics {
 // GetStatus returns strategy status
 func (bs *BaseStrategy) GetStatus() *StrategyStatus {
 	bs.Status.IsRunning = bs.ControlState.IsActivated() && bs.ControlState.RunState != StrategyRunStateStopped
-	bs.Status.Position = bs.Position
+	bs.Status.EstimatedPosition = bs.EstimatedPosition // Estimated position (NOT real CTP!)
 	bs.Status.PNL = bs.PNL
 	bs.Status.RiskMetrics = bs.RiskMetrics
+
+	// Debug log
+	if bs.EstimatedPosition != nil {
+		log.Printf("[BaseStrategy:%s] 📊 GetStatus: EstimatedPosition Long=%d, Short=%d, Net=%d (ptr=%p)",
+			bs.ID, bs.EstimatedPosition.LongQty, bs.EstimatedPosition.ShortQty,
+			bs.EstimatedPosition.NetQty, bs.EstimatedPosition)
+	} else {
+		log.Printf("[BaseStrategy:%s] ⚠️  GetStatus: EstimatedPosition is NIL!", bs.ID)
+	}
+
 	return bs.Status
 }
 
@@ -224,6 +235,9 @@ func (bs *BaseStrategy) AddSignal(signal *TradingSignal) {
 
 // UpdatePosition updates position based on order update
 func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
+	log.Printf("[BaseStrategy:%s] 🔍 UpdatePosition called: OrderID=%s, Symbol=%s, Status=%v, Side=%v, FilledQty=%d",
+		bs.ID, update.OrderId, update.Symbol, update.Status, update.Side, update.FilledQty)
+
 	// Store order update
 	bs.Orders[update.OrderId] = update
 
@@ -236,48 +250,52 @@ func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 
 		if update.Side == orspb.OrderSide_BUY {
 			// Calculate realized PNL if closing short position
-			if bs.Position.ShortQty > 0 && bs.Position.LongQty == 0 {
+			if bs.EstimatedPosition.ShortQty > 0 && bs.EstimatedPosition.LongQty == 0 {
 				// Buy is closing a short position
 				closedQty := qty
-				if closedQty > bs.Position.ShortQty {
-					closedQty = bs.Position.ShortQty
+				if closedQty > bs.EstimatedPosition.ShortQty {
+					closedQty = bs.EstimatedPosition.ShortQty
 				}
 				// Short PNL: (avg_short_price - buy_price) * qty
-				realizedPnL := (bs.Position.AvgShortPrice - price) * float64(closedQty)
+				realizedPnL := (bs.EstimatedPosition.AvgShortPrice - price) * float64(closedQty)
 				bs.PNL.RealizedPnL += realizedPnL
 			}
 
 			// Update long position (always add to long)
-			totalCost := bs.Position.AvgLongPrice * float64(bs.Position.LongQty)
+			totalCost := bs.EstimatedPosition.AvgLongPrice * float64(bs.EstimatedPosition.LongQty)
 			totalCost += price * float64(qty)
-			bs.Position.LongQty += qty
-			if bs.Position.LongQty > 0 {
-				bs.Position.AvgLongPrice = totalCost / float64(bs.Position.LongQty)
+			bs.EstimatedPosition.LongQty += qty
+			if bs.EstimatedPosition.LongQty > 0 {
+				bs.EstimatedPosition.AvgLongPrice = totalCost / float64(bs.EstimatedPosition.LongQty)
 			}
 		} else {
 			// Calculate realized PNL if closing long position
-			if bs.Position.LongQty > 0 && bs.Position.ShortQty == 0 {
+			if bs.EstimatedPosition.LongQty > 0 && bs.EstimatedPosition.ShortQty == 0 {
 				// Sell is closing a long position
 				closedQty := qty
-				if closedQty > bs.Position.LongQty {
-					closedQty = bs.Position.LongQty
+				if closedQty > bs.EstimatedPosition.LongQty {
+					closedQty = bs.EstimatedPosition.LongQty
 				}
 				// Long PNL: (sell_price - avg_long_price) * qty
-				realizedPnL := (price - bs.Position.AvgLongPrice) * float64(closedQty)
+				realizedPnL := (price - bs.EstimatedPosition.AvgLongPrice) * float64(closedQty)
 				bs.PNL.RealizedPnL += realizedPnL
 			}
 
 			// Update short position (always add to short)
-			totalCost := bs.Position.AvgShortPrice * float64(bs.Position.ShortQty)
+			totalCost := bs.EstimatedPosition.AvgShortPrice * float64(bs.EstimatedPosition.ShortQty)
 			totalCost += price * float64(qty)
-			bs.Position.ShortQty += qty
-			if bs.Position.ShortQty > 0 {
-				bs.Position.AvgShortPrice = totalCost / float64(bs.Position.ShortQty)
+			bs.EstimatedPosition.ShortQty += qty
+			if bs.EstimatedPosition.ShortQty > 0 {
+				bs.EstimatedPosition.AvgShortPrice = totalCost / float64(bs.EstimatedPosition.ShortQty)
 			}
 		}
 
-		bs.Position.NetQty = bs.Position.LongQty - bs.Position.ShortQty
-		bs.Position.LastUpdate = time.Now()
+		bs.EstimatedPosition.NetQty = bs.EstimatedPosition.LongQty - bs.EstimatedPosition.ShortQty
+		bs.EstimatedPosition.LastUpdate = time.Now()
+
+		log.Printf("[BaseStrategy:%s] ✅ EstimatedPosition UPDATED: Long=%d, Short=%d, Net=%d, AvgLong=%.2f, AvgShort=%.2f",
+			bs.ID, bs.EstimatedPosition.LongQty, bs.EstimatedPosition.ShortQty, bs.EstimatedPosition.NetQty,
+			bs.EstimatedPosition.AvgLongPrice, bs.EstimatedPosition.AvgShortPrice)
 	} else if update.Status == orspb.OrderStatus_REJECTED {
 		bs.Status.RejectCount++
 	}
@@ -285,14 +303,14 @@ func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 
 // UpdatePNL updates P&L based on current market price
 func (bs *BaseStrategy) UpdatePNL(currentPrice float64) {
-	if bs.Position.IsFlat() {
+	if bs.EstimatedPosition.IsFlat() {
 		bs.PNL.UnrealizedPnL = 0
-	} else if bs.Position.IsLong() {
+	} else if bs.EstimatedPosition.IsLong() {
 		// Long position: (current - avg_buy) * qty
-		bs.PNL.UnrealizedPnL = (currentPrice - bs.Position.AvgLongPrice) * float64(bs.Position.LongQty)
+		bs.PNL.UnrealizedPnL = (currentPrice - bs.EstimatedPosition.AvgLongPrice) * float64(bs.EstimatedPosition.LongQty)
 	} else {
 		// Short position: (avg_sell - current) * qty
-		bs.PNL.UnrealizedPnL = (bs.Position.AvgShortPrice - currentPrice) * float64(bs.Position.ShortQty)
+		bs.PNL.UnrealizedPnL = (bs.EstimatedPosition.AvgShortPrice - currentPrice) * float64(bs.EstimatedPosition.ShortQty)
 	}
 
 	bs.PNL.TotalPnL = bs.PNL.RealizedPnL + bs.PNL.UnrealizedPnL
@@ -302,7 +320,7 @@ func (bs *BaseStrategy) UpdatePNL(currentPrice float64) {
 
 // UpdateRiskMetrics updates risk metrics
 func (bs *BaseStrategy) UpdateRiskMetrics(currentPrice float64) {
-	bs.RiskMetrics.PositionSize = abs(bs.Position.NetQty)
+	bs.RiskMetrics.PositionSize = abs(bs.EstimatedPosition.NetQty)
 	bs.RiskMetrics.ExposureValue = float64(bs.RiskMetrics.PositionSize) * currentPrice
 	bs.RiskMetrics.Timestamp = time.Now()
 
@@ -320,7 +338,7 @@ func (bs *BaseStrategy) CheckRiskLimits() bool {
 
 	// Check position size limit
 	if bs.Config.MaxPositionSize > 0 {
-		if absInt64(bs.Position.NetQty) > bs.Config.MaxPositionSize {
+		if absInt64(bs.EstimatedPosition.NetQty) > bs.Config.MaxPositionSize {
 			return false
 		}
 	}
@@ -344,7 +362,7 @@ func (bs *BaseStrategy) CheckRiskLimits() bool {
 
 // Reset resets the strategy
 func (bs *BaseStrategy) Reset() {
-	bs.Position = &Position{}
+	bs.EstimatedPosition = &EstimatedPosition{}
 	bs.PNL = &PNL{}
 	bs.RiskMetrics = &RiskMetrics{}
 	bs.PendingSignals = make([]*TradingSignal, 0)

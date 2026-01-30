@@ -208,6 +208,7 @@ endif()
 option(BUILD_CTP_PLUGIN "Build CTP plugin" ON)
 option(BUILD_XTP_PLUGIN "Build XTP plugin" OFF)
 option(BUILD_FEMAS_PLUGIN "Build FEMAS plugin" OFF)
+option(BUILD_SIMULATOR_PLUGIN "Build Simulator plugin" ON)
 
 # 编译插件
 if(BUILD_CTP_PLUGIN)
@@ -223,6 +224,11 @@ endif()
 if(BUILD_FEMAS_PLUGIN)
     message(STATUS "Building FEMAS plugin...")
     add_subdirectory(plugins/femas)
+endif()
+
+if(BUILD_SIMULATOR_PLUGIN AND HAS_YAML_CPP)
+    message(STATUS "Building Simulator plugin...")
+    # Simulator plugin does not need subdirectory since it's simple
 endif()
 
 # 打印信息
@@ -241,13 +247,25 @@ message(STATUS "========================================")
 message(STATUS "CTP Plugin: ${BUILD_CTP_PLUGIN}")
 message(STATUS "XTP Plugin: ${BUILD_XTP_PLUGIN}")
 message(STATUS "FEMAS Plugin: ${BUILD_FEMAS_PLUGIN}")
+message(STATUS "Simulator Plugin: ${BUILD_SIMULATOR_PLUGIN}")
 message(STATUS "========================================")
 
 # ==================== Counter Bridge (通用多券商订单路由网关) ====================
-# 从ORS共享内存读取订单，路由到各券商插件（CTP/盛立/XTP等）
+# 从ORS共享内存读取订单，路由到各券商插件（CTP/Simulator/XTP等）
 
-if(BUILD_CTP_PLUGIN AND APPLE AND HAS_YAML_CPP)
-    message(STATUS "Building Counter Bridge with CTP support...")
+if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
+    set(COUNTER_BRIDGE_PLUGINS "")
+
+    if(BUILD_CTP_PLUGIN)
+        list(APPEND COUNTER_BRIDGE_PLUGINS "CTP")
+    endif()
+
+    if(BUILD_SIMULATOR_PLUGIN)
+        list(APPEND COUNTER_BRIDGE_PLUGINS "Simulator")
+    endif()
+
+    string(REPLACE ";" ", " COUNTER_BRIDGE_PLUGINS_STR "${COUNTER_BRIDGE_PLUGINS}")
+    message(STATUS "Building Counter Bridge with plugins: ${COUNTER_BRIDGE_PLUGINS_STR}")
 
     set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
 
@@ -261,30 +279,56 @@ if(BUILD_CTP_PLUGIN AND APPLE AND HAS_YAML_CPP)
     # 包含目录
     target_include_directories(counter_bridge PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ctp/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
         ${GENERATED_PROTOBUF_PATH}
-        ${CTP_FRAMEWORK_DIR}/include
         /opt/homebrew/include
     )
 
-    # 链接CTP插件静态库（需要先编译CTP插件的对象文件）
+    # 添加CTP插件包含目录
+    if(BUILD_CTP_PLUGIN)
+        target_include_directories(counter_bridge PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/plugins/ctp/include
+            ${CTP_FRAMEWORK_DIR}/include
+        )
+    endif()
+
+    # 添加Simulator插件包含目录
+    if(BUILD_SIMULATOR_PLUGIN)
+        target_include_directories(counter_bridge PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/plugins/simulator/include
+        )
+    endif()
+
+    # 基础链接库
     target_link_libraries(counter_bridge
         gRPC::grpc++
         gRPC::grpc++_reflection
         Threads::Threads
-        ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
         /opt/homebrew/lib/libyaml-cpp.dylib
     )
 
-    # 定义启用CTP插件的宏
-    target_compile_definitions(counter_bridge PRIVATE ENABLE_CTP_PLUGIN)
+    # 添加CTP插件
+    if(BUILD_CTP_PLUGIN)
+        target_compile_definitions(counter_bridge PRIVATE ENABLE_CTP_PLUGIN)
+        target_sources(counter_bridge PRIVATE
+            plugins/ctp/src/ctp_td_config.cpp
+            plugins/ctp/src/ctp_td_plugin.cpp
+        )
+        target_link_libraries(counter_bridge
+            ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+        )
+    endif()
 
-    # 添加CTP插件源文件作为依赖
-    target_sources(counter_bridge PRIVATE
-        plugins/ctp/src/ctp_td_config.cpp
-        plugins/ctp/src/ctp_td_plugin.cpp
-    )
+    # 添加Simulator插件
+    if(BUILD_SIMULATOR_PLUGIN)
+        target_compile_definitions(counter_bridge PRIVATE ENABLE_SIMULATOR_PLUGIN)
+        target_sources(counter_bridge PRIVATE
+            plugins/simulator/src/simulator_config.cpp
+            plugins/simulator/src/simulator_plugin.cpp
+            plugins/simulator/src/order_book.cpp
+            plugins/simulator/src/matching_engine.cpp
+        )
+    endif()
 
     # 设置RPATH
     set_target_properties(counter_bridge PROPERTIES
@@ -297,9 +341,9 @@ if(BUILD_CTP_PLUGIN AND APPLE AND HAS_YAML_CPP)
 
     message(STATUS "Counter Bridge target added:")
     message(STATUS "  - Reads orders from shared memory (ors_request)")
-    message(STATUS "  - Routes to broker plugins (currently: CTP)")
+    message(STATUS "  - Routes to broker plugins: ${COUNTER_BRIDGE_PLUGINS_STR}")
     message(STATUS "  - Writes responses to shared memory (ors_response)")
     message(STATUS "  - Extensible: add more brokers by implementing ITDPlugin")
 else()
-    message(STATUS "Counter Bridge: Skipped (requires CTP plugin)")
+    message(STATUS "Counter Bridge: Skipped (requires at least one plugin)")
 endif()

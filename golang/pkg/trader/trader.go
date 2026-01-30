@@ -678,7 +678,7 @@ func (t *Trader) GetStatus() map[string]interface{} {
 		if t.Strategy != nil {
 			status["strategy_id"] = t.Strategy.GetID()
 			status["strategy"] = t.Strategy.GetStatus()
-			status["position"] = t.Strategy.GetPosition()
+			status["position"] = t.Strategy.GetEstimatedPosition()
 			status["pnl"] = t.Strategy.GetPNL()
 			status["risk"] = t.Strategy.GetRiskMetrics()
 		}
@@ -686,7 +686,7 @@ func (t *Trader) GetStatus() map[string]interface{} {
 		// Single-strategy mode
 		status["strategy_id"] = t.Config.System.StrategyID
 		status["strategy"] = t.Strategy.GetStatus()
-		status["position"] = t.Strategy.GetPosition()
+		status["position"] = t.Strategy.GetEstimatedPosition()
 		status["pnl"] = t.Strategy.GetPNL()
 		status["risk"] = t.Strategy.GetRiskMetrics()
 	}

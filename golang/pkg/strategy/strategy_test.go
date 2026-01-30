@@ -282,7 +282,7 @@ func TestBaseStrategy_CheckRiskLimits(t *testing.T) {
 	}
 
 	// Position within limits
-	bs.Position.NetQty = 5
+	bs.EstimatedPosition.NetQty = 5
 	bs.UpdateRiskMetrics(100.0)
 
 	if !bs.CheckRiskLimits() {
@@ -290,7 +290,7 @@ func TestBaseStrategy_CheckRiskLimits(t *testing.T) {
 	}
 
 	// Position exceeds limits
-	bs.Position.NetQty = 15
+	bs.EstimatedPosition.NetQty = 15
 	bs.UpdateRiskMetrics(100.0)
 
 	if bs.CheckRiskLimits() {
@@ -333,8 +333,8 @@ func BenchmarkBaseStrategy_UpdatePosition(b *testing.B) {
 
 func BenchmarkBaseStrategy_UpdatePNL(b *testing.B) {
 	bs := NewBaseStrategy("test_strategy", "test")
-	bs.Position.NetQty = 10
-	bs.Position.AvgLongPrice = 100.0
+	bs.EstimatedPosition.NetQty = 10
+	bs.EstimatedPosition.AvgLongPrice = 100.0
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

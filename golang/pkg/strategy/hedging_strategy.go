@@ -241,7 +241,7 @@ func (hs *HedgingStrategy) calculateDelta() {
 	// Delta = primary_position + hedge_ratio * hedge_position
 	// For delta-neutral: Delta = 0
 	// We track positions separately but for simplicity, use net position
-	primaryDelta := float64(hs.Position.NetQty)
+	primaryDelta := float64(hs.EstimatedPosition.NetQty)
 	hedgeDelta := 0.0 // Would need separate tracking per symbol
 	hs.currentDelta = primaryDelta + hs.hedgeRatio*hedgeDelta
 }
@@ -259,7 +259,7 @@ func (hs *HedgingStrategy) rebalance(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Check position limits
-	if math.Abs(float64(hs.Position.NetQty+hedgeQty)) > float64(hs.maxPositionSize) {
+	if math.Abs(float64(hs.EstimatedPosition.NetQty+hedgeQty)) > float64(hs.maxPositionSize) {
 		return
 	}
 
@@ -334,7 +334,7 @@ func (hs *HedgingStrategy) OnTimer(now time.Time) {
 	// Log hedge status
 	if now.Unix()%30 == 0 {
 		log.Printf("[HedgingStrategy:%s] Delta=%.2f (target=%.2f), HedgeRatio=%.2f, Position=%d",
-			hs.ID, hs.currentDelta, hs.targetDelta, hs.hedgeRatio, hs.Position.NetQty)
+			hs.ID, hs.currentDelta, hs.targetDelta, hs.hedgeRatio, hs.EstimatedPosition.NetQty)
 	}
 }
 

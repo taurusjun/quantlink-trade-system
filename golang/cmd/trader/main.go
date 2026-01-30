@@ -186,13 +186,26 @@ func printConfigSummary(cfg *config.TraderConfig) {
 	log.Println("[Main] ────────────────────────────────────────────────────────────")
 	log.Println("[Main] Configuration Summary")
 	log.Println("[Main] ────────────────────────────────────────────────────────────")
-	log.Printf("[Main] Strategy ID:       %s", cfg.System.StrategyID)
-	log.Printf("[Main] Strategy Type:     %s", cfg.Strategy.Type)
-	log.Printf("[Main] Run Mode:          %s", cfg.System.Mode)
-	log.Printf("[Main] Symbols:           %v", cfg.Strategy.Symbols)
-	log.Printf("[Main] Exchanges:         %v", cfg.Strategy.Exchanges)
-	log.Printf("[Main] Max Position:      %d", cfg.Strategy.MaxPositionSize)
-	log.Printf("[Main] Max Exposure:      %.2f", cfg.Strategy.MaxExposure)
+
+	// 多策略模式
+	if cfg.System.MultiStrategy {
+		log.Printf("[Main] Mode:              Multi-Strategy")
+		log.Printf("[Main] Run Mode:          %s", cfg.System.Mode)
+		log.Printf("[Main] Strategies:        %d", len(cfg.Strategies))
+		for i, s := range cfg.Strategies {
+			log.Printf("[Main]   [%d] %s (%s) - %v", i+1, s.ID, s.Type, s.Symbols)
+		}
+	} else {
+		// 单策略模式
+		log.Printf("[Main] Strategy ID:       %s", cfg.System.StrategyID)
+		log.Printf("[Main] Strategy Type:     %s", cfg.Strategy.Type)
+		log.Printf("[Main] Run Mode:          %s", cfg.System.Mode)
+		log.Printf("[Main] Symbols:           %v", cfg.Strategy.Symbols)
+		log.Printf("[Main] Exchanges:         %v", cfg.Strategy.Exchanges)
+		log.Printf("[Main] Max Position:      %d", cfg.Strategy.MaxPositionSize)
+		log.Printf("[Main] Max Exposure:      %.2f", cfg.Strategy.MaxExposure)
+	}
+
 	if cfg.Session.StartTime != "" && cfg.Session.EndTime != "" {
 		log.Printf("[Main] Trading Hours:     %s - %s (%s)",
 			cfg.Session.StartTime, cfg.Session.EndTime, cfg.Session.Timezone)
@@ -234,9 +247,9 @@ func printStatus(t *trader.Trader) {
 		log.Printf("[Main]   Running:      %v", strategyStatus["is_running"])
 	}
 
-	// Position information
-	if position, ok := status["position"].(*strategy.Position); ok {
-		log.Printf("[Main] Position:       %d (Long: %d, Short: %d)",
+	// Position information (estimated)
+	if position, ok := status["position"].(*strategy.EstimatedPosition); ok {
+		log.Printf("[Main] Estimated Position: %d (Long: %d, Short: %d)",
 			position.NetQty, position.LongQty, position.ShortQty)
 	}
 
@@ -382,7 +395,7 @@ func applyCommandLineOverrides(cfg *config.TraderConfig) {
 		log.Printf("[Main] Strategy ID overridden (legacy): %s", *strategyIDLegacy)
 	}
 
-	if *strategyType != "" {
+	if *strategyType != "" && !cfg.System.MultiStrategy {
 		cfg.Strategy.Type = *strategyType
 		log.Printf("[Main] Strategy type overridden: %s", *strategyType)
 	}

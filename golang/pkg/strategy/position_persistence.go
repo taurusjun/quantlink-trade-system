@@ -86,7 +86,7 @@ func DeletePositionSnapshot(strategyID string) error {
 
 // SaveStrategyPosition 保存策略持仓（辅助函数）
 func SaveStrategyPosition(strategy Strategy) error {
-	pos := strategy.GetPosition()
+	pos := strategy.GetEstimatedPosition() // Get estimated position
 
 	snapshot := PositionSnapshot{
 		StrategyID:    strategy.GetID(),

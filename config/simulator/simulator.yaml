@@ -1,0 +1,24 @@
+mode: "immediate"
+
+account:
+  initial_balance: 1000000.0
+  commission_rate: 0.0003
+  margin_rate: 0.10
+
+matching:
+  accept_delay_ms: 50
+  fill_delay_ms: 100
+  slippage_ticks: 1.0
+
+risk:
+  max_position_per_symbol: 1000
+  max_daily_loss: 100000.0
+
+persistence:
+  data_dir: "data/simulator"
+  enable: true
+  snapshot_interval_sec: 60
+
+log:
+  level: "info"
+  console: true

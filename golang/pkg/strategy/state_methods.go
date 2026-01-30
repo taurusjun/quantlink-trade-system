@@ -70,8 +70,8 @@ func (bs *BaseStrategy) TryRecover() bool {
 	}
 
 	// Check if position is flat (required for recovery)
-	if !bs.Position.IsFlat() {
-		log.Printf("[%s] Cannot recover: position not flat (net=%d)", bs.ID, bs.Position.NetQty)
+	if !bs.EstimatedPosition.IsFlat() {
+		log.Printf("[%s] Cannot recover: position not flat (net=%d)", bs.ID, bs.EstimatedPosition.NetQty)
 		return false
 	}
 
@@ -111,8 +111,8 @@ func (bs *BaseStrategy) CompleteExit() {
 	}
 
 	// Check if we can exit
-	if !bs.Position.IsFlat() {
-		log.Printf("[%s] Cannot complete exit: position not flat (net=%d)", bs.ID, bs.Position.NetQty)
+	if !bs.EstimatedPosition.IsFlat() {
+		log.Printf("[%s] Cannot complete exit: position not flat (net=%d)", bs.ID, bs.EstimatedPosition.NetQty)
 		return
 	}
 
@@ -149,7 +149,7 @@ func (bs *BaseStrategy) HandleFlatten(currentPrice float64) {
 	}
 
 	// Step 2: Close positions if any
-	if !bs.Position.IsFlat() {
+	if !bs.EstimatedPosition.IsFlat() {
 		bs.generateFlattenOrders(currentPrice)
 	}
 
@@ -175,7 +175,7 @@ func (bs *BaseStrategy) generateFlattenOrders(currentPrice float64) {
 	var signal *TradingSignal
 	symbol := bs.Config.Symbols[0] // Use first symbol
 
-	if bs.Position.IsLong() {
+	if bs.EstimatedPosition.IsLong() {
 		// Close long position: sell
 		price := currentPrice
 		if bs.ControlState.AggressiveFlat {
@@ -189,12 +189,12 @@ func (bs *BaseStrategy) generateFlattenOrders(currentPrice float64) {
 			StrategyID: bs.ID,
 			Symbol:     symbol,
 			Side:       OrderSideSell,
-			Quantity:   bs.Position.LongQty,
+			Quantity:   bs.EstimatedPosition.LongQty,
 			Price:      price,
 			OrderType:  OrderTypeLimit,
 			Timestamp:  time.Now(),
 		}
-	} else if bs.Position.IsShort() {
+	} else if bs.EstimatedPosition.IsShort() {
 		// Close short position: buy
 		price := currentPrice
 		if bs.ControlState.AggressiveFlat {
@@ -208,7 +208,7 @@ func (bs *BaseStrategy) generateFlattenOrders(currentPrice float64) {
 			StrategyID: bs.ID,
 			Symbol:     symbol,
 			Side:       OrderSideBuy,
-			Quantity:   bs.Position.ShortQty,
+			Quantity:   bs.EstimatedPosition.ShortQty,
 			Price:      price,
 			OrderType:  OrderTypeLimit,
 			Timestamp:  time.Now(),

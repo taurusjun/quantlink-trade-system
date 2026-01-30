@@ -27,12 +27,18 @@
 #include "../plugins/ctp/include/ctp_td_plugin.h"
 #endif
 
+// Simulator插件（如果启用）
+#if defined(ENABLE_SIMULATOR_PLUGIN)
+#include "../plugins/simulator/include/simulator_plugin.h"
+#endif
+
 using OrderReqQueue = hft::shm::SPSCQueue<hft::ors::OrderRequestRaw, 4096>;
 using OrderRespQueue = hft::shm::SPSCQueue<hft::ors::OrderResponseRaw, 4096>;
 using namespace hft::plugin;
 
 // 订单信息缓存结构
 struct CachedOrderInfo {
+    std::string strategy_id;      // 策略ID
     std::string client_order_id;
     std::string symbol;
     std::string exchange;
@@ -92,11 +98,17 @@ void OnBrokerOrderCallback(const OrderInfo& order_info) {
     CachedOrderInfo cached_info;
     {
         std::lock_guard<std::mutex> lock(g_orders_mutex);
+        std::cout << "[Bridge] Looking up broker_order_id: " << order_info.order_id
+                  << " (cache size: " << g_order_map.size() << ")" << std::endl;
         auto it = g_order_map.find(order_info.order_id);
         if (it != g_order_map.end()) {
             cached_info = it->second;
+            std::cout << "[Bridge] ✓ Found in cache: strategy_id=" << cached_info.strategy_id
+                      << " client_order_id=" << cached_info.client_order_id << std::endl;
         } else {
             // 如果缓存中没有，使用order_info中的信息（降级处理）
+            std::cout << "[Bridge] ⚠ NOT found in cache, using fallback" << std::endl;
+            cached_info.strategy_id = "";  // 无法获取
             cached_info.client_order_id = order_info.client_order_id;
             cached_info.symbol = order_info.symbol;
             cached_info.exchange = "SHFE";  // 默认值
@@ -104,11 +116,18 @@ void OnBrokerOrderCallback(const OrderInfo& order_info) {
         }
     }
 
-    std::strncpy(resp.order_id, order_info.order_id, sizeof(resp.order_id) - 1);
+    // 使用 client_order_id 作为 order_id，这样 Trader 可以匹配回报
+    // broker_order_id (SIM_xxx) 仅用于内部追踪
+    std::strncpy(resp.strategy_id, cached_info.strategy_id.c_str(), sizeof(resp.strategy_id) - 1);
+    std::strncpy(resp.order_id, cached_info.client_order_id.c_str(), sizeof(resp.order_id) - 1);
     std::strncpy(resp.client_order_id, cached_info.client_order_id.c_str(), sizeof(resp.client_order_id) - 1);
     std::strncpy(resp.symbol, cached_info.symbol.c_str(), sizeof(resp.symbol) - 1);
     std::strncpy(resp.exchange, cached_info.exchange.c_str(), sizeof(resp.exchange) - 1);
     resp.side = cached_info.side;
+
+    std::cout << "[Bridge] Response: strategy_id=" << resp.strategy_id
+              << " order_id=" << resp.order_id
+              << " client_order_id=" << resp.client_order_id << std::endl;
 
     // 状态映射：券商状态 -> ORS状态
     switch (order_info.status) {
@@ -215,6 +234,67 @@ std::string JsonEscape(const std::string& str) {
     return escaped;
 }
 
+// 获取Simulator插件（如果存在）
+ITDPlugin* GetSimulatorPlugin() {
+    auto it = g_brokers.find("simulator");
+    if (it != g_brokers.end()) {
+        return it->second.get();
+    }
+    return nullptr;
+}
+
+// 处理Simulator统计信息查询
+void HandleSimulatorStats(const httplib::Request& req, httplib::Response& res) {
+    auto* sim = GetSimulatorPlugin();
+    if (!sim) {
+        res.set_content("{\"success\":false,\"error\":\"Simulator not found\"}", "application/json");
+        return;
+    }
+
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"success\": true,\n";
+    json << "  \"plugin_name\": \"" << sim->GetPluginName() << "\",\n";
+    json << "  \"plugin_version\": \"" << sim->GetPluginVersion() << "\",\n";
+    json << "  \"order_count\": " << sim->GetOrderCount() << ",\n";
+    json << "  \"trade_count\": " << sim->GetTradeCount() << ",\n";
+    json << "  \"is_connected\": " << (sim->IsConnected() ? "true" : "false") << ",\n";
+    json << "  \"is_logged_in\": " << (sim->IsLoggedIn() ? "true" : "false") << "\n";
+    json << "}\n";
+
+    res.set_content(json.str(), "application/json");
+}
+
+// 处理Simulator账户查询
+void HandleSimulatorAccount(const httplib::Request& req, httplib::Response& res) {
+    auto* sim = GetSimulatorPlugin();
+    if (!sim) {
+        res.set_content("{\"success\":false,\"error\":\"Simulator not found\"}", "application/json");
+        return;
+    }
+
+    hft::plugin::AccountInfo account;
+    if (!sim->QueryAccount(account)) {
+        res.set_content("{\"success\":false,\"error\":\"Failed to query account\"}", "application/json");
+        return;
+    }
+
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"success\": true,\n";
+    json << "  \"account_id\": \"" << JsonEscape(account.account_id) << "\",\n";
+    json << "  \"balance\": " << account.balance << ",\n";
+    json << "  \"available\": " << account.available << ",\n";
+    json << "  \"margin\": " << account.margin << ",\n";
+    json << "  \"frozen_margin\": " << account.frozen_margin << ",\n";
+    json << "  \"commission\": " << account.commission << ",\n";
+    json << "  \"close_profit\": " << account.close_profit << ",\n";
+    json << "  \"position_profit\": " << account.position_profit << "\n";
+    json << "}\n";
+
+    res.set_content(json.str(), "application/json");
+}
+
 // 处理持仓查询请求
 void HandlePositionQuery(const httplib::Request& req, httplib::Response& res) {
     std::cout << "[HTTP] Position query received" << std::endl;
@@ -302,6 +382,10 @@ void StartHTTPServer(int port = 8080) {
 
     // 注册endpoint
     g_http_server->Get("/positions", HandlePositionQuery);
+
+    // Simulator专属endpoints
+    g_http_server->Get("/simulator/stats", HandleSimulatorStats);
+    g_http_server->Get("/simulator/account", HandleSimulatorAccount);
 
     // 健康检查endpoint
     g_http_server->Get("/health", [](const httplib::Request&, httplib::Response& res) {
@@ -414,11 +498,15 @@ void OrderRequestProcessor(OrderReqQueue* req_queue) {
                     {
                         std::lock_guard<std::mutex> lock(g_orders_mutex);
                         CachedOrderInfo info;
+                        info.strategy_id = raw_req.strategy_id;
                         info.client_order_id = raw_req.client_order_id;
                         info.symbol = raw_req.symbol;
                         info.exchange = raw_req.exchange;
                         info.side = raw_req.side;
                         g_order_map[broker_order_id] = info;
+                        std::cout << "[Processor] 💾 Cached: broker_order_id=" << broker_order_id
+                                  << " strategy_id=" << info.strategy_id
+                                  << " client_order_id=" << info.client_order_id << std::endl;
                     }
 
                     std::cout << "[Processor] ✅ Order sent, BrokerOrderID: " << broker_order_id << std::endl;
@@ -476,20 +564,18 @@ int main(int argc, char** argv) {
 
     // 1. 打开共享内存队列
     std::cout << "[Main] Opening shared memory queues..." << std::endl;
-    auto* req_queue_raw = hft::shm::ShmManager::CreateOrOpen("ors_request");
-    if (!req_queue_raw) {
+    auto* req_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderRequestRaw, 4096>("ors_request");
+    if (!req_queue) {
         std::cerr << "[Main] ❌ Failed to open request queue" << std::endl;
         return 1;
     }
-    auto* req_queue = reinterpret_cast<OrderReqQueue*>(req_queue_raw);
     std::cout << "[Main] ✅ Request queue ready" << std::endl;
 
-    auto* resp_queue_raw = hft::shm::ShmManager::CreateOrOpen("ors_response");
-    if (!resp_queue_raw) {
+    auto* resp_queue = hft::shm::ShmManager::CreateOrOpenGeneric<hft::ors::OrderResponseRaw, 4096>("ors_response");
+    if (!resp_queue) {
         std::cerr << "[Main] ❌ Failed to create response queue" << std::endl;
         return 1;
     }
-    auto* resp_queue = reinterpret_cast<OrderRespQueue*>(resp_queue_raw);
     g_response_queue = resp_queue;
     std::cout << "[Main] ✅ Response queue ready" << std::endl;
 
@@ -539,6 +625,31 @@ int main(int argc, char** argv) {
         }
 #endif
 
+#if defined(ENABLE_SIMULATOR_PLUGIN)
+        if (broker_name == "simulator") {
+            auto sim_plugin = std::make_unique<hft::plugin::simulator::SimulatorPlugin>();
+            if (!sim_plugin->Initialize(config_file)) {
+                std::cerr << "[Main] ❌ Failed to initialize Simulator plugin" << std::endl;
+                continue;
+            }
+
+            // 注册回调
+            sim_plugin->RegisterOrderCallback(OnBrokerOrderCallback);
+            sim_plugin->RegisterTradeCallback(OnBrokerTradeCallback);
+            sim_plugin->RegisterErrorCallback(OnBrokerErrorCallback);
+
+            // 登录（内存初始化，立即成功）
+            if (!sim_plugin->Login()) {
+                std::cerr << "[Main] ❌ Simulator login failed" << std::endl;
+                continue;
+            }
+
+            std::cout << "[Main] ✅ Simulator plugin initialized (immediate matching mode)" << std::endl;
+            plugin = sim_plugin.get();
+            g_brokers["simulator"] = std::move(sim_plugin);
+        }
+#endif
+
         // TODO: 添加其他券商插件
         // if (broker_name == "suntime") { ... }
         // if (broker_name == "xtp") { ... }
@@ -548,6 +659,9 @@ int main(int argc, char** argv) {
             std::cerr << "[Main]    Supported: ";
 #if defined(ENABLE_CTP_PLUGIN)
             std::cerr << "ctp ";
+#endif
+#if defined(ENABLE_SIMULATOR_PLUGIN)
+            std::cerr << "simulator ";
 #endif
             std::cerr << std::endl;
         }

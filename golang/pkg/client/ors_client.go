@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -56,6 +57,7 @@ type ORSClient struct {
 	ordersSent     int64
 	ordersAccepted int64
 	ordersRejected int64
+	orderSeq       int64 // 订单序列号（用于生成客户端订单ID）
 }
 
 // ORSClientConfig 客户端配置
@@ -139,6 +141,13 @@ func (c *ORSClient) SendOrder(ctx context.Context, req *orspb.OrderRequest) (*or
 	// 设置策略ID
 	if req.StrategyId == "" {
 		req.StrategyId = c.strategyID
+	}
+
+	// 生成客户端订单ID（如果未设置）
+	if req.ClientOrderId == "" {
+		req.ClientOrderId = fmt.Sprintf("ORD_%d_%06d",
+			time.Now().UnixMilli(),
+			atomic.AddInt64(&c.orderSeq, 1))
 	}
 
 	// 调用gRPC接口

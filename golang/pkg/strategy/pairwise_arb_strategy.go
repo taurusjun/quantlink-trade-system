@@ -356,14 +356,8 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	log.Printf("[PairwiseArbStrategy:%s] Entering %s spread: z=%.2f, leg1=%v %d, leg2=%v %d",
 		pas.ID, direction, spreadStats.ZScore, signal1Side, qty, signal2Side, hedgeQty)
 
-	// Track positions (simplified - in reality would track per symbol)
-	if direction == "long" {
-		pas.leg1Position += qty
-		pas.leg2Position -= hedgeQty
-	} else {
-		pas.leg1Position -= qty
-		pas.leg2Position += hedgeQty
-	}
+	// 注意：不在这里直接修改 leg1Position/leg2Position
+	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
 }
 
 // generateExitSignals generates signals to exit the spread trade
@@ -437,9 +431,8 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	log.Printf("[PairwiseArbStrategy:%s] Exiting spread: z=%.2f, leg1=%v %d, leg2=%v %d",
 		pas.ID, zScore, signal1Side, qty1, signal2Side, qty2)
 
-	// Reset positions
-	pas.leg1Position = 0
-	pas.leg2Position = 0
+	// 注意：不在这里直接重置持仓
+	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
 }
 
 // OnOrderUpdate handles order updates
@@ -447,12 +440,18 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
+	log.Printf("[PairwiseArb:%s] 🚨 OnOrderUpdate ENTRY: OrderID=%s, Status=%v, Symbol=%s, Side=%v, FilledQty=%d",
+		pas.ID, update.OrderId, update.Status, update.Symbol, update.Side, update.FilledQty)
+
 	if !pas.IsRunning() {
+		log.Printf("[PairwiseArb:%s] ⚠️  Strategy not running, ignoring update", pas.ID)
 		return
 	}
 
 	// Update base strategy position (for overall PNL tracking)
+	log.Printf("[PairwiseArb:%s] 🚨 BEFORE UpdatePosition call, EstimatedPosition ptr=%p", pas.ID, pas.EstimatedPosition)
 	pas.UpdatePosition(update)
+	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.ID, pas.EstimatedPosition)
 
 	// Update leg-specific positions for pairwise arbitrage
 	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
@@ -524,11 +523,11 @@ func (pas *PairwiseArbStrategy) Start() error {
 		}
 
 		// 恢复BaseStrategy持仓
-		pas.Position.LongQty = snapshot.TotalLongQty
-		pas.Position.ShortQty = snapshot.TotalShortQty
-		pas.Position.NetQty = snapshot.TotalNetQty
-		pas.Position.AvgLongPrice = snapshot.AvgLongPrice
-		pas.Position.AvgShortPrice = snapshot.AvgShortPrice
+		pas.EstimatedPosition.LongQty = snapshot.TotalLongQty
+		pas.EstimatedPosition.ShortQty = snapshot.TotalShortQty
+		pas.EstimatedPosition.NetQty = snapshot.TotalNetQty
+		pas.EstimatedPosition.AvgLongPrice = snapshot.AvgLongPrice
+		pas.EstimatedPosition.AvgShortPrice = snapshot.AvgShortPrice
 		pas.PNL.RealizedPnL = snapshot.RealizedPnL
 
 		log.Printf("[PairwiseArbStrategy:%s] Position restored: Long=%d, Short=%d, Net=%d",
@@ -663,11 +662,11 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	snapshot := PositionSnapshot{
 		StrategyID:    pas.ID,
 		Timestamp:     time.Now(),
-		TotalLongQty:  pas.Position.LongQty,
-		TotalShortQty: pas.Position.ShortQty,
-		TotalNetQty:   pas.Position.NetQty,
-		AvgLongPrice:  pas.Position.AvgLongPrice,
-		AvgShortPrice: pas.Position.AvgShortPrice,
+		TotalLongQty:  pas.EstimatedPosition.LongQty,
+		TotalShortQty: pas.EstimatedPosition.ShortQty,
+		TotalNetQty:   pas.EstimatedPosition.NetQty,
+		AvgLongPrice:  pas.EstimatedPosition.AvgLongPrice,
+		AvgShortPrice: pas.EstimatedPosition.AvgShortPrice,
 		RealizedPnL:   pas.PNL.RealizedPnL,
 		SymbolsPos: map[string]int64{
 			pas.symbol1: pas.leg1Position,
@@ -712,15 +711,15 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 	// 更新BaseStrategy的Position（简化处理）
 	totalQty := pas.leg1Position + pas.leg2Position
 	if totalQty > 0 {
-		pas.Position.LongQty = totalQty
-		pas.Position.NetQty = totalQty
+		pas.EstimatedPosition.LongQty = totalQty
+		pas.EstimatedPosition.NetQty = totalQty
 	} else if totalQty < 0 {
-		pas.Position.ShortQty = -totalQty
-		pas.Position.NetQty = totalQty
+		pas.EstimatedPosition.ShortQty = -totalQty
+		pas.EstimatedPosition.NetQty = totalQty
 	}
 
 	log.Printf("[PairwiseArbStrategy:%s] Positions initialized: leg1=%d, leg2=%d, net=%d",
-		pas.ID, pas.leg1Position, pas.leg2Position, pas.Position.NetQty)
+		pas.ID, pas.leg1Position, pas.leg2Position, pas.EstimatedPosition.NetQty)
 
 	return nil
 }

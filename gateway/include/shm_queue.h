@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <string>
 #include <stdexcept>
+#include <cstdio>
+#include <cerrno>
 
 namespace hft {
 namespace shm {
@@ -207,33 +209,55 @@ public:
         using QueueType = SPSCQueue<T, S>;
         std::string shm_name = "/hft_" + name;  // 使用通用前缀而不是md特定前缀
 
+        printf("[ShmManager] CreateOrOpenGeneric: name=%s, shm_name=%s, size=%zu bytes\n",
+               name.c_str(), shm_name.c_str(), sizeof(QueueType));
+
         // 先尝试创建（O_EXCL确保只有第一个创建成功）
         int fd = shm_open(shm_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
         bool created = (fd != -1);
 
         if (!created) {
+            printf("[ShmManager] Shared memory already exists (errno=%d: %s), opening...\n",
+                   errno, strerror(errno));
             // 创建失败（已存在），则打开
             fd = shm_open(shm_name.c_str(), O_RDWR, 0666);
             if (fd == -1) {
-                throw std::runtime_error("Failed to open shared memory: " + shm_name);
+                char err_msg[256];
+                snprintf(err_msg, sizeof(err_msg),
+                        "Failed to open shared memory: %s (errno=%d: %s)",
+                        shm_name.c_str(), errno, strerror(errno));
+                throw std::runtime_error(err_msg);
             }
+            printf("[ShmManager] ✓ Opened existing shared memory: %s (fd=%d)\n", shm_name.c_str(), fd);
         } else {
+            printf("[ShmManager] Created new shared memory: %s (fd=%d)\n", shm_name.c_str(), fd);
             // 创建成功，设置大小
             if (ftruncate(fd, sizeof(QueueType)) == -1) {
+                printf("[ShmManager] ✗ Failed to set size (errno=%d: %s)\n", errno, strerror(errno));
                 close(fd);
                 shm_unlink(shm_name.c_str());
-                throw std::runtime_error("Failed to set shared memory size");
+                char err_msg[256];
+                snprintf(err_msg, sizeof(err_msg),
+                        "Failed to set shared memory size (errno=%d: %s)", errno, strerror(errno));
+                throw std::runtime_error(err_msg);
             }
+            printf("[ShmManager] ✓ Set shared memory size to %zu bytes\n", sizeof(QueueType));
         }
 
         // 映射到进程地址空间
         void* addr = mmap(nullptr, sizeof(QueueType), PROT_READ | PROT_WRITE,
                          MAP_SHARED, fd, 0);
+        int mmap_errno = errno;  // 保存 errno
         close(fd);
 
         if (addr == MAP_FAILED) {
-            throw std::runtime_error("Failed to map shared memory");
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg),
+                    "Failed to map shared memory (errno=%d: %s)", mmap_errno, strerror(mmap_errno));
+            throw std::runtime_error(err_msg);
         }
+
+        printf("[ShmManager] ✓ Mapped shared memory to address: %p\n", addr);
 
         if (is_creator) {
             *is_creator = created;
@@ -241,8 +265,10 @@ public:
 
         // 如果是创建者，使用placement new初始化
         if (created) {
+            printf("[ShmManager] Initializing queue with placement new...\n");
             return new (addr) QueueType();
         } else {
+            printf("[ShmManager] Reusing existing queue at %p\n", addr);
             return reinterpret_cast<QueueType*>(addr);
         }
     }

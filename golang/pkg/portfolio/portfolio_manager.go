@@ -227,7 +227,7 @@ func (pm *PortfolioManager) UpdateAllocations() error {
 		alloc := pm.allocations[id]
 
 		pnl := s.GetPNL()
-		position := s.GetPosition()
+		position := s.GetEstimatedPosition() // Estimated position (NOT real CTP!)
 		riskMetrics := s.GetRiskMetrics()
 
 		alloc.CurrentPnL = pnl.TotalPnL
@@ -236,7 +236,7 @@ func (pm *PortfolioManager) UpdateAllocations() error {
 			alloc.CurrentReturn = pnl.TotalPnL / alloc.AllocatedCapital
 		}
 		alloc.CurrentExposure = riskMetrics.ExposureValue
-		alloc.PositionSize = position.NetQty
+		alloc.PositionSize = position.NetQty // Estimated position
 		alloc.IsActive = s.IsRunning()
 		alloc.LastUpdate = time.Now()
 

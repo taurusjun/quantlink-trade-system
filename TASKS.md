@@ -1,7 +1,95 @@
 # QuantlinkTrader 任务跟踪
 
-**最后更新**: 2026-01-29 16:00
-**当前阶段**: P2 阶段进行中，P2-12完成，P2-13热加载核心完成+PassiveStrategy完成
+**最后更新**: 2026-01-30 17:00
+**当前阶段**: P2 阶段进行中，P0 紧急问题已修复 ✅
+
+---
+
+## 🔥 P0 紧急问题（已修复）
+
+### ✅ **estimated_position 始终为 null - 订单回报链路故障**
+**优先级**: P0 - 严重 🔴
+**发现时间**: 2026-01-30 16:05
+**修复时间**: 2026-01-30 16:59
+**状态**: ✅ **已修复并验证**
+
+**问题描述**:
+- `estimated_position` 在 API 返回中始终为 null
+- 订单成交后，`BaseStrategy.EstimatedPosition` 没有更新
+- **legs 字段不是正确的持仓数据**（只是策略内部追踪的品种持仓）
+- 导致策略无法正确追踪持仓状态
+
+**严重性**:
+- ❌ **策略持仓估算完全失效**
+- ❌ **风控依赖持仓数据，可能失效**
+- ❌ **Dashboard 显示的持仓不准确**
+- ❌ **无法计算真实的 P&L**
+
+**根本原因**（已确认）:
+订单更新从未到达 Trader，OnOrderUpdate 回调从未触发。具体原因：
+
+1. **Counter Bridge 缺少 strategy_id 传递**
+   - `CachedOrderInfo` 结构体缺少 `strategy_id` 字段
+   - 订单响应中 `strategy_id` 为空
+
+2. **Golang Trader 缺少 client_order_id 生成**
+   - `ORSClient.SendOrder()` 没有设置 `ClientOrderId`
+   - Counter Bridge 无法缓存正确的订单映射
+
+3. **NATS 主题错误导致订阅失败**
+   - 实际发布：`order..` (两个点，strategy_id 和 order_id 都为空)
+   - 应该是：`order.test_simple.ORD_xxx`
+   - Trader 订阅 `order.test_simple.>` 无法匹配
+
+4. **持仓直接修改（次要问题）**
+   - 策略代码直接修改 `leg1Position/leg2Position`
+   - 持仓数据不基于实际成交
+
+**修复方案**:
+
+1. **Counter Bridge** (`gateway/src/counter_bridge.cpp`)
+   - 添加 `strategy_id` 字段到 `CachedOrderInfo` 结构体
+   - 缓存时保存 `strategy_id`
+   - 响应时复制 `strategy_id`
+
+2. **Golang Trader** (`golang/pkg/client/ors_client.go`)
+   - 添加 `orderSeq` 字段到 `ORSClient`
+   - 自动生成 `ClientOrderId` (格式: `ORD_{timestamp_ms}_{seq}`)
+   - 添加 `sync/atomic` 导入
+
+3. **持仓管理** (`golang/pkg/strategy/pairwise_arb_strategy.go`)
+   - 删除直接修改 `leg1Position/leg2Position` 的代码
+   - 持仓只从 `OnOrderUpdate` 回调中更新
+
+**修复文件**:
+- `gateway/src/counter_bridge.cpp` - 添加 strategy_id 支持
+- `golang/pkg/client/ors_client.go` - 自动生成 client_order_id
+- `golang/pkg/strategy/pairwise_arb_strategy.go` - 删除直接持仓修改
+
+**验证结果** ✅:
+```bash
+# Counter Bridge 日志
+[Processor] 💾 Cached: broker_order_id=SIM_xxx strategy_id=test_simple client_order_id=ORD_1769763491369_000001
+
+# ORS Gateway 日志
+[ORSGateway] Publishing order update: order.test_simple.ORD_1769763491369_000001 status=5
+
+# Trader 日志
+[StrategyEngine] Received order update: ORD_1769763491369_000001, Status: FILLED
+[BaseStrategy:test_simple] ✅ EstimatedPosition UPDATED: Long=3, Short=3, Net=0, AvgLong=8045.67, AvgShort=8047.33
+```
+
+- ✅ 订单成功发送，包含 client_order_id
+- ✅ Counter Bridge 正确缓存 strategy_id
+- ✅ 订单更新通过 NATS 正常返回
+- ✅ OnOrderUpdate 回调正常触发
+- ✅ estimated_position 正确更新
+
+**相关文档**:
+- ✅ **修复报告**: `docs/实盘/订单回报链路修复报告_2026-01-30-16_59.md`
+- `docs/功能实现/Position重命名为EstimatedPosition_2026-01-30-15_45.md`
+- `docs/功能实现/持仓数据来源分析_2026-01-30-16_00.md`
+- `docs/实盘/持仓概念澄清_2026-01-30-11_25.md`
 
 ---
 
@@ -883,6 +971,8 @@ Counter Bridge (统一 Broker 适配器)
 
 | 日期 | 更新内容 |
 |------|---------|
+| 2026-01-30 17:00 | **✅ P0问题修复完成**：订单回报链路修复，estimated_position 正常工作 |
+| 2026-01-30 16:59 | 创建修复报告文档：订单回报链路修复报告_2026-01-30-16_59.md |
 | 2026-01-29 16:00 | P2-13.7 Dashboard热加载UI任务详细方案设计完成（3个Phase） |
 | 2026-01-29 16:00 | P2-13.1 PassiveStrategy热加载完成（端到端测试通过） |
 | 2026-01-29 15:50 | 完成多策略热加载端到端测试（ag_pairwise & ag_passive验证） |

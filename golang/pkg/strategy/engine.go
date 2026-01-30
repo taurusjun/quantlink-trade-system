@@ -604,10 +604,10 @@ func (se *StrategyEngine) performStateCheck(strategy Strategy) {
 		// Get current price for flatten orders
 		// TODO: Use actual market price from latest market data
 		currentPrice := 0.0
-		if baseStrat.Position.AvgLongPrice > 0 {
-			currentPrice = baseStrat.Position.AvgLongPrice
-		} else if baseStrat.Position.AvgShortPrice > 0 {
-			currentPrice = baseStrat.Position.AvgShortPrice
+		if baseStrat.EstimatedPosition.AvgLongPrice > 0 {
+			currentPrice = baseStrat.EstimatedPosition.AvgLongPrice
+		} else if baseStrat.EstimatedPosition.AvgShortPrice > 0 {
+			currentPrice = baseStrat.EstimatedPosition.AvgShortPrice
 		}
 
 		if currentPrice > 0 {
@@ -639,12 +639,12 @@ func (se *StrategyEngine) PrintStatistics() {
 
 	for _, strategy := range se.strategies {
 		status := strategy.GetStatus()
-		position := strategy.GetPosition()
+		position := strategy.GetEstimatedPosition()
 		pnl := strategy.GetPNL()
 
 		fmt.Printf("\nStrategy: %s (Type: %s)\n", status.StrategyID, strategy.GetType())
 		fmt.Printf("  Running: %v\n", status.IsRunning)
-		fmt.Printf("  Position: %d (Long: %d, Short: %d)\n",
+		fmt.Printf("  Estimated Position: %d (Long: %d, Short: %d)\n",
 			position.NetQty, position.LongQty, position.ShortQty)
 		fmt.Printf("  P&L: %.2f (Realized: %.2f, Unrealized: %.2f)\n",
 			pnl.TotalPnL, pnl.RealizedPnL, pnl.UnrealizedPnL)

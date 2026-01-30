@@ -650,7 +650,7 @@ func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strate
 	}
 
 	base := accessor.GetBaseStrategy()
-	if base == nil || base.Position == nil || base.Position.IsFlat() {
+	if base == nil || base.EstimatedPosition == nil || base.EstimatedPosition.IsFlat() {
 		return positions
 	}
 
@@ -676,28 +676,28 @@ func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strate
 	base.MarketDataMu.RUnlock()
 
 	// Determine direction and collect position
-	if base.Position.IsLong() {
+	if base.EstimatedPosition.IsLong() {
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
 			Symbol:        symbol,
 			Exchange:      exchange,
 			Direction:     "LONG",
-			Volume:        base.Position.LongQty,
-			AvgPrice:      base.Position.AvgLongPrice,
+			Volume:        base.EstimatedPosition.LongQty,
+			AvgPrice:      base.EstimatedPosition.AvgLongPrice,
 			CurrentPrice:  currentPrice,
 			UnrealizedPnL: base.PNL.UnrealizedPnL,
 			LegIndex:      0,
 		})
 	}
 
-	if base.Position.IsShort() {
+	if base.EstimatedPosition.IsShort() {
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
 			Symbol:        symbol,
 			Exchange:      exchange,
 			Direction:     "SHORT",
-			Volume:        base.Position.ShortQty,
-			AvgPrice:      base.Position.AvgShortPrice,
+			Volume:        base.EstimatedPosition.ShortQty,
+			AvgPrice:      base.EstimatedPosition.AvgShortPrice,
 			CurrentPrice:  currentPrice,
 			UnrealizedPnL: base.PNL.UnrealizedPnL,
 			LegIndex:      0,

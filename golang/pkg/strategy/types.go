@@ -96,13 +96,17 @@ func (ts *TradingSignal) ToOrderRequest() *orspb.OrderRequest {
 	return req
 }
 
-// Position represents current position
-type Position struct {
+// EstimatedPosition represents estimated position calculated from order fills.
+// IMPORTANT: This is NOT the real CTP position! It's an internal estimation that may be inaccurate.
+// Real positions must be queried from CTP using position query interface.
+// This estimation is calculated from order fills received by the strategy, but may differ from
+// actual exchange positions due to: network delays, order rejections, partial fills, or system restarts.
+type EstimatedPosition struct {
 	Symbol        string    // Symbol
 	Exchange      string    // Exchange
-	LongQty       int64     // Long position quantity
-	ShortQty      int64     // Short position quantity
-	NetQty        int64     // Net position (long - short)
+	LongQty       int64     // Long position quantity (estimated)
+	ShortQty      int64     // Short position quantity (estimated)
+	NetQty        int64     // Net position (long - short, estimated)
 	AvgLongPrice  float64   // Average long price
 	AvgShortPrice float64   // Average short price
 	RealizedPnL   float64   // Realized P&L
@@ -110,23 +114,23 @@ type Position struct {
 	LastUpdate    time.Time // Last update time
 }
 
-// GetNetPosition returns net position
-func (p *Position) GetNetPosition() int64 {
+// GetNetPosition returns net position (estimated)
+func (p *EstimatedPosition) GetNetPosition() int64 {
 	return p.LongQty - p.ShortQty
 }
 
-// IsFlat returns true if position is flat
-func (p *Position) IsFlat() bool {
+// IsFlat returns true if position is flat (estimated)
+func (p *EstimatedPosition) IsFlat() bool {
 	return p.GetNetPosition() == 0
 }
 
-// IsLong returns true if net long
-func (p *Position) IsLong() bool {
+// IsLong returns true if net long (estimated)
+func (p *EstimatedPosition) IsLong() bool {
 	return p.GetNetPosition() > 0
 }
 
-// IsShort returns true if net short
-func (p *Position) IsShort() bool {
+// IsShort returns true if net short (estimated)
+func (p *EstimatedPosition) IsShort() bool {
 	return p.GetNetPosition() < 0
 }
 
@@ -216,17 +220,17 @@ type StrategyConfig struct {
 
 // StrategyStatus represents strategy runtime status
 type StrategyStatus struct {
-	StrategyID    string
-	IsRunning     bool
-	Position      *Position
-	PNL           *PNL
-	RiskMetrics   *RiskMetrics
-	SignalCount   int64
-	OrderCount    int64
-	FillCount     int64
-	RejectCount   int64
-	LastSignalTime time.Time
-	LastOrderTime  time.Time
-	StartTime     time.Time
-	Errors        []string
+	StrategyID        string             `json:"strategy_id"`
+	IsRunning         bool               `json:"is_running"`
+	EstimatedPosition *EstimatedPosition `json:"estimated_position"` // Estimated from order fills, NOT real CTP position!
+	PNL               *PNL               `json:"pnl"`
+	RiskMetrics       *RiskMetrics       `json:"risk_metrics"`
+	SignalCount       int64              `json:"signal_count"`
+	OrderCount        int64              `json:"order_count"`
+	FillCount         int64              `json:"fill_count"`
+	RejectCount       int64              `json:"reject_count"`
+	LastSignalTime    time.Time          `json:"last_signal_time"`
+	LastOrderTime     time.Time          `json:"last_order_time"`
+	StartTime         time.Time          `json:"start_time"`
+	Errors            []string           `json:"errors"`
 }
