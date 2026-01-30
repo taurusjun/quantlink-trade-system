@@ -55,3 +55,19 @@ data/market_data/
 
 # CTP SDK 流文件目录
 ctp_flow/
+
+# Runtime data
+data/simulator/
+data/positions/
+data/ctp_positions/
+data/market_data/
+
+# Test logs (except reports)
+test_logs/*.log
+scripts/test/e2e/test_logs/
+scripts/test/*/test_logs/
+
+# Temporary files
+*.tmp
+*.swp
+.DS_Store
