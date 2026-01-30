@@ -1,0 +1,4 @@
+spread_mean=0.0
+spread_std=0.0
+hedge_ratio=1.0
+correlation=0.0

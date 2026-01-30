@@ -29,8 +29,8 @@ strategies:
     # Strategy-specific parameters (策略特定参数)
     parameters:
       spread_type: "difference"         # 价差类型: difference, ratio, log
-      lookback_period: 200.0            # 回看周期（实盘：更长周期）
-      entry_zscore: 2.5                 # 入场Z-Score阈值（实盘：更保守）
+      lookback_period: 20.0             # 回看周期（测试：20个数据点，约20秒）
+      entry_zscore: 1.5                 # 入场Z-Score阈值（测试：降低阈值）
       exit_zscore: 0.8                  # 出场Z-Score阈值（实盘：更高出场）
       order_size: 2.0                   # 每条腿的下单数量（实盘：2手）
       min_correlation: 0.7              # 最小相关系数（实盘：要求高相关性）
@@ -86,11 +86,11 @@ instruments:
 # Trading Session Configuration (交易时段配置)
 # ═══════════════════════════════════════════════════════════
 session:
-  start_time: "08:55:00"                # 开始时间（提前5分钟准备）
-  end_time: "15:05:00"                  # 结束时间（延后5分钟平仓）
+  start_time: "00:00:00"                # 开始时间（全天交易）
+  end_time: "23:59:59"                  # 结束时间（全天交易）
   timezone: "Asia/Shanghai"             # 时区
   auto_start: true                      # 自动启动Session Manager
-  auto_stop: true                       # 自动停止策略（实盘：启用）
+  auto_stop: false                      # 自动停止策略（测试：禁用）
   auto_activate: false                  # 自动激活策略 - false时需要手动激活（推荐）
 
   # 夜盘配置（可选）

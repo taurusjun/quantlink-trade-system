@@ -240,8 +240,16 @@ func (se *StrategyEngine) SubscribeMarketData(symbol string) error {
 			return
 		}
 
+		bidPrice := 0.0
+		askPrice := 0.0
+		if len(md.BidPrice) > 0 {
+			bidPrice = md.BidPrice[0]
+		}
+		if len(md.AskPrice) > 0 {
+			askPrice = md.AskPrice[0]
+		}
 		log.Printf("[StrategyEngine] Received market data: %s (bid: %.2f, ask: %.2f)",
-			md.Symbol, md.BidPrice[0], md.AskPrice[0])
+			md.Symbol, bidPrice, askPrice)
 
 		// Dispatch to all strategies
 		se.dispatchMarketData(&md)
