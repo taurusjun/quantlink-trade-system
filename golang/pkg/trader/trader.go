@@ -228,13 +228,37 @@ func (t *Trader) queryInitialPositions() error {
 
 	orsClient := t.Engine.GetORSClient()
 
-	// 调用Counter Bridge查询持仓
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// 添加重试机制，等待 Counter Bridge 完全启动
+	var positions map[string][]client.PositionInfo
+	var err error
+	maxRetries := 5
+	retryInterval := 2 * time.Second
 
-	positions, err := orsClient.QueryPositions(ctx, "", "")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		log.Printf("[Trader] Position query attempt %d/%d...", attempt, maxRetries)
+
+		// 调用Counter Bridge查询持仓
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		positions, err = orsClient.QueryPositions(ctx, "", "")
+		cancel()
+
+		if err == nil {
+			// 查询成功
+			log.Printf("[Trader] ✓ Position query succeeded on attempt %d", attempt)
+			break
+		}
+
+		// 查询失败，记录错误
+		log.Printf("[Trader] Position query attempt %d failed: %v", attempt, err)
+
+		if attempt < maxRetries {
+			log.Printf("[Trader] Retrying in %v...", retryInterval)
+			time.Sleep(retryInterval)
+		}
+	}
+
 	if err != nil {
-		return fmt.Errorf("failed to query positions: %w", err)
+		return fmt.Errorf("failed to query positions after %d attempts: %w", maxRetries, err)
 	}
 
 	// 存储持仓数据（按交易所分组）
