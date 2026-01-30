@@ -283,10 +283,20 @@ grpc::Status ORSGatewayImpl::QueryPosition(
     const PositionQuery* request,
     grpc::ServerWriter<PositionData>* writer) {
 
-    // TODO: 实现仓位查询（从Counter Gateway获取）
-    (void)request;
-    (void)writer;
+    std::cout << "[ORS Gateway] Position query received" << std::endl;
 
+    // 注意：当前简化实现，直接返回空结果
+    // 完整实现需要通过共享内存与Counter Bridge通信
+    // 或者由Counter Bridge通过HTTP/gRPC暴露查询接口
+    //
+    // Phase 2简化方案：
+    // 1. ORS Gateway调用本地函数查询（如果Counter Bridge是同一进程）
+    // 2. 或者返回错误，提示使用其他查询方式
+
+    std::cout << "[ORS Gateway] Position query not yet implemented via gRPC" << std::endl;
+    std::cout << "[ORS Gateway] Use Trader's internal position tracking instead" << std::endl;
+
+    // 返回空结果（表示查询成功但无持仓）
     return grpc::Status::OK;
 }
 

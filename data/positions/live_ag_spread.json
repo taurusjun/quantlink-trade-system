@@ -1,0 +1,14 @@
+{
+  "strategy_id": "live_ag_spread",
+  "timestamp": "2026-01-30T11:45:02.665769+08:00",
+  "symbols_position": {
+    "ag2603": 0,
+    "ag2605": 0
+  },
+  "total_long_qty": 0,
+  "total_short_qty": 0,
+  "total_net_qty": 0,
+  "avg_long_price": 0,
+  "avg_short_price": 0,
+  "realized_pnl": 0
+}

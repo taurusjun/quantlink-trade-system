@@ -563,7 +563,8 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
     // 4. 启动HTTP服务器（用于持仓查询）
-    std::cout << "\n[Main] Starting HTTP server..." << std::endl;
+    // 注意：这是提供查询接口的最实用方案
+    std::cout << "\n[Main] Starting HTTP server for position queries..." << std::endl;
     StartHTTPServer(8080);
 
     // 5. 启动订单处理线程
@@ -583,7 +584,7 @@ int main(int argc, char** argv) {
         std::cout << std::string(49 - name.length() - broker->GetPluginName().length(), ' ') << "║" << std::endl;
     }
     std::cout << "╚════════════════════════════════════════════════════════════╝" << std::endl;
-    std::cout << "\nEndpoints:" << std::endl;
+    std::cout << "\nHTTP Endpoints:" << std::endl;
     std::cout << "  - Position Query: http://localhost:8080/positions" << std::endl;
     std::cout << "  - Health Check:   http://localhost:8080/health" << std::endl;
     std::cout << "\nWaiting for orders from ORS Gateway..." << std::endl;

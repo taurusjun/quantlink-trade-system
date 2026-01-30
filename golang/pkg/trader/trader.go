@@ -118,6 +118,7 @@ func (t *Trader) Initialize() error {
 	log.Println("[Trader] Creating Strategy Engine...")
 	engineConfig := &strategy.EngineConfig{
 		NATSAddr:            t.Config.Engine.NATSAddr,
+		CounterBridgeAddr:   t.Config.Engine.CounterBridgeAddr,
 		OrderQueueSize:      t.Config.Engine.OrderQueueSize,
 		TimerInterval:       t.Config.Engine.TimerInterval,
 		MaxConcurrentOrders: t.Config.Engine.MaxConcurrentOrders,
@@ -132,6 +133,11 @@ func (t *Trader) Initialize() error {
 		// Live/simulation mode: use real ORS Gateway
 		engineConfig.ORSGatewayAddr = t.Config.Engine.ORSGatewayAddr
 		log.Printf("[Trader] Using live ORS Gateway: %s", engineConfig.ORSGatewayAddr)
+	}
+
+	// Log Counter Bridge address if configured
+	if engineConfig.CounterBridgeAddr != "" {
+		log.Printf("[Trader] Using Counter Bridge for position query: %s", engineConfig.CounterBridgeAddr)
 	}
 
 	t.Engine = strategy.NewStrategyEngine(engineConfig)
@@ -197,8 +203,14 @@ func (t *Trader) Initialize() error {
 	// 8. Query initial positions (查询初始持仓)
 	if err := t.queryInitialPositions(); err != nil {
 		log.Printf("[Trader] Warning: Failed to query initial positions: %v", err)
-		// 不阻断启动，仅记录警告
+		// 不阻断启动，策略可以从持久化文件恢复
+	} else {
+		// 初始化策略持仓
+		t.initializeStrategyPositions()
 	}
+
+	// 9. Start position verification (定期持仓校验)
+	t.startPositionVerification()
 
 	log.Println("[Trader] ✓ All components initialized successfully")
 	return nil
@@ -242,6 +254,175 @@ func (t *Trader) queryInitialPositions() error {
 	t.printPositionSummary()
 
 	return nil
+}
+
+// initializeStrategyPositions 初始化策略持仓（从CTP查询结果）
+func (t *Trader) initializeStrategyPositions() {
+	t.positionsMu.RLock()
+	positionsByExchange := t.positionsByExchange
+	t.positionsMu.RUnlock()
+
+	// 按品种聚合持仓（净持仓）
+	posMap := make(map[string]int64)
+	for _, posList := range positionsByExchange {
+		for _, pos := range posList {
+			qty := int64(pos.Volume)
+			if pos.Direction == "SHORT" || pos.Direction == "short" {
+				qty = -qty
+			}
+			posMap[pos.Symbol] += qty
+		}
+	}
+
+	if len(posMap) == 0 {
+		log.Println("[Trader] No positions to initialize in strategies")
+		return
+	}
+
+	log.Printf("[Trader] Initializing strategy positions from CTP query (%d symbols)", len(posMap))
+
+	// 传递给每个策略
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		for _, strategyID := range t.StrategyMgr.GetStrategyIDs() {
+			strat, exists := t.StrategyMgr.GetStrategy(strategyID)
+			if !exists || strat == nil {
+				continue
+			}
+
+			if initializer, ok := strat.(strategy.PositionInitializer); ok {
+				if err := initializer.InitializePositions(posMap); err != nil {
+					log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", strategyID, err)
+				}
+			}
+		}
+	} else if t.Strategy != nil {
+		if initializer, ok := t.Strategy.(strategy.PositionInitializer); ok {
+			if err := initializer.InitializePositions(posMap); err != nil {
+				log.Printf("[Trader] Warning: Failed to initialize strategy positions: %v", err)
+			}
+		}
+	}
+}
+
+// startPositionVerification 启动定期持仓校验
+func (t *Trader) startPositionVerification() {
+	// 定期校验间隔：5分钟
+	verifyInterval := 5 * time.Minute
+
+	log.Printf("[Trader] Starting position verification (interval: %v)", verifyInterval)
+
+	go func() {
+		ticker := time.NewTicker(verifyInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := t.verifyPositions(); err != nil {
+				log.Printf("[Trader] Position verification failed: %v", err)
+			}
+		}
+	}()
+}
+
+// verifyPositions 校验策略持仓与CTP真实持仓
+func (t *Trader) verifyPositions() error {
+	log.Println("[Trader] Starting position verification...")
+
+	// 1. 查询CTP真实持仓
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if t.Engine == nil || t.Engine.GetORSClient() == nil {
+		return fmt.Errorf("ORS client not available")
+	}
+
+	positions, err := t.Engine.GetORSClient().QueryPositions(ctx, "", "")
+	if err != nil {
+		return fmt.Errorf("failed to query CTP positions: %w", err)
+	}
+
+	// 2. 聚合CTP持仓（按品种，净持仓）
+	ctpPosMap := make(map[string]int64)
+	for _, posList := range positions {
+		for _, pos := range posList {
+			qty := int64(pos.Volume)
+			if pos.Direction == "SHORT" || pos.Direction == "short" {
+				qty = -qty
+			}
+			ctpPosMap[pos.Symbol] += qty
+		}
+	}
+
+	// 3. 聚合策略估算持仓
+	strategyPosMap := t.aggregateStrategyPositions()
+
+	// 4. 对比
+	mismatches := []string{}
+	allSymbols := make(map[string]bool)
+
+	for symbol := range ctpPosMap {
+		allSymbols[symbol] = true
+	}
+	for symbol := range strategyPosMap {
+		allSymbols[symbol] = true
+	}
+
+	for symbol := range allSymbols {
+		ctpQty := ctpPosMap[symbol]
+		strategyQty := strategyPosMap[symbol]
+
+		if ctpQty != strategyQty {
+			diff := ctpQty - strategyQty
+			mismatches = append(mismatches,
+				fmt.Sprintf("%s: CTP=%d, Strategy=%d, Diff=%d",
+					symbol, ctpQty, strategyQty, diff))
+		}
+	}
+
+	if len(mismatches) > 0 {
+		log.Println("[Trader] ⚠️  Position mismatch detected:")
+		for _, msg := range mismatches {
+			log.Printf("[Trader]     %s", msg)
+		}
+
+		// TODO: 可选的自动同步逻辑
+		// if t.Config.Risk.EnableAutoPositionSync {
+		// 	return t.syncStrategyPositions(ctpPosMap)
+		// }
+
+		return fmt.Errorf("position mismatch detected")
+	}
+
+	log.Println("[Trader] ✓ Position verification passed")
+	return nil
+}
+
+// aggregateStrategyPositions 聚合所有策略的持仓
+func (t *Trader) aggregateStrategyPositions() map[string]int64 {
+	posMap := make(map[string]int64)
+
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		for _, strategyID := range t.StrategyMgr.GetStrategyIDs() {
+			strat, exists := t.StrategyMgr.GetStrategy(strategyID)
+			if !exists || strat == nil {
+				continue
+			}
+
+			// 如果策略实现了PositionProvider接口
+			if provider, ok := strat.(strategy.PositionProvider); ok {
+				for symbol, qty := range provider.GetPositionsBySymbol() {
+					posMap[symbol] += qty
+				}
+			}
+		}
+	} else if t.Strategy != nil {
+		if provider, ok := t.Strategy.(strategy.PositionProvider); ok {
+			for symbol, qty := range provider.GetPositionsBySymbol() {
+				posMap[symbol] += qty
+			}
+		}
+	}
+
+	return posMap
 }
 
 // printPositionSummary prints position summary

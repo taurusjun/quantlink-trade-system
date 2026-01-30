@@ -34,8 +34,14 @@ type PairwiseArbStrategy struct {
 	// State
 	price1            float64
 	price2            float64
+	bid1              float64  // 品种1买一价
+	ask1              float64  // 品种1卖一价
+	bid2              float64  // 品种2买一价
+	ask2              float64  // 品种2卖一价
 	lastTradeTime     time.Time
 	minTradeInterval  time.Duration
+	slippageTicks     int     // 滑点(tick数)
+	useAggressivePrice bool   // 是否使用主动成交价格
 
 	// Spread analyzer (encapsulates spread calculation and statistics)
 	spreadAnalyzer    *spread.SpreadAnalyzer
@@ -126,9 +132,19 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if val, ok := config.Parameters["trade_interval_ms"].(float64); ok {
 		pas.minTradeInterval = time.Duration(val) * time.Millisecond
 	}
+	// 滑点参数（支持int或float64类型）
+	if val, ok := config.Parameters["slippage_ticks"].(float64); ok {
+		pas.slippageTicks = int(val)
+	} else if val, ok := config.Parameters["slippage_ticks"].(int); ok {
+		pas.slippageTicks = val
+	}
+	// 是否使用主动成交价格
+	if val, ok := config.Parameters["use_market_price"].(bool); ok {
+		pas.useAggressivePrice = val
+	}
 
-	log.Printf("[PairwiseArbStrategy:%s] Initialized %s/%s, entry_z=%.2f, exit_z=%.2f, lookback=%d",
-		pas.ID, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod)
+	log.Printf("[PairwiseArbStrategy:%s] Initialized %s/%s, entry_z=%.2f, exit_z=%.2f, lookback=%d, min_corr=%.2f, slippage=%d ticks",
+		pas.ID, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod, pas.minCorrelation, pas.slippageTicks)
 
 	return nil
 }
@@ -153,9 +169,13 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	if md.Symbol == pas.symbol1 {
 		pas.price1 = midPrice
+		pas.bid1 = md.BidPrice[0]
+		pas.ask1 = md.AskPrice[0]
 		pas.spreadAnalyzer.UpdatePrice1(midPrice, int64(md.Timestamp))
 	} else if md.Symbol == pas.symbol2 {
 		pas.price2 = midPrice
+		pas.bid2 = md.BidPrice[0]
+		pas.ask2 = md.AskPrice[0]
 		pas.spreadAnalyzer.UpdatePrice2(midPrice, int64(md.Timestamp))
 	}
 
@@ -283,12 +303,16 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	// Calculate hedge quantity using current hedge ratio
 	hedgeQty := int64(math.Round(float64(qty) * spreadStats.HedgeRatio))
 
+	// 计算leg1的订单价格（使用bid/ask和滑点）
+	orderPrice1 := GetOrderPrice(signal1Side, pas.bid1, pas.ask1, pas.symbol1,
+		pas.slippageTicks, pas.useAggressivePrice)
+
 	// Generate signal for leg 1
 	signal1 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
-		Price:      pas.price1,
+		Price:      orderPrice1,  // 使用计算后的价格
 		Quantity:   qty,
 		Signal:     -spreadStats.ZScore, // Negative z-score means buy, positive means sell
 		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
@@ -304,12 +328,16 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	}
 	pas.BaseStrategy.AddSignal(signal1)
 
+	// 计算leg2的订单价格
+	orderPrice2 := GetOrderPrice(signal2Side, pas.bid2, pas.ask2, pas.symbol2,
+		pas.slippageTicks, pas.useAggressivePrice)
+
 	// Generate signal for leg 2
 	signal2 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
-		Price:      pas.price2,
+		Price:      orderPrice2,  // 使用计算后的价格
 		Quantity:   hedgeQty,
 		Signal:     spreadStats.ZScore, // Opposite direction
 		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
@@ -356,11 +384,15 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 		signal1Side = OrderSideBuy
 	}
 
+	// 计算平仓价格
+	exitPrice1 := GetOrderPrice(signal1Side, pas.bid1, pas.ask1, pas.symbol1,
+		pas.slippageTicks, pas.useAggressivePrice)
+
 	signal1 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
-		Price:      pas.price1,
+		Price:      exitPrice1,  // 使用计算后的价格
 		Quantity:   qty1,
 		Signal:     0,
 		Confidence: 0.9,
@@ -382,11 +414,14 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 		signal2Side = OrderSideBuy
 	}
 
+	exitPrice2 := GetOrderPrice(signal2Side, pas.bid2, pas.ask2, pas.symbol2,
+		pas.slippageTicks, pas.useAggressivePrice)
+
 	signal2 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
-		Price:      pas.price2,
+		Price:      exitPrice2,  // 使用计算后的价格
 		Quantity:   qty2,
 		Signal:     0,
 		Confidence: 0.9,
@@ -470,6 +505,37 @@ func (pas *PairwiseArbStrategy) OnTimer(now time.Time) {
 func (pas *PairwiseArbStrategy) Start() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
+
+	// 尝试从持久化文件恢复持仓
+	if snapshot, err := LoadPositionSnapshot(pas.ID); err == nil && snapshot != nil {
+		log.Printf("[PairwiseArbStrategy:%s] Restoring position from snapshot (saved at %s)",
+			pas.ID, snapshot.Timestamp.Format("2006-01-02 15:04:05"))
+
+		// 恢复leg持仓
+		if qty, exists := snapshot.SymbolsPos[pas.symbol1]; exists {
+			pas.leg1Position = qty
+			log.Printf("[PairwiseArbStrategy:%s] Restored leg1 position: %s = %d",
+				pas.ID, pas.symbol1, qty)
+		}
+		if qty, exists := snapshot.SymbolsPos[pas.symbol2]; exists {
+			pas.leg2Position = qty
+			log.Printf("[PairwiseArbStrategy:%s] Restored leg2 position: %s = %d",
+				pas.ID, pas.symbol2, qty)
+		}
+
+		// 恢复BaseStrategy持仓
+		pas.Position.LongQty = snapshot.TotalLongQty
+		pas.Position.ShortQty = snapshot.TotalShortQty
+		pas.Position.NetQty = snapshot.TotalNetQty
+		pas.Position.AvgLongPrice = snapshot.AvgLongPrice
+		pas.Position.AvgShortPrice = snapshot.AvgShortPrice
+		pas.PNL.RealizedPnL = snapshot.RealizedPnL
+
+		log.Printf("[PairwiseArbStrategy:%s] Position restored: Long=%d, Short=%d, Net=%d",
+			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty)
+	} else if err != nil {
+		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to load position snapshot: %v", pas.ID, err)
+	}
 
 	// 设置运行状态为 Active
 	pas.ControlState.RunState = StrategyRunStateActive
@@ -593,10 +659,81 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
+	// 保存当前持仓到文件
+	snapshot := PositionSnapshot{
+		StrategyID:    pas.ID,
+		Timestamp:     time.Now(),
+		TotalLongQty:  pas.Position.LongQty,
+		TotalShortQty: pas.Position.ShortQty,
+		TotalNetQty:   pas.Position.NetQty,
+		AvgLongPrice:  pas.Position.AvgLongPrice,
+		AvgShortPrice: pas.Position.AvgShortPrice,
+		RealizedPnL:   pas.PNL.RealizedPnL,
+		SymbolsPos: map[string]int64{
+			pas.symbol1: pas.leg1Position,
+			pas.symbol2: pas.leg2Position,
+		},
+	}
+
+	if err := SavePositionSnapshot(snapshot); err != nil {
+		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to save position snapshot: %v", pas.ID, err)
+		// 不阻断停止流程
+	} else {
+		log.Printf("[PairwiseArbStrategy:%s] Position snapshot saved: Long=%d, Short=%d, Net=%d",
+			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty)
+	}
+
 	pas.ControlState.RunState = StrategyRunStateStopped
 	pas.Deactivate()
 	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.ID)
 	return nil
+}
+
+// InitializePositions 实现PositionInitializer接口：从外部初始化持仓
+func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) error {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	log.Printf("[PairwiseArbStrategy:%s] Initializing positions from external source", pas.ID)
+
+	// 初始化leg持仓
+	if qty, exists := positions[pas.symbol1]; exists {
+		pas.leg1Position = qty
+		log.Printf("[PairwiseArbStrategy:%s] Initialized leg1 position: %s = %d",
+			pas.ID, pas.symbol1, qty)
+	}
+
+	if qty, exists := positions[pas.symbol2]; exists {
+		pas.leg2Position = qty
+		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2 position: %s = %d",
+			pas.ID, pas.symbol2, qty)
+	}
+
+	// 更新BaseStrategy的Position（简化处理）
+	totalQty := pas.leg1Position + pas.leg2Position
+	if totalQty > 0 {
+		pas.Position.LongQty = totalQty
+		pas.Position.NetQty = totalQty
+	} else if totalQty < 0 {
+		pas.Position.ShortQty = -totalQty
+		pas.Position.NetQty = totalQty
+	}
+
+	log.Printf("[PairwiseArbStrategy:%s] Positions initialized: leg1=%d, leg2=%d, net=%d",
+		pas.ID, pas.leg1Position, pas.leg2Position, pas.Position.NetQty)
+
+	return nil
+}
+
+// GetPositionsBySymbol 实现PositionProvider接口：返回按品种的持仓
+func (pas *PairwiseArbStrategy) GetPositionsBySymbol() map[string]int64 {
+	pas.mu.RLock()
+	defer pas.mu.RUnlock()
+
+	return map[string]int64{
+		pas.symbol1: pas.leg1Position,
+		pas.symbol2: pas.leg2Position,
+	}
 }
 
 // GetSpreadStatus returns current spread status

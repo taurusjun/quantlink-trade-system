@@ -47,6 +47,7 @@ const (
 // EngineConfig represents strategy engine configuration
 type EngineConfig struct {
 	ORSGatewayAddr      string        // ORS Gateway address
+	CounterBridgeAddr   string        // Counter Bridge address for position query
 	NATSAddr            string        // NATS server address
 	OrderQueueSize      int           // Order queue buffer size
 	TimerInterval       time.Duration // Timer interval for strategies
@@ -92,8 +93,8 @@ func (se *StrategyEngine) Initialize() error {
 	se.orsClient, err = client.NewORSClient(client.ORSClientConfig{
 		GatewayAddr:       se.config.ORSGatewayAddr,
 		NATSAddr:          se.config.NATSAddr,
-		CounterBridgeAddr: "localhost:8080", // Counter Bridge地址（用于持仓查询）
-		StrategyID:        "strategy_engine", // 使用通用ID
+		CounterBridgeAddr: se.config.CounterBridgeAddr, // 从配置读取Counter Bridge地址
+		StrategyID:        "strategy_engine",            // 使用通用ID
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize ORS client: %w", err)

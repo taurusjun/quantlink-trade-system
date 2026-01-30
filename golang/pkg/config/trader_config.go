@@ -85,6 +85,7 @@ type RiskConfig struct {
 // EngineConfig contains strategy engine configuration
 type EngineConfig struct {
 	ORSGatewayAddr      string        `yaml:"ors_gateway_addr"`
+	CounterBridgeAddr   string        `yaml:"counter_bridge_addr"`
 	NATSAddr            string        `yaml:"nats_addr"`
 	OrderQueueSize      int           `yaml:"order_queue_size"`
 	TimerInterval       time.Duration `yaml:"timer_interval"`

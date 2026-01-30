@@ -13,27 +13,71 @@ system:
 # Strategy Configuration (Multi-Strategy Mode)
 # ═══════════════════════════════════════════════════════════
 strategies:
-  - id: "test_92201"                    # 策略唯一标识符（测试专用）
-    type: "pairwise_arb"                # 策略类型: passive, aggressive, hedging, pairwise_arb
+  # 策略1: 白银配对套利 (ag2603/ag2605)
+  - id: "test_92201"                    # 策略唯一标识符（白银）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
     enabled: true                       # 是否启用此策略
-    allocation: 0.5                     # 资金分配比例 (50%)
+    allocation: 0.3                     # 资金分配比例 (30%)
     symbols:                            # 交易品种（配对交易需要两个）
       - "ag2603"                        # 白银 2026年3月
       - "ag2605"                        # 白银 2026年5月
     exchanges:                          # 交易所
       - "SHFE"                          # 上期所
     max_position_size: 100              # 最大持仓数量
-    max_exposure: 1000000.0             # 最大风险敞口
+    max_exposure: 300000.0              # 最大风险敞口
 
     # Strategy-specific parameters (策略特定参数)
     parameters:
-      # Pairwise Arbitrage Strategy Parameters (配对套利策略参数)
       spread_type: "difference"         # 价差类型: difference, ratio, log
       lookback_period: 100.0            # 回看周期
       entry_zscore: 0.5                 # 入场Z-Score阈值（降低以便测试）
       exit_zscore: 0.2                  # 出场Z-Score阈值
       order_size: 1.0                   # 每条腿的下单数量（测试用1手）
-      min_correlation: 0.5              # 最小相关系数（降低以便测试）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
+
+  # 策略2: 黄金配对套利 (au2604/au2606)
+  - id: "test_92202"                    # 策略唯一标识符（黄金）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
+    enabled: true                       # 是否启用此策略
+    allocation: 0.4                     # 资金分配比例 (40%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "au2604"                        # 黄金 2026年4月
+      - "au2606"                        # 黄金 2026年6月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 50               # 最大持仓数量（黄金价格高，数量少）
+    max_exposure: 400000.0              # 最大风险敞口
+
+    # Strategy-specific parameters (策略特定参数)
+    parameters:
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 100.0            # 回看周期
+      entry_zscore: 0.6                 # 入场Z-Score阈值（黄金波动较小）
+      exit_zscore: 0.2                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
+
+  # 策略3: 白银近月配对套利 (ag2603/ag2603) - 演示多策略
+  - id: "test_92203"                    # 策略唯一标识符（白银近月）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
+    enabled: true                       # 是否启用此策略
+    allocation: 0.3                     # 资金分配比例 (30%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "ag2603"                        # 白银 2026年3月
+      - "ag2605"                        # 白银 2026年5月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 80               # 最大持仓数量
+    max_exposure: 300000.0              # 最大风险敞口
+
+    # Strategy-specific parameters (策略特定参数)
+    parameters:
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 80.0             # 回看周期（更短）
+      entry_zscore: 0.7                 # 入场Z-Score阈值（更保守）
+      exit_zscore: 0.3                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)
@@ -73,7 +117,9 @@ engine:
 portfolio:
   total_capital: 1000000.0              # 总资金
   strategy_allocation:                  # 策略资金分配
-    "test_92201": 0.5                   # 50% 分配给测试策略
+    "test_92201": 0.3                   # 30% 分配给白银策略
+    "test_92202": 0.4                   # 40% 分配给黄金策略
+    "test_92203": 0.3                   # 30% 分配给白银近月策略
   rebalance_interval_sec: 3600          # 再平衡间隔（秒）
   min_allocation: 0.05                  # 最小分配比例
   max_allocation: 0.50                  # 最大分配比例
