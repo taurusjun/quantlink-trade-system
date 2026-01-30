@@ -361,7 +361,8 @@ func (c *ORSClient) QueryPositions(ctx context.Context, symbol string, exchange 
 
 	// 解析JSON响应
 	var result struct {
-		Success bool                          `json:"success"`
+		Success bool                      `json:"success"`
+		Ready   *bool                     `json:"ready,omitempty"` // CTP 持仓数据就绪标记
 		Data    map[string][]PositionInfo `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -370,6 +371,11 @@ func (c *ORSClient) QueryPositions(ctx context.Context, symbol string, exchange 
 
 	if !result.Success {
 		return nil, fmt.Errorf("position query failed")
+	}
+
+	// 检查持仓数据是否就绪（CTP 特有）
+	if result.Ready != nil && !*result.Ready {
+		return nil, fmt.Errorf("position data not ready (CTP still initializing)")
 	}
 
 	log.Printf("[ORSClient] Queried %d exchanges with positions", len(result.Data))

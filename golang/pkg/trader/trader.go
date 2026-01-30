@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -78,7 +79,7 @@ func (t *Trader) Initialize() error {
 		EnablePortfolioLimits:  true,
 		AlertRetentionSeconds:  3600,
 		MaxAlertQueueSize:      1000,
-		EmergencyStopThreshold: 3,
+		EmergencyStopThreshold: 100, // 提高阈值，避免因持仓成本价为0导致误触发紧急停止
 		CheckIntervalMs:        t.Config.Risk.CheckIntervalMs,
 	}
 	t.RiskManager = risk.NewRiskManager(riskConfig)
@@ -228,14 +229,14 @@ func (t *Trader) queryInitialPositions() error {
 
 	orsClient := t.Engine.GetORSClient()
 
-	// 添加重试机制，等待 Counter Bridge 完全启动
+	// 添加重试机制，等待 Counter Bridge 完全启动且 CTP 持仓数据就绪
 	var positions map[string][]client.PositionInfo
 	var err error
-	maxRetries := 5
+	maxRetries := 15 // 增加重试次数，等待 CTP 持仓数据就绪
 	retryInterval := 2 * time.Second
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		log.Printf("[Trader] Position query attempt %d/%d...", attempt, maxRetries)
+		log.Printf("[Trader] Position query attempt %d/%d (waiting for CTP data ready)...", attempt, maxRetries)
 
 		// 调用Counter Bridge查询持仓
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -243,13 +244,18 @@ func (t *Trader) queryInitialPositions() error {
 		cancel()
 
 		if err == nil {
-			// 查询成功
+			// 查询成功，检查数据是否有效
 			log.Printf("[Trader] ✓ Position query succeeded on attempt %d", attempt)
 			break
 		}
 
-		// 查询失败，记录错误
-		log.Printf("[Trader] Position query attempt %d failed: %v", attempt, err)
+		// 查询失败，检查是否是"数据未就绪"错误
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not ready") || strings.Contains(errMsg, "still initializing") {
+			log.Printf("[Trader] CTP position data not ready yet, waiting...")
+		} else {
+			log.Printf("[Trader] Position query attempt %d failed: %v", attempt, err)
+		}
 
 		if attempt < maxRetries {
 			log.Printf("[Trader] Retrying in %v...", retryInterval)

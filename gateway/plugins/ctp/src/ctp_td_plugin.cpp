@@ -1315,6 +1315,10 @@ void CTPTDPlugin::UpdatePositionFromCTP() {
     }
 
     std::cout << "[CTPTDPlugin] ✓ Position updated from CTP (" << m_positions.size() << " symbols)" << std::endl;
+
+    // 设置持仓数据就绪标记
+    m_position_ready.store(true);
+    std::cout << "[CTPTDPlugin] ✓ Position data ready" << std::endl;
 }
 
 void CTPTDPlugin::UpdatePositionFromTrade(const TradeInfo& trade) {

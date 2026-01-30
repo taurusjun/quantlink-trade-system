@@ -321,6 +321,13 @@ void HandlePositionQuery(const httplib::Request& req, httplib::Response& res) {
         if (broker_name == "ctp") {
             auto* ctp_plugin = dynamic_cast<hft::plugin::ctp::CTPTDPlugin*>(broker.get());
             if (ctp_plugin) {
+                // 检查持仓数据是否就绪
+                if (!ctp_plugin->IsPositionReady()) {
+                    std::cout << "[HTTP] " << broker_name << " position data not ready yet" << std::endl;
+                    // 返回 ready: false，让客户端知道需要重试
+                    res.set_content("{\"success\": true, \"ready\": false, \"data\": {}}", "application/json");
+                    return;
+                }
                 query_success = ctp_plugin->GetCachedPositions(positions);
                 std::cout << "[HTTP] " << broker_name << " returned " << positions.size()
                           << " cached positions" << std::endl;

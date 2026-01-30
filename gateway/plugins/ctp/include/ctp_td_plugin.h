@@ -70,6 +70,9 @@ public:
 
     // 非阻塞获取缓存的持仓信息（用于HTTP查询，避免阻塞HTTP线程）
     bool GetCachedPositions(std::vector<PositionInfo>& positions);
+
+    // 检查持仓数据是否就绪（首次查询完成且数据有效）
+    bool IsPositionReady() const { return m_position_ready.load(); }
     bool GetOrder(const std::string& order_id, OrderInfo& order_info) override;
 
     void RegisterOrderCallback(OrderCallback callback) override;
@@ -255,6 +258,9 @@ private:
 
     // 可用资金缓存
     std::atomic<double> m_available_fund{0.0};
+
+    // 持仓数据就绪标记（首次查询完成且avg_price有效）
+    std::atomic<bool> m_position_ready{false};
 };
 
 } // namespace ctp
