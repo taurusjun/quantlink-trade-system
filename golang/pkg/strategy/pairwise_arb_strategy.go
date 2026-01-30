@@ -331,11 +331,13 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		pas.slippageTicks, pas.useAggressivePrice)
 
 	// Generate signal for leg 1
+	// 注意：不设置 OpenClose，Plugin 层会自动根据持仓判断
 	signal1 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
-		Price:      orderPrice1,  // 使用计算后的价格
+		// OpenClose: 不设置，让 Plugin 自动判断
+		Price:      orderPrice1, // 使用计算后的价格
 		Quantity:   qty,
 		Signal:     -spreadStats.ZScore, // Negative z-score means buy, positive means sell
 		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
@@ -356,11 +358,13 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		pas.slippageTicks, pas.useAggressivePrice)
 
 	// Generate signal for leg 2
+	// 注意：不设置 OpenClose，Plugin 层会自动根据持仓判断
 	signal2 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
-		Price:      orderPrice2,  // 使用计算后的价格
+		// OpenClose: 不设置，让 Plugin 自动判断
+		Price:      orderPrice2, // 使用计算后的价格
 		Quantity:   hedgeQty,
 		Signal:     spreadStats.ZScore, // Opposite direction
 		Confidence: math.Min(1.0, math.Abs(spreadStats.ZScore)/5.0),
@@ -405,11 +409,14 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	exitPrice1 := GetOrderPrice(signal1Side, pas.bid1, pas.ask1, pas.symbol1,
 		pas.slippageTicks, pas.useAggressivePrice)
 
+	// 注意：不设置 OpenClose，Plugin 层会自动判断
+	// 退出信号时，Plugin 会根据持仓自动设置为 CLOSE
 	signal1 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
-		Price:      exitPrice1,  // 使用计算后的价格
+		// OpenClose: 不设置，让 Plugin 自动判断（会是 CLOSE）
+		Price:      exitPrice1, // 使用计算后的价格
 		Quantity:   qty1,
 		Signal:     0,
 		Confidence: 0.9,
@@ -434,11 +441,13 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	exitPrice2 := GetOrderPrice(signal2Side, pas.bid2, pas.ask2, pas.symbol2,
 		pas.slippageTicks, pas.useAggressivePrice)
 
+	// 注意：不设置 OpenClose，Plugin 层会自动判断
 	signal2 := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
-		Price:      exitPrice2,  // 使用计算后的价格
+		// OpenClose: 不设置，让 Plugin 自动判断（会是 CLOSE）
+		Price:      exitPrice2, // 使用计算后的价格
 		Quantity:   qty2,
 		Signal:     0,
 		Confidence: 0.9,

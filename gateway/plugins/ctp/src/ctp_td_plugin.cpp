@@ -1,11 +1,13 @@
 #include "ctp_td_plugin.h"
 #include <iostream>
+#include <fstream>
 #include <thread>
 #include <chrono>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 
 namespace hft {
 namespace plugin {
@@ -261,6 +263,12 @@ void CTPTDPlugin::OnRspUserLogin(CThostFtdcRspUserLoginField* pRspUserLogin,
 
     // 登录成功后确认结算单
     ConfirmSettlement();
+
+    // 查询持仓信息（用于Offset自动设置）
+    std::thread([this]() {
+        std::this_thread::sleep_for(std::chrono::seconds(2)); // 等待结算单确认完成
+        this->UpdatePositionFromCTP();
+    }).detach();
 }
 
 void CTPTDPlugin::OnRspUserLogout(CThostFtdcUserLogoutField* pUserLogout,
@@ -407,14 +415,32 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
         return "";
     }
 
+    // 自动设置Offset（开平标志）
+    OrderRequest modified_request = request;
+    OffsetFlag original_offset = modified_request.offset;
+    SetOpenClose(modified_request);
+
+    // 记录Offset自动设置
+    if (original_offset != modified_request.offset) {
+        std::cout << "[CTPTDPlugin] Auto-set offset: "
+                  << modified_request.symbol << " "
+                  << (modified_request.direction == OrderDirection::BUY ? "BUY" : "SELL")
+                  << " → "
+                  << (modified_request.offset == OffsetFlag::OPEN ? "OPEN" :
+                      modified_request.offset == OffsetFlag::CLOSE ? "CLOSE" :
+                      modified_request.offset == OffsetFlag::CLOSE_TODAY ? "CLOSE_TODAY" :
+                      "CLOSE_YESTERDAY")
+                  << std::endl;
+    }
+
     // 生成订单引用
     std::string order_ref = GenerateOrderRef();
 
-    std::cout << "[CTPTDPlugin] Sending order: " << request.symbol
-              << " " << (request.direction == OrderDirection::BUY ? "BUY" : "SELL")
-              << " " << request.volume << "@" << request.price << std::endl;
+    std::cout << "[CTPTDPlugin] Sending order: " << modified_request.symbol
+              << " " << (modified_request.direction == OrderDirection::BUY ? "BUY" : "SELL")
+              << " " << modified_request.volume << "@" << modified_request.price << std::endl;
 
-    // 构建CTP报单请求
+    // 构建CTP报单请求（使用修改后的request）
     CThostFtdcInputOrderField req = {};
 
     // 经纪商和投资者
@@ -422,17 +448,17 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
     strncpy(req.InvestorID, m_config.investor_id.c_str(), sizeof(req.InvestorID) - 1);
 
     // 合约
-    strncpy(req.InstrumentID, request.symbol, sizeof(req.InstrumentID) - 1);
-    strncpy(req.ExchangeID, request.exchange, sizeof(req.ExchangeID) - 1);
+    strncpy(req.InstrumentID, modified_request.symbol, sizeof(req.InstrumentID) - 1);
+    strncpy(req.ExchangeID, modified_request.exchange, sizeof(req.ExchangeID) - 1);
 
     // 报单引用
     strncpy(req.OrderRef, order_ref.c_str(), sizeof(req.OrderRef) - 1);
 
     // 买卖方向
-    req.Direction = (request.direction == OrderDirection::BUY) ? THOST_FTDC_D_Buy : THOST_FTDC_D_Sell;
+    req.Direction = (modified_request.direction == OrderDirection::BUY) ? THOST_FTDC_D_Buy : THOST_FTDC_D_Sell;
 
-    // 组合开平标志
-    switch (request.offset) {
+    // 组合开平标志（使用自动设置后的offset）
+    switch (modified_request.offset) {
         case OffsetFlag::OPEN:
             req.CombOffsetFlag[0] = THOST_FTDC_OF_Open;
             break;
@@ -477,8 +503,8 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
     // 用户强平标志：否
     req.UserForceClose = 0;
 
-    // 价格类型
-    switch (request.price_type) {
+    // 价格类型（使用修改后的request）
+    switch (modified_request.price_type) {
         case PriceType::LIMIT:
             req.OrderPriceType = THOST_FTDC_OPT_LimitPrice;
             break;
@@ -503,19 +529,19 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
     oss << m_front_id << "-" << m_session_id << "-" << order_ref;
     std::string order_id = oss.str();
 
-    // 保存订单到本地缓存（状态为提交中）
+    // 保存订单到本地缓存（状态为提交中）（使用修改后的request）
     OrderInfo order_info;
     strncpy(order_info.order_id, order_id.c_str(), sizeof(order_info.order_id) - 1);
-    if (request.client_order_id[0] != '\0') {
-        strncpy(order_info.client_order_id, request.client_order_id, sizeof(order_info.client_order_id) - 1);
+    if (modified_request.client_order_id[0] != '\0') {
+        strncpy(order_info.client_order_id, modified_request.client_order_id, sizeof(order_info.client_order_id) - 1);
     }
-    strncpy(order_info.symbol, request.symbol, sizeof(order_info.symbol) - 1);
-    strncpy(order_info.exchange, request.exchange, sizeof(order_info.exchange) - 1);
-    order_info.direction = request.direction;
-    order_info.offset = request.offset;
-    order_info.price_type = request.price_type;
-    order_info.price = request.price;
-    order_info.volume = request.volume;
+    strncpy(order_info.symbol, modified_request.symbol, sizeof(order_info.symbol) - 1);
+    strncpy(order_info.exchange, modified_request.exchange, sizeof(order_info.exchange) - 1);
+    order_info.direction = modified_request.direction;
+    order_info.offset = modified_request.offset;  // 保存自动设置后的offset
+    order_info.price_type = modified_request.price_type;
+    order_info.price = modified_request.price;
+    order_info.volume = modified_request.volume;
     order_info.traded_volume = 0;
     order_info.status = OrderStatus::SUBMITTING;
     order_info.insert_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -659,6 +685,9 @@ void CTPTDPlugin::OnRtnTrade(CThostFtdcTradeField* pTrade) {
               << " " << trade_info.volume << "@" << trade_info.price << std::endl;
 
     m_trade_count.fetch_add(1);
+
+    // 根据成交更新持仓
+    UpdatePositionFromTrade(trade_info);
 
     // 触发成交回调
     std::lock_guard<std::mutex> lock(m_callback_mutex);
@@ -1106,6 +1135,289 @@ bool CTPTDPlugin::GetOrderFromCache(const std::string& order_id, OrderInfo& orde
         return true;
     }
     return false;
+}
+
+
+// ==================== Offset自动设置 ====================
+
+void CTPTDPlugin::SetOpenClose(OrderRequest& request) {
+    std::lock_guard<std::mutex> lock(m_position_mutex);
+
+    // 查找持仓
+    auto it = m_positions.find(request.symbol);
+    if (it == m_positions.end()) {
+        // 没有持仓，开仓
+        request.offset = OffsetFlag::OPEN;
+        return;
+    }
+
+    const CTPPosition& pos = it->second;
+
+    // 判断交易所类型（上期所需要区分今昨仓）
+    bool is_shfe = (std::string(request.exchange) == "SHFE");
+
+    if (request.direction == OrderDirection::BUY) {
+        // 买入：平空仓或开多仓
+        if (pos.short_position > 0) {
+            // 有空仓，需要平仓
+            if (is_shfe && pos.short_today_position > 0) {
+                // 上期所：优先平今
+                request.offset = OffsetFlag::CLOSE_TODAY;
+            } else if (pos.short_yesterday_position > 0) {
+                // 有昨仓，平昨
+                request.offset = OffsetFlag::CLOSE_YESTERDAY;
+            } else {
+                // 其他交易所或只有今仓，使用CLOSE
+                request.offset = OffsetFlag::CLOSE;
+            }
+        } else {
+            // 没有空仓，开多仓
+            request.offset = OffsetFlag::OPEN;
+        }
+    } else {
+        // 卖出：平多仓或开空仓
+        if (pos.long_position > 0) {
+            // 有多仓，需要平仓
+            if (is_shfe && pos.long_today_position > 0) {
+                // 上期所：优先平今
+                request.offset = OffsetFlag::CLOSE_TODAY;
+            } else if (pos.long_yesterday_position > 0) {
+                // 有昨仓，平昨
+                request.offset = OffsetFlag::CLOSE_YESTERDAY;
+            } else {
+                // 其他交易所或只有今仓，使用CLOSE
+                request.offset = OffsetFlag::CLOSE;
+            }
+        } else {
+            // 没有多仓，开空仓
+            request.offset = OffsetFlag::OPEN;
+        }
+    }
+}
+
+void CTPTDPlugin::UpdatePositionFromCTP() {
+    std::cout << "[CTPTDPlugin] Updating position from CTP..." << std::endl;
+
+    // 准备查询
+    {
+        std::lock_guard<std::mutex> lock(m_query_mutex);
+        m_query_finished = false;
+        m_cached_positions.clear();
+    }
+
+    // 发送持仓查询请求
+    CThostFtdcQryInvestorPositionField req = {};
+    strncpy(req.BrokerID, m_config.broker_id.c_str(), sizeof(req.BrokerID) - 1);
+    strncpy(req.InvestorID, m_config.investor_id.c_str(), sizeof(req.InvestorID) - 1);
+
+    int ret = m_api->ReqQryInvestorPosition(&req, ++m_request_id);
+    if (ret != 0) {
+        std::cerr << "[CTPTDPlugin] ❌ Failed to query positions for offset, error: " << ret << std::endl;
+        return;
+    }
+
+    // 等待查询完成
+    std::unique_lock<std::mutex> ulock(m_query_mutex);
+    m_query_cv.wait_for(ulock, std::chrono::seconds(5), [this] { return m_query_finished; });
+
+    if (!m_query_finished) {
+        std::cerr << "[CTPTDPlugin] ❌ Query positions timeout for offset" << std::endl;
+        return;
+    }
+
+    // 更新持仓管理数据
+    std::lock_guard<std::mutex> pos_lock(m_position_mutex);
+    m_positions.clear();
+
+    for (const auto& pos_info : m_cached_positions) {
+        std::string symbol = pos_info.symbol;
+        auto& pos = m_positions[symbol];
+
+        pos.symbol = symbol;
+        pos.exchange = pos_info.exchange;
+
+        if (pos_info.direction == OrderDirection::BUY) {
+            // 多头持仓
+            pos.long_position = pos_info.volume;
+            pos.long_today_position = pos_info.today_volume;
+            pos.long_yesterday_position = pos_info.yesterday_volume;
+            pos.long_avg_price = pos_info.avg_price;
+        } else {
+            // 空头持仓
+            pos.short_position = pos_info.volume;
+            pos.short_today_position = pos_info.today_volume;
+            pos.short_yesterday_position = pos_info.yesterday_volume;
+            pos.short_avg_price = pos_info.avg_price;
+        }
+
+        std::cout << "[CTPTDPlugin] Position: " << symbol
+                  << " Long=" << pos.long_position << "(T:" << pos.long_today_position << ",Y:" << pos.long_yesterday_position << ")"
+                  << " Short=" << pos.short_position << "(T:" << pos.short_today_position << ",Y:" << pos.short_yesterday_position << ")"
+                  << std::endl;
+    }
+
+    std::cout << "[CTPTDPlugin] ✓ Position updated from CTP (" << m_positions.size() << " symbols)" << std::endl;
+}
+
+void CTPTDPlugin::UpdatePositionFromTrade(const TradeInfo& trade) {
+    std::lock_guard<std::mutex> lock(m_position_mutex);
+
+    std::string symbol = trade.symbol;
+    auto& pos = m_positions[symbol];
+
+    // 初始化持仓信息（如果是新合约）
+    if (pos.symbol.empty()) {
+        pos.symbol = symbol;
+        pos.exchange = trade.exchange;
+    }
+
+    if (trade.offset == OffsetFlag::OPEN) {
+        // 开仓
+        if (trade.direction == OrderDirection::BUY) {
+            // 开多仓
+            pos.long_position += trade.volume;
+            pos.long_today_position += trade.volume;
+        } else {
+            // 开空仓
+            pos.short_position += trade.volume;
+            pos.short_today_position += trade.volume;
+        }
+        std::cout << "[CTPTDPlugin] Position updated (OPEN): " << symbol
+                  << " Long=" << pos.long_position << "(T:" << pos.long_today_position << ")"
+                  << " Short=" << pos.short_position << "(T:" << pos.short_today_position << ")"
+                  << std::endl;
+    } else {
+        // 平仓
+        if (trade.direction == OrderDirection::BUY) {
+            // 平空仓
+            if (pos.short_position >= trade.volume) {
+                pos.short_position -= trade.volume;
+
+                // 优先平今
+                if (trade.offset == OffsetFlag::CLOSE_TODAY && pos.short_today_position >= trade.volume) {
+                    pos.short_today_position -= trade.volume;
+                } else if (trade.offset == OffsetFlag::CLOSE_YESTERDAY && pos.short_yesterday_position >= trade.volume) {
+                    pos.short_yesterday_position -= trade.volume;
+                } else {
+                    // CLOSE：按实际情况分配
+                    uint32_t close_volume = trade.volume;
+                    if (pos.short_today_position > 0) {
+                        uint32_t close_today = std::min(close_volume, pos.short_today_position);
+                        pos.short_today_position -= close_today;
+                        close_volume -= close_today;
+                    }
+                    if (close_volume > 0) {
+                        pos.short_yesterday_position -= close_volume;
+                    }
+                }
+            } else {
+                std::cerr << "[CTPTDPlugin] ⚠️ Position mismatch: close " << trade.volume
+                          << " but only " << pos.short_position << " short position" << std::endl;
+            }
+        } else {
+            // 平多仓
+            if (pos.long_position >= trade.volume) {
+                pos.long_position -= trade.volume;
+
+                // 优先平今
+                if (trade.offset == OffsetFlag::CLOSE_TODAY && pos.long_today_position >= trade.volume) {
+                    pos.long_today_position -= trade.volume;
+                } else if (trade.offset == OffsetFlag::CLOSE_YESTERDAY && pos.long_yesterday_position >= trade.volume) {
+                    pos.long_yesterday_position -= trade.volume;
+                } else {
+                    // CLOSE：按实际情况分配
+                    uint32_t close_volume = trade.volume;
+                    if (pos.long_today_position > 0) {
+                        uint32_t close_today = std::min(close_volume, pos.long_today_position);
+                        pos.long_today_position -= close_today;
+                        close_volume -= close_today;
+                    }
+                    if (close_volume > 0) {
+                        pos.long_yesterday_position -= close_volume;
+                    }
+                }
+            } else {
+                std::cerr << "[CTPTDPlugin] ⚠️ Position mismatch: close " << trade.volume
+                          << " but only " << pos.long_position << " long position" << std::endl;
+            }
+        }
+        std::cout << "[CTPTDPlugin] Position updated (CLOSE): " << symbol
+                  << " Long=" << pos.long_position << "(T:" << pos.long_today_position << ",Y:" << pos.long_yesterday_position << ")"
+                  << " Short=" << pos.short_position << "(T:" << pos.short_today_position << ",Y:" << pos.short_yesterday_position << ")"
+                  << std::endl;
+    }
+
+    // 清理空持仓
+    if (pos.long_position == 0 && pos.short_position == 0) {
+        m_positions.erase(symbol);
+        std::cout << "[CTPTDPlugin] Position removed (all closed): " << symbol << std::endl;
+    }
+
+    // 持久化持仓
+    SavePositionsToFile();
+}
+
+bool CTPTDPlugin::SavePositionsToFile() {
+    // 简化实现：使用 JSON 格式保存
+    std::string data_dir = "data/ctp_positions";
+    std::string filename = data_dir + "/" + m_config.user_id + "_positions.json";
+
+    // 创建目录
+    system(("mkdir -p " + data_dir).c_str());
+
+    std::ofstream ofs(filename);
+    if (!ofs.is_open()) {
+        std::cerr << "[CTPTDPlugin] ❌ Failed to open position file: " << filename << std::endl;
+        return false;
+    }
+
+    ofs << "{\n";
+    ofs << "  \"timestamp\": " << std::chrono::system_clock::now().time_since_epoch().count() << ",\n";
+    ofs << "  \"positions\": [\n";
+
+    bool first = true;
+    for (const auto& pair : m_positions) {
+        const auto& pos = pair.second;
+        if (!first) ofs << ",\n";
+        first = false;
+
+        ofs << "    {\n";
+        ofs << "      \"symbol\": \"" << pos.symbol << "\",\n";
+        ofs << "      \"exchange\": \"" << pos.exchange << "\",\n";
+        ofs << "      \"long_position\": " << pos.long_position << ",\n";
+        ofs << "      \"long_today_position\": " << pos.long_today_position << ",\n";
+        ofs << "      \"long_yesterday_position\": " << pos.long_yesterday_position << ",\n";
+        ofs << "      \"short_position\": " << pos.short_position << ",\n";
+        ofs << "      \"short_today_position\": " << pos.short_today_position << ",\n";
+        ofs << "      \"short_yesterday_position\": " << pos.short_yesterday_position << "\n";
+        ofs << "    }";
+    }
+
+    ofs << "\n  ]\n";
+    ofs << "}\n";
+
+    ofs.close();
+    return true;
+}
+
+bool CTPTDPlugin::LoadPositionsFromFile() {
+    std::string data_dir = "data/ctp_positions";
+    std::string filename = data_dir + "/" + m_config.user_id + "_positions.json";
+
+    std::ifstream ifs(filename);
+    if (!ifs.is_open()) {
+        std::cout << "[CTPTDPlugin] No position file found, starting fresh" << std::endl;
+        return false;
+    }
+
+    // 简化实现：手动解析 JSON（生产环境应使用 JSON 库）
+    std::cout << "[CTPTDPlugin] Loading positions from " << filename << std::endl;
+
+    // TODO: 完整的 JSON 解析实现
+    // 暂时跳过，依赖 UpdatePositionFromCTP 查询
+
+    ifs.close();
+    return true;
 }
 
 } // namespace ctp

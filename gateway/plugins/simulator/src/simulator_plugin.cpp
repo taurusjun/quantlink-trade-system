@@ -151,28 +151,78 @@ std::string SimulatorPlugin::SendOrder(const hft::plugin::OrderRequest& request)
         return "";
     }
 
-    // Check risk
+    // 复制 request（可能需要修改 offset）
+    hft::plugin::OrderRequest modified_request = request;
+
+    // 自动根据持仓设置 offset（参考 ors/China 的做法）
+    // 这样策略层不需要关心开平逻辑
+    hft::plugin::OffsetFlag original_offset = modified_request.offset;
+    SetOpenClose(modified_request);
+
+    if (original_offset != modified_request.offset) {
+        std::cout << "[SimulatorPlugin] Auto-set offset: "
+                  << modified_request.symbol << " "
+                  << (modified_request.direction == hft::plugin::OrderDirection::BUY ? "BUY" : "SELL")
+                  << " → "
+                  << (modified_request.offset == hft::plugin::OffsetFlag::OPEN ? "OPEN" : "CLOSE")
+                  << " (was "
+                  << (original_offset == hft::plugin::OffsetFlag::OPEN ? "OPEN" : "CLOSE")
+                  << ")" << std::endl;
+    }
+
+    // Generate order ID first (even if order will be rejected)
+    // 即使订单会被拒绝，也先生成订单ID（与CTP行为一致）
+    std::string order_id = GenerateOrderID();
+
+    // Check risk (使用修改后的 request)
     std::string error_msg;
-    if (!CheckRisk(request, &error_msg)) {
+    if (!CheckRisk(modified_request, &error_msg)) {
         std::cerr << "[SimulatorPlugin] ❌ Risk check failed: " << error_msg << std::endl;
+
+        // Create REJECTED order (与CTP的OnRspOrderInsert行为一致)
+        InternalOrder internal_order;
+        internal_order.order_id = order_id;
+        internal_order.client_order_id = modified_request.client_order_id;
+        internal_order.request = modified_request;
+        internal_order.status = hft::plugin::OrderStatus::REJECTED;  // 拒绝状态
+        internal_order.traded_volume = 0;
+        internal_order.insert_time = GetCurrentNanoTime();
+        internal_order.update_time = internal_order.insert_time;
+        std::strncpy(internal_order.status_msg, error_msg.c_str(),
+                    sizeof(internal_order.status_msg) - 1);
+
+        // Store rejected order
+        {
+            std::lock_guard<std::mutex> lock(m_order_mutex);
+            m_orders[order_id] = internal_order;
+        }
+
+        // Increment order count
+        m_order_count.fetch_add(1);
+
+        // Notify order callback with REJECTED status (与CTP一致)
+        if (m_order_callback) {
+            m_order_callback(ConvertToOrderInfo(internal_order));
+        }
+
+        // Also notify error callback (与CTP一致)
         if (m_error_callback) {
             m_error_callback(-2, error_msg);
         }
-        return "";
+
+        return order_id;  // 返回订单ID（即使被拒绝，与CTP一致）
     }
 
-    // Generate order ID
-    std::string order_id = GenerateOrderID();
-
-    // Create internal order
+    // Create internal order (使用修改后的 request)
     InternalOrder internal_order;
     internal_order.order_id = order_id;
-    internal_order.client_order_id = request.client_order_id;
-    internal_order.request = request;
+    internal_order.client_order_id = modified_request.client_order_id;
+    internal_order.request = modified_request;  // 保存修改后的 request
     internal_order.status = hft::plugin::OrderStatus::SUBMITTING;
     internal_order.traded_volume = 0;
     internal_order.insert_time = GetCurrentNanoTime();
     internal_order.update_time = internal_order.insert_time;
+    internal_order.status_msg[0] = '\0';  // Initialize empty
 
     // Store order
     {
@@ -184,9 +234,9 @@ std::string SimulatorPlugin::SendOrder(const hft::plugin::OrderRequest& request)
     m_order_count.fetch_add(1);
 
     std::cout << "[SimulatorPlugin] Order submitted: " << order_id
-              << " | " << request.symbol
-              << " | " << (request.direction == hft::plugin::OrderDirection::BUY ? "BUY" : "SELL")
-              << " | " << request.volume << "@" << request.price << std::endl;
+              << " | " << modified_request.symbol
+              << " | " << (modified_request.direction == hft::plugin::OrderDirection::BUY ? "BUY" : "SELL")
+              << " | " << modified_request.volume << "@" << modified_request.price << std::endl;
 
     // Notify order callback (SUBMITTING)
     if (m_order_callback) {
@@ -195,9 +245,9 @@ std::string SimulatorPlugin::SendOrder(const hft::plugin::OrderRequest& request)
 
     // Process order based on mode
     if (m_config.mode == "immediate") {
-        // Launch async thread to process order
-        std::thread([this, order_id, request]() {
-            ProcessOrderImmediate(order_id, request);
+        // Launch async thread to process order (传递修改后的 request)
+        std::thread([this, order_id, modified_request]() {
+            ProcessOrderImmediate(order_id, modified_request);
         }).detach();
     } else {
         // market_driven mode not implemented yet
@@ -661,13 +711,52 @@ double SimulatorPlugin::CalculateCommission(const std::string& symbol, double pr
 }
 
 bool SimulatorPlugin::CheckRisk(const hft::plugin::OrderRequest& request, std::string* error_msg) {
+    // Check Chinese futures market rules: cannot open opposite position
+    // 中国期货市场规则：不能开反向仓位
+    {
+        std::lock_guard<std::mutex> lock(m_position_mutex);
+
+        // Use symbol as position key (net position model)
+        std::string pos_key = std::string(request.symbol);
+        auto it = m_positions.find(pos_key);
+
+        if (it != m_positions.end() && it->second.volume > 0) {
+            const InternalPosition& pos = it->second;
+
+            // Check if trying to open opposite position
+            if (request.offset == hft::plugin::OffsetFlag::OPEN) {
+                // Has long position, but trying to open short
+                if (pos.direction == hft::plugin::OrderDirection::BUY &&
+                    request.direction == hft::plugin::OrderDirection::SELL) {
+                    if (error_msg) {
+                        *error_msg = "Cannot open SHORT position while holding LONG position for " +
+                                    std::string(request.symbol) +
+                                    " (current long: " + std::to_string(pos.volume) + " lots). " +
+                                    "Please close long position first or use CLOSE offset.";
+                    }
+                    return false;
+                }
+
+                // Has short position, but trying to open long
+                if (pos.direction == hft::plugin::OrderDirection::SELL &&
+                    request.direction == hft::plugin::OrderDirection::BUY) {
+                    if (error_msg) {
+                        *error_msg = "Cannot open LONG position while holding SHORT position for " +
+                                    std::string(request.symbol) +
+                                    " (current short: " + std::to_string(pos.volume) + " lots). " +
+                                    "Please close short position first or use CLOSE offset.";
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+
     // Check max position per symbol
     {
         std::lock_guard<std::mutex> lock(m_position_mutex);
 
-        std::string pos_key = std::string(request.symbol) + "_" +
-                             (request.direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
-
+        std::string pos_key = std::string(request.symbol);
         auto it = m_positions.find(pos_key);
         uint32_t current_volume = (it != m_positions.end()) ? it->second.volume : 0;
 
@@ -721,6 +810,38 @@ std::string SimulatorPlugin::GenerateOrderID() {
     return oss.str();
 }
 
+// 根据当前持仓自动设置订单的 offset 字段
+// 参考 ors/China 的 SetCombOffsetFlag 逻辑
+void SimulatorPlugin::SetOpenClose(hft::plugin::OrderRequest& request) {
+    std::lock_guard<std::mutex> lock(m_position_mutex);
+
+    auto it = m_positions.find(request.symbol);
+
+    if (it == m_positions.end()) {
+        // 无持仓，开仓
+        request.offset = hft::plugin::OffsetFlag::OPEN;
+        return;
+    }
+
+    const auto& pos = it->second;
+
+    if (request.direction == hft::plugin::OrderDirection::BUY) {
+        // 买入：持有空仓则平空，否则开多
+        if (pos.direction == hft::plugin::OrderDirection::SELL && pos.volume > 0) {
+            request.offset = hft::plugin::OffsetFlag::CLOSE;
+        } else {
+            request.offset = hft::plugin::OffsetFlag::OPEN;
+        }
+    } else {
+        // 卖出：持有多仓则平多，否则开空
+        if (pos.direction == hft::plugin::OrderDirection::BUY && pos.volume > 0) {
+            request.offset = hft::plugin::OffsetFlag::CLOSE;
+        } else {
+            request.offset = hft::plugin::OffsetFlag::OPEN;
+        }
+    }
+}
+
 std::string SimulatorPlugin::GenerateTradeID() {
     uint64_t seq = m_trade_count.load();
     uint64_t timestamp = GetCurrentNanoTime();
@@ -748,40 +869,48 @@ hft::plugin::OrderInfo SimulatorPlugin::ConvertToOrderInfo(const InternalOrder& 
     order_info.insert_time = order.insert_time;
     order_info.update_time = order.update_time;
 
-    // Set status message based on status
-    const char* status_msg = "Unknown";
-    switch (order.status) {
-        case hft::plugin::OrderStatus::SUBMITTING:
-            status_msg = "Submitting";
-            break;
-        case hft::plugin::OrderStatus::SUBMITTED:
-            status_msg = "Submitted";
-            break;
-        case hft::plugin::OrderStatus::ACCEPTED:
-            status_msg = "Accepted";
-            break;
-        case hft::plugin::OrderStatus::PARTIAL_FILLED:
-            status_msg = "Partial Filled";
-            break;
-        case hft::plugin::OrderStatus::FILLED:
-            status_msg = "Filled";
-            break;
-        case hft::plugin::OrderStatus::CANCELING:
-            status_msg = "Canceling";
-            break;
-        case hft::plugin::OrderStatus::CANCELED:
-            status_msg = "Canceled";
-            break;
-        case hft::plugin::OrderStatus::REJECTED:
-            status_msg = "Rejected";
-            break;
-        case hft::plugin::OrderStatus::ERROR:
-            status_msg = "Error";
-            break;
-        default:
-            status_msg = "Unknown";
+    // Set status message
+    // For REJECTED orders, use the custom error message from InternalOrder
+    // Otherwise, use default status description
+    if (order.status == hft::plugin::OrderStatus::REJECTED && order.status_msg[0] != '\0') {
+        // Use custom error message from CheckRisk (与CTP的ErrorMsg一致)
+        std::strncpy(order_info.status_msg, order.status_msg, sizeof(order_info.status_msg) - 1);
+    } else {
+        // Use default status description
+        const char* status_msg = "Unknown";
+        switch (order.status) {
+            case hft::plugin::OrderStatus::SUBMITTING:
+                status_msg = "Submitting";
+                break;
+            case hft::plugin::OrderStatus::SUBMITTED:
+                status_msg = "Submitted";
+                break;
+            case hft::plugin::OrderStatus::ACCEPTED:
+                status_msg = "Accepted";
+                break;
+            case hft::plugin::OrderStatus::PARTIAL_FILLED:
+                status_msg = "Partial Filled";
+                break;
+            case hft::plugin::OrderStatus::FILLED:
+                status_msg = "Filled";
+                break;
+            case hft::plugin::OrderStatus::CANCELING:
+                status_msg = "Canceling";
+                break;
+            case hft::plugin::OrderStatus::CANCELED:
+                status_msg = "Canceled";
+                break;
+            case hft::plugin::OrderStatus::REJECTED:
+                status_msg = "Rejected";
+                break;
+            case hft::plugin::OrderStatus::ERROR:
+                status_msg = "Error";
+                break;
+            default:
+                status_msg = "Unknown";
+        }
+        std::strncpy(order_info.status_msg, status_msg, sizeof(order_info.status_msg) - 1);
     }
-    std::strncpy(order_info.status_msg, status_msg, sizeof(order_info.status_msg) - 1);
 
     return order_info;
 }

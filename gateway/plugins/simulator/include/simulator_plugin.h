@@ -22,6 +22,7 @@ struct InternalOrder {
     uint32_t traded_volume;
     uint64_t insert_time;
     uint64_t update_time;
+    char status_msg[256];  // Status message (for REJECTED orders)
 };
 
 // Internal position structure
@@ -110,6 +111,7 @@ private:
     // Internal methods
     std::string GenerateOrderID();
     std::string GenerateTradeID();
+    void SetOpenClose(hft::plugin::OrderRequest& request);  // Auto-set offset based on position
     void ProcessOrderImmediate(const std::string& order_id, const hft::plugin::OrderRequest& request);
     void UpdatePosition(const hft::plugin::TradeInfo& trade);
     void UpdateAccount();

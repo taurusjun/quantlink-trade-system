@@ -17,6 +17,33 @@ namespace plugin {
 namespace ctp {
 
 /**
+ * CTP持仓信息（用于Offset自动判断）
+ */
+struct CTPPosition {
+    std::string symbol;
+    std::string exchange;
+
+    // 多头持仓
+    uint32_t long_position;           // 总持仓
+    uint32_t long_today_position;     // 今仓
+    uint32_t long_yesterday_position; // 昨仓
+
+    // 空头持仓
+    uint32_t short_position;           // 总持仓
+    uint32_t short_today_position;     // 今仓
+    uint32_t short_yesterday_position; // 昨仓
+
+    // 持仓均价
+    double long_avg_price;
+    double short_avg_price;
+
+    CTPPosition()
+        : long_position(0), long_today_position(0), long_yesterday_position(0)
+        , short_position(0), short_today_position(0), short_yesterday_position(0)
+        , long_avg_price(0.0), short_avg_price(0.0) {}
+};
+
+/**
  * CTP交易插件实现
  * 实现ITDPlugin接口，对接CTP交易API
  */
@@ -151,6 +178,19 @@ private:
     // 从本地缓存获取订单
     bool GetOrderFromCache(const std::string& order_id, OrderInfo& order_info);
 
+    // Offset自动设置
+    void SetOpenClose(OrderRequest& request);
+
+    // 更新持仓信息（从CTP查询结果更新）
+    void UpdatePositionFromCTP();
+
+    // 根据成交更新持仓
+    void UpdatePositionFromTrade(const TradeInfo& trade);
+
+    // 持仓持久化
+    bool SavePositionsToFile();
+    bool LoadPositionsFromFile();
+
     // ==================== 成员变量 ====================
 
     // 配置
@@ -186,6 +226,13 @@ private:
     // 订单缓存（order_id → OrderInfo）
     std::map<std::string, OrderInfo> m_order_cache;
     mutable std::mutex m_order_cache_mutex;
+
+    // 持仓管理（symbol → CTPPosition）
+    std::map<std::string, CTPPosition> m_positions;
+    mutable std::mutex m_position_mutex;
+
+    // 持仓持久化路径
+    std::string m_position_file_path;
 
     // 回调函数
     OrderCallback m_order_callback;
