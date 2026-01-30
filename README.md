@@ -259,6 +259,8 @@ pkg-config --modversion protobuf
 
 **完整文档：** 查看 [docs/README.md](docs/README.md) 📚
 
+**文档与脚本索引：** 查看 [CROSS_REFERENCE.md](CROSS_REFERENCE.md) 🔗
+
 ## 许可证
 
 内部项目，未开源。

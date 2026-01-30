@@ -676,6 +676,123 @@ parameterRules = {
 
 ---
 
+### 🆕 模拟交易所 Plugin ⭐⭐⭐⭐⭐
+
+#### 任务 P2-15: 模拟交易所 Plugin 实施
+- **状态**: ⏳ 待开始
+- **优先级**: P2-High
+- **预计工作量**: 12-17天
+- **完成日期**: -
+- **文档**: [模拟交易所完整方案](../docs/功能实现/模拟交易所完整方案_2026-01-30-23_55.md)
+
+**目标**: 实现生产级模拟交易所作为 Plugin，与 CTP 同等地位
+
+**架构设计**:
+```
+Golang Trader
+  ↓ gRPC
+ORS Gateway
+  ↓ 共享内存
+Counter Bridge (统一 Broker 适配器)
+  ↓ ITDPlugin 接口
+  ├─ CTP Plugin (实盘)
+  └─ Simulator Plugin (模拟) ← 新增
+```
+
+**子任务分解**:
+
+##### P2-15.1: SimulatorPlugin 基础框架
+- **状态**: ⏳ 待开始
+- **工作量**: 3天
+- **内容**:
+  - [ ] 创建 plugins/simulator/ 目录结构
+  - [ ] 实现 SimulatorPlugin 类（ITDPlugin 接口）
+  - [ ] 实现立即成交模式（IMMEDIATE）
+  - [ ] 配置文件解析
+  - [ ] Counter Bridge 集成
+
+##### P2-15.2: 撮合引擎实现
+- **状态**: ⏳ 待开始
+- **工作量**: 4天
+- **内容**:
+  - [ ] OrderBook 订单簿管理
+  - [ ] MatchingEngine 撮合逻辑
+  - [ ] 行情驱动模式（MARKET_DRIVEN）
+  - [ ] 部分成交支持
+  - [ ] 订单簿快照接口
+
+##### P2-15.3: 持仓管理
+- **状态**: ⏳ 待开始
+- **工作量**: 3天
+- **内容**:
+  - [ ] PositionManager 实现
+  - [ ] 成交后持仓更新
+  - [ ] 保证金计算和风控
+  - [ ] 持仓查询接口
+  - [ ] 持久化和恢复
+
+##### P2-15.4: HTTP 接口扩展
+- **状态**: ⏳ 待开始
+- **工作量**: 2天
+- **内容**:
+  - [ ] Counter Bridge 新增 HTTP 端点（/orderbook, /stats, /account）
+  - [ ] Golang Trader API 透传
+  - [ ] 端到端测试
+
+##### P2-15.5: Dashboard 扩展
+- **状态**: ⏳ 待开始
+- **工作量**: 3天
+- **内容**:
+  - [ ] 新增 Simulator Tab
+  - [ ] 订单簿可视化
+  - [ ] 账户信息展示
+  - [ ] 统计图表
+  - [ ] 实时数据推送（5秒轮询）
+
+##### P2-15.6: 优雅停止机制
+- **状态**: ⏳ 待开始
+- **工作量**: 2天
+- **内容**:
+  - [ ] PrepareShutdown() 实现（撤单、保存状态）
+  - [ ] Counter Bridge 信号处理优化
+  - [ ] 超时保护机制（15秒强制退出）
+  - [ ] 防止 UNE 状态
+
+##### P2-15.7: 运维脚本
+- **状态**: ⏳ 待开始
+- **工作量**: 2天
+- **内容**:
+  - [ ] start_simulator.sh
+  - [ ] stop_all.sh
+  - [ ] status.sh
+  - [ ] healthcheck.sh（持续监控）
+
+**实施步骤**:
+1. Phase 1: 基础框架 + 立即成交 (3天)
+2. Phase 2: 撮合引擎 (4天)
+3. Phase 3: 持仓管理 (3天)
+4. Phase 4: API + Dashboard (5天)
+5. Phase 5: 运维工具 (2天)
+
+**测试验证**:
+- [ ] 单元测试（各模块，覆盖率 > 80%）
+- [ ] 集成测试（完整链路）
+- [ ] 压力测试（高频订单）
+- [ ] 稳定性测试（24小时运行）
+
+**配置切换**:
+- 实盘: `./bin/counter_bridge -config config/counter_bridge.ctp.yaml`
+- 模拟: `./bin/counter_bridge -config config/counter_bridge.sim.yaml`
+
+**风险与缓解**:
+- 模拟与实盘行为差异 → 使用概率模型、可配置延迟
+- UNE 状态风险 → PrepareShutdown + 超时机制
+- 状态丢失风险 → 定期持久化 + 恢复机制
+
+**模拟交易所任务总工作量**: 12-17天
+
+---
+
 ### 第二优先级：策略库扩展 ⭐⭐⭐⭐
 
 #### 任务 P2-4: 跨品种套利策略

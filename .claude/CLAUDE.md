@@ -330,6 +330,520 @@ The strategy engine is responsible for receiving market data...
 
 ---
 
+## 脚本管理规范
+
+### 脚本目录结构
+
+**规则 5: scripts/ 目录组织（2026-01-30 重组）**
+
+所有脚本按功能分类存放在 `scripts/` 目录下，根目录不应存放任何 .sh 脚本文件。
+
+**目录结构**:
+```
+scripts/
+├── README.md                      # 脚本使用指南
+│
+├── 构建脚本 (根目录)
+│   ├── build_gateway.sh          # 编译 C++ Gateway
+│   ├── build_golang.sh           # 编译 Golang Trader
+│   └── generate_proto.sh         # 生成 Protobuf 代码
+│
+├── 依赖安装 (根目录)
+│   ├── install_dependencies.sh   # 安装系统依赖
+│   └── install_nats_c.sh         # 安装 NATS C 客户端
+│
+├── 部署脚本 (根目录)
+│   ├── prepare_deploy.sh         # 准备部署环境
+│   └── quick_deploy.sh           # 快速部署
+│
+├── test/                          # 测试脚本
+│   ├── e2e/                      # 端到端测试
+│   │   ├── test_full_chain.sh
+│   │   ├── test_ctp_e2e.sh
+│   │   └── ...
+│   ├── integration/              # 集成测试
+│   │   ├── test_multi_strategy_*.sh
+│   │   └── ...
+│   ├── unit/                     # 单元测试
+│   │   ├── test_ctp_*.sh
+│   │   └── ...
+│   └── feature/                  # 功能测试
+│       ├── test_position_*.sh
+│       └── ...
+│
+├── live/                         # 实盘脚本
+│   ├── start_live_test.sh
+│   ├── monitor_live.sh
+│   └── ...
+│
+├── trading/                      # 交易操作
+│   ├── trade_*.sh
+│   ├── query_position.sh
+│   └── ...
+│
+└── backtest/                     # 回测脚本
+    └── run_backtest.sh
+```
+
+### 脚本分类规则
+
+**规则 6: 脚本存放位置**
+
+新建脚本时按以下规则分类：
+
+1. **构建和安装脚本** → `scripts/` 根目录
+   - 编译脚本（build_*.sh）
+   - 依赖安装（install_*.sh）
+   - 代码生成（generate_*.sh）
+
+2. **测试脚本** → `scripts/test/` 子目录
+   - 端到端测试 → `test/e2e/`
+   - 集成测试 → `test/integration/`
+   - 单元测试 → `test/unit/`
+   - 功能测试 → `test/feature/`
+
+3. **实盘脚本** → `scripts/live/`
+   - 启动脚本（start_*.sh）
+   - 监控脚本（monitor_*.sh）
+   - 实盘测试和部署
+
+4. **交易操作脚本** → `scripts/trading/`
+   - 下单脚本（trade_*.sh）
+   - 平仓脚本（close_*.sh）
+   - 查询脚本（query_*.sh）
+
+5. **回测脚本** → `scripts/backtest/`
+   - 回测运行和分析脚本
+
+6. **部署脚本** → `scripts/` 根目录
+   - 部署相关的高层脚本
+
+### 脚本命名规范
+
+**规则 7: 脚本命名格式**
+
+**格式**: `<动词>_<对象>_<描述>.sh`
+
+**命名模式**:
+- **测试脚本**: `test_<功能>_<类型>.sh`
+  - 示例: `test_ctp_e2e.sh`, `test_position_query.sh`
+- **启动脚本**: `start_<服务>_<模式>.sh`
+  - 示例: `start_live_test.sh`, `start_full_test.sh`
+- **停止脚本**: `stop_<服务>.sh`
+  - 示例: `stop_ctp_e2e.sh`, `stop_all.sh`
+- **监控脚本**: `monitor_<对象>.sh`
+  - 示例: `monitor_live.sh`, `monitor_health.sh`
+- **构建脚本**: `build_<模块>.sh`
+  - 示例: `build_gateway.sh`, `build_golang.sh`
+- **安装脚本**: `install_<依赖>.sh`
+  - 示例: `install_dependencies.sh`, `install_nats_c.sh`
+- **交易操作**: `<动作>_<标的>.sh`
+  - 示例: `trade_ag2603.sh`, `close_ag2603.sh`, `query_position.sh`
+
+**禁止使用模糊命名**:
+- ❌ `test.sh`, `run.sh`, `script.sh`
+- ✅ `test_full_chain.sh`, `run_backtest.sh`
+
+### 脚本开发规范
+
+**规则 8: 脚本标准模板**
+
+```bash
+#!/bin/bash
+set -e  # 遇到错误立即退出
+
+# ============================================
+# 脚本名称: <脚本名>.sh
+# 用途: <简要说明脚本用途>
+# 作者: <作者名>
+# 日期: YYYY-MM-DD
+# ============================================
+
+# 获取项目根目录
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# 颜色定义（可选）
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+# 清理函数（捕获退出信号）
+cleanup() {
+    log_info "Cleaning up..."
+    # 清理临时文件、进程等
+}
+
+trap cleanup EXIT
+
+# 主逻辑
+main() {
+    log_info "Starting <脚本功能>..."
+
+    # 脚本主要逻辑
+
+    log_info "Completed successfully"
+}
+
+main "$@"
+```
+
+**关键要求**:
+1. 必须使用 `set -e` 确保错误时退出
+2. 必须使用 `PROJECT_ROOT` 定位项目根目录
+3. 使用日志函数（log_info/log_warn/log_error）而非直接 echo
+4. 使用 `trap cleanup EXIT` 确保资源清理
+5. 将主逻辑放在 `main()` 函数中
+
+### 脚本文档要求
+
+**规则 9: scripts/README.md 维护**
+
+当添加重要脚本时，更新 `scripts/README.md` 中的相应章节：
+
+```markdown
+## 📂 目录结构
+[更新目录树]
+
+## 🚀 常用脚本
+[添加新脚本的使用说明]
+```
+
+**重要脚本定义**:
+- 新功能的测试脚本
+- 实盘部署相关脚本
+- 运维监控脚本
+- 开发者常用脚本
+
+**临时脚本**:
+- 一次性使用的临时脚本可以不加入 README.md
+- 但仍需遵循命名规范和放置规则
+
+### 脚本使用权限
+
+**规则 10: 脚本执行权限**
+
+```bash
+# 新建脚本后设置执行权限
+chmod +x scripts/<category>/<script_name>.sh
+
+# 批量设置脚本权限
+find scripts/ -name "*.sh" -exec chmod +x {} \;
+```
+
+### 常见问题
+
+**问题 1: 脚本放在哪里？**
+
+| 脚本用途 | 存放位置 |
+|---------|---------|
+| 编译构建 | `scripts/` (根目录) |
+| 端到端测试 | `scripts/test/e2e/` |
+| 集成测试 | `scripts/test/integration/` |
+| 单元测试 | `scripts/test/unit/` |
+| 功能测试 | `scripts/test/feature/` |
+| 实盘测试 | `scripts/live/` |
+| 交易操作 | `scripts/trading/` |
+| 回测 | `scripts/backtest/` |
+
+**问题 2: 如何从脚本中访问项目文件？**
+
+```bash
+# 方法1: 使用 PROJECT_ROOT（推荐）
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+./bin/trader -config config/trader.yaml
+
+# 方法2: 使用相对路径（不推荐，容易出错）
+../../bin/trader -config ../../config/trader.yaml
+```
+
+**问题 3: 脚本之间如何相互调用？**
+
+```bash
+# 使用绝对路径（推荐）
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+"${PROJECT_ROOT}/scripts/build_gateway.sh"
+"${PROJECT_ROOT}/scripts/build_golang.sh"
+
+# 或使用 source（共享变量和函数）
+source "${PROJECT_ROOT}/scripts/common_functions.sh"
+```
+
+---
+
+## 文档与脚本关联规范
+
+### 关联目标
+
+**规则 11: 建立文档与脚本的双向索引**
+
+确保开发者能够：
+- 从文档快速找到相关测试脚本
+- 从脚本快速找到相关说明文档
+- 理解功能的完整上下文（文档 + 实现 + 测试）
+
+### 关联方式
+
+#### 方式 1: 脚本头部引用文档（推荐）
+
+**规则 12: 脚本必须在头部注释中引用相关文档**
+
+```bash
+#!/bin/bash
+set -e
+
+# ============================================
+# 脚本名称: test_position_persistence.sh
+# 用途: 测试持仓持久化功能
+# 作者: QuantLink Team
+# 日期: 2026-01-30
+#
+# 相关文档:
+#   - 实施报告: @docs/实盘/Phase2-5_完整持仓管理功能实施报告_2026-01-30-11_35.md
+#   - 功能文档: @docs/功能实现/持仓查询功能实现_2026-01-28-11_30.md
+#   - 架构说明: @docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md
+#   - 使用指南: @docs/核心文档/USAGE.md
+# ============================================
+```
+
+**引用规则**:
+- 使用 `@docs/` 前缀表示文档路径
+- 按重要性排序（最相关的放最前面）
+- 至少引用 1 个相关文档
+- 复杂脚本建议引用 2-4 个文档
+
+#### 方式 2: 文档中引用脚本
+
+**规则 13: 文档必须在操作说明中引用相关脚本**
+
+```markdown
+## 测试验证
+
+### 持仓持久化测试
+
+运行以下脚本验证持仓持久化功能：
+
+\`\`\`bash
+# 完整测试
+./scripts/test/feature/test_position_persistence.sh
+
+# 查询测试
+./scripts/test/feature/test_position_query.sh
+\`\`\`
+
+### 实盘测试
+
+\`\`\`bash
+# 启动实盘测试
+./scripts/live/start_live_test.sh
+
+# 监控运行状态
+./scripts/live/monitor_live.sh
+\`\`\`
+
+**相关脚本**:
+- 持仓持久化: `scripts/test/feature/test_position_persistence.sh`
+- 持仓查询: `scripts/test/feature/test_position_query.sh`
+- 实盘启动: `scripts/live/start_live_test.sh`
+```
+
+**引用规则**:
+- 在"测试验证"、"使用示例"等章节引用脚本
+- 提供完整的脚本路径（从项目根目录开始）
+- 添加简要说明脚本的用途
+- 按使用频率排序（常用脚本放前面）
+
+#### 方式 3: 交叉索引文件
+
+**规则 14: 维护中央交叉索引文件**
+
+**文件位置**: `CROSS_REFERENCE.md`
+
+**索引结构**:
+```markdown
+# 文档与脚本交叉索引
+
+## 按功能分类
+
+| 功能 | 脚本 | 相关文档 |
+|------|------|---------|
+| 持仓管理 | scripts/test/feature/test_position_persistence.sh | Phase2-5_完整持仓管理功能实施报告.md |
+
+## 按文档分类
+
+### Phase2-5_完整持仓管理功能实施报告
+**相关脚本**:
+- scripts/test/feature/test_position_persistence.sh
+- scripts/test/feature/test_position_query.sh
+
+## 快速查找
+
+### 我想测试某个功能
+| 需求 | 脚本 |
+|------|------|
+| 测试持仓管理 | scripts/test/feature/test_position_query.sh |
+
+### 脚本出错应该查看哪个文档
+| 脚本 | 排查文档 |
+|------|---------|
+| test_position_*.sh | Phase2-5_完整持仓管理功能实施报告.md |
+```
+
+### 关联维护规则
+
+**规则 15: 关联信息的维护责任**
+
+| 场景 | 维护内容 | 责任人 |
+|------|---------|--------|
+| **新建脚本** | 1. 脚本头部添加相关文档链接<br>2. 更新 CROSS_REFERENCE.md | 脚本作者 |
+| **新建重要文档** | 1. 文档中引用相关脚本<br>2. 更新 CROSS_REFERENCE.md | 文档作者 |
+| **脚本重命名/移动** | 1. 更新所有引用此脚本的文档<br>2. 更新 CROSS_REFERENCE.md | 重构人员 |
+| **文档重命名/移动** | 1. 更新所有引用此文档的脚本<br>2. 更新 CROSS_REFERENCE.md | 重构人员 |
+| **定期审查** | 1. 检查链接有效性<br>2. 清理过期引用 | 项目维护者 |
+
+**更新时机**:
+- ✅ 创建脚本后立即添加文档引用
+- ✅ 完成重要文档后添加脚本引用
+- ✅ 重构文件结构后更新所有引用
+- ✅ 每月审查一次 CROSS_REFERENCE.md
+
+### 关联完整性检查
+
+**规则 16: 关联完整性要求**
+
+**重要脚本必须关联文档**:
+```bash
+# 检查脚本是否缺少文档引用
+find scripts/ -name "*.sh" -type f | while read script; do
+    if ! grep -q "相关文档:" "$script"; then
+        echo "WARNING: $script 缺少文档引用"
+    fi
+done
+```
+
+**重要文档必须关联脚本**:
+- 实施报告类文档：必须引用测试脚本
+- 功能实现文档：必须引用测试脚本
+- 使用指南文档：必须引用操作脚本
+
+**豁免条件**:
+- 纯理论分析文档（无实现）
+- 临时测试脚本（一次性使用）
+- 工具脚本（通用工具，无特定文档）
+
+### 关联示例
+
+#### 示例 1: 持仓管理功能
+
+**脚本**: `scripts/test/feature/test_position_persistence.sh`
+```bash
+# 相关文档:
+#   - @docs/实盘/Phase2-5_完整持仓管理功能实施报告_2026-01-30-11_35.md
+#   - @docs/功能实现/持仓查询功能实现_2026-01-28-11_30.md
+```
+
+**文档**: `docs/实盘/Phase2-5_完整持仓管理功能实施报告_2026-01-30-11_35.md`
+```markdown
+## 测试验证
+
+\`\`\`bash
+./scripts/test/feature/test_position_persistence.sh
+./scripts/test/feature/test_position_query.sh
+\`\`\`
+```
+
+**索引**: `CROSS_REFERENCE.md`
+```markdown
+| 持仓管理 | scripts/test/feature/test_position_persistence.sh | Phase2-5报告 |
+```
+
+#### 示例 2: CTP 对接功能
+
+**脚本**: `scripts/test/e2e/test_ctp_e2e.sh`
+```bash
+# 相关文档:
+#   - @docs/功能实现/任务1_CTP行情接入实施指南_2026-01-26-15_40.md
+#   - @docs/实盘/CTP_POSITION_GUIDE.md
+#   - @docs/测试报告/端到端测试报告_20260130_002214.md
+```
+
+**文档**: `docs/功能实现/任务1_CTP行情接入实施指南_2026-01-26-15_40.md`
+```markdown
+## 测试方法
+
+\`\`\`bash
+# 端到端测试
+./scripts/test/e2e/test_ctp_e2e.sh
+
+# 单元测试
+./scripts/test/unit/test_ctp_account.sh
+./scripts/test/unit/test_ctp_query.sh
+\`\`\`
+```
+
+### 快速查找指南
+
+**从功能找脚本**:
+```bash
+# 查看 CROSS_REFERENCE.md 的"我想测试某个功能"表格
+cat CROSS_REFERENCE.md | grep -A 20 "我想测试某个功能"
+```
+
+**从文档找脚本**:
+```bash
+# 查看 CROSS_REFERENCE.md 的"按文档分类"章节
+cat CROSS_REFERENCE.md | grep -A 50 "按文档分类"
+```
+
+**从脚本找文档**:
+```bash
+# 查看脚本头部的"相关文档"注释
+head -20 scripts/test/feature/test_position_persistence.sh | grep -A 5 "相关文档"
+```
+
+**脚本出错找排查文档**:
+```bash
+# 查看 CROSS_REFERENCE.md 的"脚本出错应该查看哪个文档"表格
+cat CROSS_REFERENCE.md | grep -A 20 "脚本出错"
+```
+
+### 关联效益
+
+建立文档与脚本关联后：
+
+✅ **提高可维护性**:
+- 修改功能时能快速找到所有相关文件
+- 避免遗漏测试脚本或文档更新
+
+✅ **加速问题排查**:
+- 脚本出错时快速定位排查文档
+- 文档描述不清时快速找到测试用例
+
+✅ **改善协作效率**:
+- 新成员能快速理解功能全貌
+- 交接工作时信息完整不遗漏
+
+✅ **保证文档质量**:
+- 强制文档与实现保持同步
+- 文档必须包含可执行的测试方法
+
+---
+
 ## 开发工作流
 
 ### 构建系统
@@ -357,7 +871,7 @@ go build -C golang -o bin/trader cmd/trader/main.go
 nats-server &
 
 # 2. 运行完整链路测试
-./test_full_chain.sh
+./scripts/test/e2e/test_full_chain.sh
 
 # 3. 激活策略（等待 5 秒启动完成）
 sleep 5
@@ -590,6 +1104,18 @@ quantlink-trade-system/
 ├── bin/                 # 可执行文件（不提交）
 ├── log/                 # 日志文件（不提交）
 ├── test_logs/           # 测试日志（不提交）
+├── scripts/             # 脚本文件（按功能分类）
+│   ├── README.md        # 脚本使用指南
+│   ├── build_*.sh       # 构建脚本
+│   ├── install_*.sh     # 依赖安装脚本
+│   ├── test/            # 测试脚本
+│   │   ├── e2e/        # 端到端测试
+│   │   ├── integration/ # 集成测试
+│   │   ├── unit/       # 单元测试
+│   │   └── feature/    # 功能测试
+│   ├── live/            # 实盘脚本
+│   ├── trading/         # 交易操作脚本
+│   └── backtest/        # 回测脚本
 ├── docs/                # 文档（按主题分类）
 │   ├── README.md        # 文档索引中心
 │   ├── 核心文档/        # 系统核心文档
@@ -713,11 +1239,25 @@ chore: 更新依赖版本
 
 ---
 
-## 📋 文档重组历史
+## 📋 项目重组历史
+
+**2026-01-30**: 建立文档与脚本关联体系
+- 创建 CROSS_REFERENCE.md 交叉索引文件
+- 建立三种关联方式：脚本→文档、文档→脚本、交叉索引
+- 新增规则 11-16: 关联管理规范
+- 提供功能查找、文档查找、故障排查三类快速查找表
+
+**2026-01-30**: 完成脚本目录重组
+- 将25个 .sh 脚本从根目录整理到 scripts/ 目录
+- 按功能分类：test/, live/, trading/, backtest/
+- 根目录脚本从25个减少到0个
+- 创建 scripts/README.md 使用指南
+- 测试脚本细分为: e2e/, integration/, unit/, feature/
+- 新增规则 5-10: 脚本管理规范
 
 **2026-01-30**: 完成文档目录重组
 - 将114个文档从混乱的根目录重组为10个主题目录
-- 根目录文档从73个减少到1个（README.md）
+- 根目录文档从73个减少到3个（README.md, QUICKSTART.md, TASKS.md）
 - 创建完整的文档索引和导航系统
 - 归档35个旧文档到 archive/
 - 详细报告: @docs/系统分析/文档重组完成报告_2026-01-30-23_30.md
@@ -731,4 +1271,4 @@ chore: 更新依赖版本
 ---
 
 **最后更新**: 2026-01-30
-**文档版本**: v1.2
+**文档版本**: v1.4
