@@ -101,37 +101,93 @@ func (ts *TradingSignal) ToOrderRequest() *orspb.OrderRequest {
 // Real positions must be queried from CTP using position query interface.
 // This estimation is calculated from order fills received by the strategy, but may differ from
 // actual exchange positions due to: network delays, order rejections, partial fills, or system restarts.
+//
+// 中国期货市场规则：
+// - 不允许同一合约同时持有多空双向持仓（净持仓模型）
+// - NetQty > 0: 多头持仓，使用 BuyQty 和 BuyAvgPrice
+// - NetQty < 0: 空头持仓，使用 SellQty 和 SellAvgPrice
+// - NetQty = 0: 空仓
 type EstimatedPosition struct {
 	Symbol        string    // Symbol
 	Exchange      string    // Exchange
-	LongQty       int64     // Long position quantity (estimated)
-	ShortQty      int64     // Short position quantity (estimated)
-	NetQty        int64     // Net position (long - short, estimated)
-	AvgLongPrice  float64   // Average long price
-	AvgShortPrice float64   // Average short price
-	RealizedPnL   float64   // Realized P&L
-	UnrealizedPnL float64   // Unrealized P&L
+
+	// 中国期货净持仓模型（与 tbsrc 一致）
+	NetQty        int64     // 净持仓 = BuyTotalQty - SellTotalQty (正=多头，负=空头，0=空仓)
+	BuyQty        int64     // 多头持仓数量（NetQty > 0 时使用）
+	SellQty       int64     // 空头持仓数量（NetQty < 0 时使用）
+	BuyAvgPrice   float64   // 多头平均成本价
+	SellAvgPrice  float64   // 空头平均成本价
+
+	// 累计成交量（用于计算 RealizedPnL）
+	BuyTotalQty   int64     // 累计买入总量
+	SellTotalQty  int64     // 累计卖出总量
+	BuyTotalValue float64   // 累计买入总金额
+	SellTotalValue float64  // 累计卖出总金额
+
+	// 今昨仓（中国期货特有）
+	TodayQty      int64     // 今仓数量
+	YesterdayQty  int64     // 昨仓数量
+
+	// 盈亏
+	RealizedPnL   float64   // 已实现盈亏
+	UnrealizedPnL float64   // 未实现盈亏
 	LastUpdate    time.Time // Last update time
+
+	// 兼容字段（废弃，为了 API 兼容性保留）
+	LongQty       int64     `json:"LongQty,omitempty"`       // Deprecated: 使用 BuyQty
+	ShortQty      int64     `json:"ShortQty,omitempty"`      // Deprecated: 使用 SellQty
+	AvgLongPrice  float64   `json:"AvgLongPrice,omitempty"`  // Deprecated: 使用 BuyAvgPrice
+	AvgShortPrice float64   `json:"AvgShortPrice,omitempty"` // Deprecated: 使用 SellAvgPrice
 }
 
-// GetNetPosition returns net position (estimated)
+// GetNetPosition returns net position (符合中国期货规则)
 func (p *EstimatedPosition) GetNetPosition() int64 {
-	return p.LongQty - p.ShortQty
+	return p.NetQty
 }
 
-// IsFlat returns true if position is flat (estimated)
+// IsFlat returns true if position is flat
 func (p *EstimatedPosition) IsFlat() bool {
-	return p.GetNetPosition() == 0
+	return p.NetQty == 0
 }
 
-// IsLong returns true if net long (estimated)
+// IsLong returns true if net long (多头持仓)
 func (p *EstimatedPosition) IsLong() bool {
-	return p.GetNetPosition() > 0
+	return p.NetQty > 0
 }
 
-// IsShort returns true if net short (estimated)
+// IsShort returns true if net short (空头持仓)
 func (p *EstimatedPosition) IsShort() bool {
-	return p.GetNetPosition() < 0
+	return p.NetQty < 0
+}
+
+// GetAvgPrice returns average cost price based on position direction
+func (p *EstimatedPosition) GetAvgPrice() float64 {
+	if p.NetQty > 0 {
+		return p.BuyAvgPrice
+	} else if p.NetQty < 0 {
+		return p.SellAvgPrice
+	}
+	return 0
+}
+
+// UpdateCompatibilityFields updates deprecated fields for API compatibility
+func (p *EstimatedPosition) UpdateCompatibilityFields() {
+	if p.NetQty > 0 {
+		p.LongQty = p.BuyQty
+		p.ShortQty = 0
+		p.AvgLongPrice = p.BuyAvgPrice
+		p.AvgShortPrice = 0
+	} else if p.NetQty < 0 {
+		p.LongQty = 0
+		p.ShortQty = p.SellQty
+		p.AvgLongPrice = 0
+		p.AvgShortPrice = p.SellAvgPrice
+	} else {
+		p.LongQty = 0
+		p.ShortQty = 0
+		p.AvgLongPrice = 0
+		p.AvgShortPrice = 0
+	}
 }
 
 // PNL represents profit and loss

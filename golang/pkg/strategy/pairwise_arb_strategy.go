@@ -47,8 +47,29 @@ type PairwiseArbStrategy struct {
 	spreadAnalyzer    *spread.SpreadAnalyzer
 
 	// Position tracking (separate for each leg)
+	// 参考 tbsrc：每条腿有独立的 ExecutionStrategy，因此需要独立的持仓统计
 	leg1Position      int64
 	leg2Position      int64
+
+	// Leg1 独立持仓统计（类似 tbsrc m_firstStrat）
+	leg1BuyQty        int64
+	leg1SellQty       int64
+	leg1BuyAvgPrice   float64
+	leg1SellAvgPrice  float64
+	leg1BuyTotalQty   int64
+	leg1SellTotalQty  int64
+	leg1BuyTotalValue float64
+	leg1SellTotalValue float64
+
+	// Leg2 独立持仓统计（类似 tbsrc m_secondStrat）
+	leg2BuyQty        int64
+	leg2SellQty       int64
+	leg2BuyAvgPrice   float64
+	leg2SellAvgPrice  float64
+	leg2BuyTotalQty   int64
+	leg2SellTotalQty  int64
+	leg2BuyTotalValue float64
+	leg2SellTotalValue float64
 
 	mu sync.RWMutex
 }
@@ -188,9 +209,11 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	pas.spreadAnalyzer.CalculateSpread()
 	pas.spreadAnalyzer.UpdateAll(pas.lookbackPeriod)
 
-	// Update PNL (use average price)
+	// Update PNL (配对策略专用计算：分别计算两腿)
+	pas.updatePairwisePNL()
+
+	// Update risk metrics (use average price for exposure calculation)
 	avgPrice := (pas.price1 + pas.price2) / 2.0
-	pas.BaseStrategy.UpdatePNL(avgPrice)
 	pas.BaseStrategy.UpdateRiskMetrics(avgPrice)
 
 	// Get current statistics from SpreadAnalyzer
@@ -453,32 +476,172 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	pas.UpdatePosition(update)
 	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.ID, pas.EstimatedPosition)
 
-	// Update leg-specific positions for pairwise arbitrage
+	// Update leg-specific positions (similar to tbsrc: each leg has its own ExecutionStrategy)
+	// 参考 tbsrc ExecutionStrategy::TradeCallBack
 	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
 		symbol := update.Symbol
 		qty := int64(update.FilledQty)
+		price := update.AvgPrice
 
 		// Determine which leg this order belongs to
 		if symbol == pas.symbol1 {
-			// Update leg1 position
-			if update.Side == orspb.OrderSide_BUY {
-				pas.leg1Position += qty
-			} else if update.Side == orspb.OrderSide_SELL {
-				pas.leg1Position -= qty
-			}
-			log.Printf("[PairwiseArb:%s] Leg1 position updated: %s %s %d -> total: %d",
-				pas.ID, symbol, update.Side, qty, pas.leg1Position)
+			pas.updateLeg1Position(update.Side, qty, price)
 		} else if symbol == pas.symbol2 {
-			// Update leg2 position
-			if update.Side == orspb.OrderSide_BUY {
-				pas.leg2Position += qty
-			} else if update.Side == orspb.OrderSide_SELL {
-				pas.leg2Position -= qty
-			}
-			log.Printf("[PairwiseArb:%s] Leg2 position updated: %s %s %d -> total: %d",
-				pas.ID, symbol, update.Side, qty, pas.leg2Position)
+			pas.updateLeg2Position(update.Side, qty, price)
 		}
 	}
+}
+
+// updateLeg1Position updates leg1 position statistics (similar to tbsrc ExecutionStrategy)
+// 参考 tbsrc ExecutionStrategy::TradeCallBack - 中国期货净持仓模型
+func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int64, price float64) {
+	if side == orspb.OrderSide_BUY {
+		// 买入逻辑
+		pas.leg1BuyTotalQty += qty
+		pas.leg1BuyTotalValue += float64(qty) * price
+
+		// 检查是否有空头需要平仓
+		if pas.leg1Position < 0 {
+			// 平空
+			closedQty := qty
+			if closedQty > pas.leg1SellQty {
+				closedQty = pas.leg1SellQty
+			}
+			pas.leg1SellQty -= closedQty
+			pas.leg1Position += closedQty
+			qty -= closedQty
+
+			if pas.leg1SellQty == 0 {
+				pas.leg1SellAvgPrice = 0
+			}
+		}
+
+		// 开多
+		if qty > 0 {
+			totalCost := pas.leg1BuyAvgPrice * float64(pas.leg1BuyQty)
+			totalCost += price * float64(qty)
+			pas.leg1BuyQty += qty
+			pas.leg1Position += qty
+			if pas.leg1BuyQty > 0 {
+				pas.leg1BuyAvgPrice = totalCost / float64(pas.leg1BuyQty)
+			}
+			log.Printf("[PairwiseArb:%s] Leg1 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d",
+				pas.ID, qty, price, pas.leg1BuyAvgPrice, pas.leg1Position)
+		}
+	} else {
+		// 卖出逻辑
+		pas.leg1SellTotalQty += qty
+		pas.leg1SellTotalValue += float64(qty) * price
+
+		// 检查是否有多头需要平仓
+		if pas.leg1Position > 0 {
+			// 平多
+			closedQty := qty
+			if closedQty > pas.leg1BuyQty {
+				closedQty = pas.leg1BuyQty
+			}
+			pas.leg1BuyQty -= closedQty
+			pas.leg1Position -= closedQty
+			qty -= closedQty
+
+			if pas.leg1BuyQty == 0 {
+				pas.leg1BuyAvgPrice = 0
+			}
+		}
+
+		// 开空
+		if qty > 0 {
+			totalCost := pas.leg1SellAvgPrice * float64(pas.leg1SellQty)
+			totalCost += price * float64(qty)
+			pas.leg1SellQty += qty
+			pas.leg1Position -= qty
+			if pas.leg1SellQty > 0 {
+				pas.leg1SellAvgPrice = totalCost / float64(pas.leg1SellQty)
+			}
+			log.Printf("[PairwiseArb:%s] Leg1 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d",
+				pas.ID, qty, price, pas.leg1SellAvgPrice, pas.leg1Position)
+		}
+	}
+
+	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f)",
+		pas.ID, pas.symbol1, pas.leg1Position, pas.leg1BuyQty, pas.leg1BuyAvgPrice,
+		pas.leg1SellQty, pas.leg1SellAvgPrice)
+}
+
+// updateLeg2Position updates leg2 position statistics (similar to tbsrc ExecutionStrategy)
+// 参考 tbsrc ExecutionStrategy::TradeCallBack - 中国期货净持仓模型
+func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int64, price float64) {
+	if side == orspb.OrderSide_BUY {
+		// 买入逻辑
+		pas.leg2BuyTotalQty += qty
+		pas.leg2BuyTotalValue += float64(qty) * price
+
+		// 检查是否有空头需要平仓
+		if pas.leg2Position < 0 {
+			// 平空
+			closedQty := qty
+			if closedQty > pas.leg2SellQty {
+				closedQty = pas.leg2SellQty
+			}
+			pas.leg2SellQty -= closedQty
+			pas.leg2Position += closedQty
+			qty -= closedQty
+
+			if pas.leg2SellQty == 0 {
+				pas.leg2SellAvgPrice = 0
+			}
+		}
+
+		// 开多
+		if qty > 0 {
+			totalCost := pas.leg2BuyAvgPrice * float64(pas.leg2BuyQty)
+			totalCost += price * float64(qty)
+			pas.leg2BuyQty += qty
+			pas.leg2Position += qty
+			if pas.leg2BuyQty > 0 {
+				pas.leg2BuyAvgPrice = totalCost / float64(pas.leg2BuyQty)
+			}
+			log.Printf("[PairwiseArb:%s] Leg2 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d",
+				pas.ID, qty, price, pas.leg2BuyAvgPrice, pas.leg2Position)
+		}
+	} else {
+		// 卖出逻辑
+		pas.leg2SellTotalQty += qty
+		pas.leg2SellTotalValue += float64(qty) * price
+
+		// 检查是否有多头需要平仓
+		if pas.leg2Position > 0 {
+			// 平多
+			closedQty := qty
+			if closedQty > pas.leg2BuyQty {
+				closedQty = pas.leg2BuyQty
+			}
+			pas.leg2BuyQty -= closedQty
+			pas.leg2Position -= closedQty
+			qty -= closedQty
+
+			if pas.leg2BuyQty == 0 {
+				pas.leg2BuyAvgPrice = 0
+			}
+		}
+
+		// 开空
+		if qty > 0 {
+			totalCost := pas.leg2SellAvgPrice * float64(pas.leg2SellQty)
+			totalCost += price * float64(qty)
+			pas.leg2SellQty += qty
+			pas.leg2Position -= qty
+			if pas.leg2SellQty > 0 {
+				pas.leg2SellAvgPrice = totalCost / float64(pas.leg2SellQty)
+			}
+			log.Printf("[PairwiseArb:%s] Leg2 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d",
+				pas.ID, qty, price, pas.leg2SellAvgPrice, pas.leg2Position)
+		}
+	}
+
+	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f)",
+		pas.ID, pas.symbol2, pas.leg2Position, pas.leg2BuyQty, pas.leg2BuyAvgPrice,
+		pas.leg2SellQty, pas.leg2SellAvgPrice)
 }
 
 // OnTimer handles timer events
@@ -522,12 +685,17 @@ func (pas *PairwiseArbStrategy) Start() error {
 				pas.ID, pas.symbol2, qty)
 		}
 
-		// 恢复BaseStrategy持仓
-		pas.EstimatedPosition.LongQty = snapshot.TotalLongQty
-		pas.EstimatedPosition.ShortQty = snapshot.TotalShortQty
+		// 恢复BaseStrategy持仓（符合新的持仓模型）
 		pas.EstimatedPosition.NetQty = snapshot.TotalNetQty
-		pas.EstimatedPosition.AvgLongPrice = snapshot.AvgLongPrice
-		pas.EstimatedPosition.AvgShortPrice = snapshot.AvgShortPrice
+		if snapshot.TotalNetQty > 0 {
+			pas.EstimatedPosition.BuyQty = snapshot.TotalLongQty
+			pas.EstimatedPosition.BuyAvgPrice = snapshot.AvgLongPrice
+		} else if snapshot.TotalNetQty < 0 {
+			pas.EstimatedPosition.SellQty = snapshot.TotalShortQty
+			pas.EstimatedPosition.SellAvgPrice = snapshot.AvgShortPrice
+		}
+		// 更新兼容字段
+		pas.EstimatedPosition.UpdateCompatibilityFields()
 		pas.PNL.RealizedPnL = snapshot.RealizedPnL
 
 		log.Printf("[PairwiseArbStrategy:%s] Position restored: Long=%d, Short=%d, Net=%d",
@@ -789,6 +957,78 @@ func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
 			"position": pas.leg2Position,
 			"side":     leg2Side,
 		},
+	}
+}
+
+// updatePairwisePNL 计算配对套利的专用P&L
+// 配对策略有两个独立的品种，需要分别计算每一腿的盈亏
+// 使用对手价（bid/ask）计算，符合 tbsrc 逻辑
+// updatePairwisePNL calculates P&L for pairwise strategy
+// 参考 tbsrc PairwiseArbStrategy: 每条腿有独立的 ExecutionStrategy，因此有独立的平均价格
+// arbi_unrealisedPNL = m_firstStrat->m_unrealisedPNL + m_secondStrat->m_unrealisedPNL
+func (pas *PairwiseArbStrategy) updatePairwisePNL() {
+	var unrealizedPnL float64 = 0
+
+	// Leg1 浮动盈亏（使用对手价和 Leg1 独立的平均价格）
+	// 参考 tbsrc ExecutionStrategy::CalculatePNL
+	if pas.leg1Position != 0 {
+		var leg1PnL float64
+		var avgCost float64
+		var counterPrice float64
+
+		if pas.leg1Position > 0 {
+			// Leg1 多头: 使用卖一价（bid），因为平仓时要卖出
+			// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice)
+			avgCost = pas.leg1BuyAvgPrice  // ✅ 使用 Leg1 独立的买入均价
+			counterPrice = pas.bid1
+			leg1PnL = (counterPrice - avgCost) * float64(pas.leg1Position)
+		} else {
+			// Leg1 空头: 使用买一价（ask），因为平仓时要买入
+			// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0])
+			avgCost = pas.leg1SellAvgPrice  // ✅ 使用 Leg1 独立的卖出均价
+			counterPrice = pas.ask1
+			leg1PnL = (avgCost - counterPrice) * float64(-pas.leg1Position)
+		}
+		unrealizedPnL += leg1PnL
+
+		log.Printf("[PairwiseArb:%s] 📊 Leg1(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
+			pas.ID, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice)
+	}
+
+	// Leg2 浮动盈亏（使用对手价和 Leg2 独立的平均价格）
+	// 参考 tbsrc ExecutionStrategy::CalculatePNL
+	if pas.leg2Position != 0 {
+		var leg2PnL float64
+		var avgCost float64
+		var counterPrice float64
+
+		if pas.leg2Position > 0 {
+			// Leg2 多头: 使用卖一价（bid）
+			avgCost = pas.leg2BuyAvgPrice  // ✅ 使用 Leg2 独立的买入均价
+			counterPrice = pas.bid2
+			leg2PnL = (counterPrice - avgCost) * float64(pas.leg2Position)
+		} else {
+			// Leg2 空头: 使用买一价（ask）
+			avgCost = pas.leg2SellAvgPrice  // ✅ 使用 Leg2 独立的卖出均价
+			counterPrice = pas.ask2
+			leg2PnL = (avgCost - counterPrice) * float64(-pas.leg2Position)
+		}
+		unrealizedPnL += leg2PnL
+
+		log.Printf("[PairwiseArb:%s] 📊 Leg2(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
+			pas.ID, pas.symbol2, leg2PnL, pas.leg2Position, avgCost, counterPrice)
+	}
+
+	// 更新 BaseStrategy 的 PNL
+	// tbsrc: 配对策略的总 P&L = 两条腿的 P&L 相加
+	pas.PNL.UnrealizedPnL = unrealizedPnL
+	pas.PNL.TotalPnL = pas.PNL.RealizedPnL + pas.PNL.UnrealizedPnL
+	pas.PNL.NetPnL = pas.PNL.TotalPnL - pas.PNL.TradingFees
+	pas.PNL.Timestamp = time.Now()
+
+	if pas.leg1Position != 0 || pas.leg2Position != 0 {
+		log.Printf("[PairwiseArb:%s] 💰 Total P&L: Realized=%.2f, Unrealized=%.2f, Total=%.2f",
+			pas.ID, pas.PNL.RealizedPnL, pas.PNL.UnrealizedPnL, pas.PNL.TotalPnL)
 	}
 }
 

@@ -156,10 +156,10 @@ func (hs *HedgingStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		}
 	}
 
-	// Update PNL (use average of primary and hedge price)
+	// Update PNL (简化：假设使用 midPrice 作为 bid/ask)
 	avgPrice := (hs.primaryPrice + hs.hedgePrice) / 2.0
 	if avgPrice > 0 {
-		hs.BaseStrategy.UpdatePNL(avgPrice)
+		hs.BaseStrategy.UpdatePNL(avgPrice, avgPrice) // 简化处理，使用相同价格
 		hs.BaseStrategy.UpdateRiskMetrics(avgPrice)
 	}
 

@@ -234,6 +234,8 @@ func (bs *BaseStrategy) AddSignal(signal *TradingSignal) {
 }
 
 // UpdatePosition updates position based on order update
+// 符合中国期货市场规则：净持仓模型，买入先平空再开多，卖出先平多再开空
+// 参考 tbsrc ExecutionStrategy::TradeCallBack
 func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 	log.Printf("[BaseStrategy:%s] 🔍 UpdatePosition called: OrderID=%s, Symbol=%s, Status=%v, Side=%v, FilledQty=%d",
 		bs.ID, update.OrderId, update.Symbol, update.Status, update.Side, update.FilledQty)
@@ -249,73 +251,157 @@ func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 		price := update.AvgPrice
 
 		if update.Side == orspb.OrderSide_BUY {
-			// Calculate realized PNL if closing short position
-			if bs.EstimatedPosition.ShortQty > 0 && bs.EstimatedPosition.LongQty == 0 {
-				// Buy is closing a short position
+			// 买入逻辑
+			// 1. 更新累计买入
+			bs.EstimatedPosition.BuyTotalQty += qty
+			bs.EstimatedPosition.BuyTotalValue += float64(qty) * price
+
+			// 2. 检查是否有空头持仓需要平仓
+			if bs.EstimatedPosition.NetQty < 0 {
+				// 当前是空头持仓，买入平空
 				closedQty := qty
-				if closedQty > bs.EstimatedPosition.ShortQty {
-					closedQty = bs.EstimatedPosition.ShortQty
+				if closedQty > bs.EstimatedPosition.SellQty {
+					closedQty = bs.EstimatedPosition.SellQty
 				}
-				// Short PNL: (avg_short_price - buy_price) * qty
-				realizedPnL := (bs.EstimatedPosition.AvgShortPrice - price) * float64(closedQty)
+
+				// 计算平空盈亏: (卖出均价 - 买入价) × 平仓数量
+				realizedPnL := (bs.EstimatedPosition.SellAvgPrice - price) * float64(closedQty)
 				bs.PNL.RealizedPnL += realizedPnL
+
+				// 减少空头持仓
+				bs.EstimatedPosition.SellQty -= closedQty
+				bs.EstimatedPosition.NetQty += closedQty
+
+				log.Printf("[BaseStrategy:%s] 💰 平空盈亏: %.2f (平仓 %d @ %.2f, 空头均价 %.2f)",
+					bs.ID, realizedPnL, closedQty, price, bs.EstimatedPosition.SellAvgPrice)
+
+				// 剩余数量用于开多
+				qty -= closedQty
+
+				// 如果全部平仓，重置空头相关数据
+				if bs.EstimatedPosition.SellQty == 0 {
+					bs.EstimatedPosition.SellAvgPrice = 0
+				}
 			}
 
-			// Update long position (always add to long)
-			totalCost := bs.EstimatedPosition.AvgLongPrice * float64(bs.EstimatedPosition.LongQty)
-			totalCost += price * float64(qty)
-			bs.EstimatedPosition.LongQty += qty
-			if bs.EstimatedPosition.LongQty > 0 {
-				bs.EstimatedPosition.AvgLongPrice = totalCost / float64(bs.EstimatedPosition.LongQty)
+			// 3. 如果还有剩余数量，开多仓
+			if qty > 0 {
+				// 更新多头持仓和平均价
+				totalCost := bs.EstimatedPosition.BuyAvgPrice * float64(bs.EstimatedPosition.BuyQty)
+				totalCost += price * float64(qty)
+				bs.EstimatedPosition.BuyQty += qty
+				bs.EstimatedPosition.NetQty += qty
+				if bs.EstimatedPosition.BuyQty > 0 {
+					bs.EstimatedPosition.BuyAvgPrice = totalCost / float64(bs.EstimatedPosition.BuyQty)
+				}
+
+				log.Printf("[BaseStrategy:%s] 📈 开多: %d @ %.2f, 多头均价 %.2f",
+					bs.ID, qty, price, bs.EstimatedPosition.BuyAvgPrice)
 			}
+
 		} else {
-			// Calculate realized PNL if closing long position
-			if bs.EstimatedPosition.LongQty > 0 && bs.EstimatedPosition.ShortQty == 0 {
-				// Sell is closing a long position
+			// 卖出逻辑
+			// 1. 更新累计卖出
+			bs.EstimatedPosition.SellTotalQty += qty
+			bs.EstimatedPosition.SellTotalValue += float64(qty) * price
+
+			// 2. 检查是否有多头持仓需要平仓
+			if bs.EstimatedPosition.NetQty > 0 {
+				// 当前是多头持仓，卖出平多
 				closedQty := qty
-				if closedQty > bs.EstimatedPosition.LongQty {
-					closedQty = bs.EstimatedPosition.LongQty
+				if closedQty > bs.EstimatedPosition.BuyQty {
+					closedQty = bs.EstimatedPosition.BuyQty
 				}
-				// Long PNL: (sell_price - avg_long_price) * qty
-				realizedPnL := (price - bs.EstimatedPosition.AvgLongPrice) * float64(closedQty)
+
+				// 计算平多盈亏: (卖出价 - 买入均价) × 平仓数量
+				realizedPnL := (price - bs.EstimatedPosition.BuyAvgPrice) * float64(closedQty)
 				bs.PNL.RealizedPnL += realizedPnL
+
+				// 减少多头持仓
+				bs.EstimatedPosition.BuyQty -= closedQty
+				bs.EstimatedPosition.NetQty -= closedQty
+
+				log.Printf("[BaseStrategy:%s] 💰 平多盈亏: %.2f (平仓 %d @ %.2f, 多头均价 %.2f)",
+					bs.ID, realizedPnL, closedQty, price, bs.EstimatedPosition.BuyAvgPrice)
+
+				// 剩余数量用于开空
+				qty -= closedQty
+
+				// 如果全部平仓，重置多头相关数据
+				if bs.EstimatedPosition.BuyQty == 0 {
+					bs.EstimatedPosition.BuyAvgPrice = 0
+				}
 			}
 
-			// Update short position (always add to short)
-			totalCost := bs.EstimatedPosition.AvgShortPrice * float64(bs.EstimatedPosition.ShortQty)
-			totalCost += price * float64(qty)
-			bs.EstimatedPosition.ShortQty += qty
-			if bs.EstimatedPosition.ShortQty > 0 {
-				bs.EstimatedPosition.AvgShortPrice = totalCost / float64(bs.EstimatedPosition.ShortQty)
+			// 3. 如果还有剩余数量，开空仓
+			if qty > 0 {
+				// 更新空头持仓和平均价
+				totalCost := bs.EstimatedPosition.SellAvgPrice * float64(bs.EstimatedPosition.SellQty)
+				totalCost += price * float64(qty)
+				bs.EstimatedPosition.SellQty += qty
+				bs.EstimatedPosition.NetQty -= qty
+				if bs.EstimatedPosition.SellQty > 0 {
+					bs.EstimatedPosition.SellAvgPrice = totalCost / float64(bs.EstimatedPosition.SellQty)
+				}
+
+				log.Printf("[BaseStrategy:%s] 📉 开空: %d @ %.2f, 空头均价 %.2f",
+					bs.ID, qty, price, bs.EstimatedPosition.SellAvgPrice)
 			}
 		}
 
-		bs.EstimatedPosition.NetQty = bs.EstimatedPosition.LongQty - bs.EstimatedPosition.ShortQty
+		// 4. 更新兼容字段（为了 API 兼容性）
+		bs.EstimatedPosition.UpdateCompatibilityFields()
 		bs.EstimatedPosition.LastUpdate = time.Now()
 
-		log.Printf("[BaseStrategy:%s] ✅ EstimatedPosition UPDATED: Long=%d, Short=%d, Net=%d, AvgLong=%.2f, AvgShort=%.2f",
-			bs.ID, bs.EstimatedPosition.LongQty, bs.EstimatedPosition.ShortQty, bs.EstimatedPosition.NetQty,
-			bs.EstimatedPosition.AvgLongPrice, bs.EstimatedPosition.AvgShortPrice)
+		// 5. 当净持仓归零时，计算总的已实现盈亏
+		if bs.EstimatedPosition.NetQty == 0 {
+			// tbsrc 逻辑: m_realisedPNL = m_sellTotalValue - m_buyTotalValue
+			totalRealizedPnL := bs.EstimatedPosition.SellTotalValue - bs.EstimatedPosition.BuyTotalValue
+			log.Printf("[BaseStrategy:%s] ✅ 持仓归零，总已实现盈亏: %.2f (买入总额 %.2f, 卖出总额 %.2f)",
+				bs.ID, totalRealizedPnL, bs.EstimatedPosition.BuyTotalValue, bs.EstimatedPosition.SellTotalValue)
+		}
+
+		log.Printf("[BaseStrategy:%s] ✅ 持仓更新: NetQty=%d (Buy=%d, Sell=%d), BuyAvg=%.2f, SellAvg=%.2f, RealizedPnL=%.2f",
+			bs.ID, bs.EstimatedPosition.NetQty, bs.EstimatedPosition.BuyQty, bs.EstimatedPosition.SellQty,
+			bs.EstimatedPosition.BuyAvgPrice, bs.EstimatedPosition.SellAvgPrice, bs.PNL.RealizedPnL)
+
 	} else if update.Status == orspb.OrderStatus_REJECTED {
 		bs.Status.RejectCount++
 	}
 }
 
 // UpdatePNL updates P&L based on current market price
-func (bs *BaseStrategy) UpdatePNL(currentPrice float64) {
-	if bs.EstimatedPosition.IsFlat() {
-		bs.PNL.UnrealizedPnL = 0
-	} else if bs.EstimatedPosition.IsLong() {
-		// Long position: (current - avg_buy) * qty
-		bs.PNL.UnrealizedPnL = (currentPrice - bs.EstimatedPosition.AvgLongPrice) * float64(bs.EstimatedPosition.LongQty)
-	} else {
-		// Short position: (avg_sell - current) * qty
-		bs.PNL.UnrealizedPnL = (bs.EstimatedPosition.AvgShortPrice - currentPrice) * float64(bs.EstimatedPosition.ShortQty)
+// 符合中国期货规则和 tbsrc 逻辑
+// 参考 tbsrc ExecutionStrategy::CalculatePNL
+func (bs *BaseStrategy) UpdatePNL(bidPrice, askPrice float64) {
+	var unrealizedPnL float64 = 0
+
+	if bs.EstimatedPosition.NetQty > 0 {
+		// 多头持仓：使用卖一价（对手价）计算浮动盈亏
+		// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice) * multiplier
+		unrealizedPnL = float64(bs.EstimatedPosition.NetQty) * (bidPrice - bs.EstimatedPosition.BuyAvgPrice)
+
+		log.Printf("[BaseStrategy:%s] 📊 多头 P&L: %.2f (NetQty=%d, BidPrice=%.2f, AvgBuy=%.2f)",
+			bs.ID, unrealizedPnL, bs.EstimatedPosition.NetQty, bidPrice, bs.EstimatedPosition.BuyAvgPrice)
+
+	} else if bs.EstimatedPosition.NetQty < 0 {
+		// 空头持仓：使用买一价（对手价）计算浮动盈亏
+		// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0]) * multiplier
+		unrealizedPnL = float64(-bs.EstimatedPosition.NetQty) * (bs.EstimatedPosition.SellAvgPrice - askPrice)
+
+		log.Printf("[BaseStrategy:%s] 📊 空头 P&L: %.2f (NetQty=%d, AskPrice=%.2f, AvgSell=%.2f)",
+			bs.ID, unrealizedPnL, bs.EstimatedPosition.NetQty, askPrice, bs.EstimatedPosition.SellAvgPrice)
 	}
 
+	bs.PNL.UnrealizedPnL = unrealizedPnL
 	bs.PNL.TotalPnL = bs.PNL.RealizedPnL + bs.PNL.UnrealizedPnL
 	bs.PNL.NetPnL = bs.PNL.TotalPnL - bs.PNL.TradingFees
 	bs.PNL.Timestamp = time.Now()
+
+	if bs.EstimatedPosition.NetQty != 0 {
+		log.Printf("[BaseStrategy:%s] 💰 Total P&L: Realized=%.2f, Unrealized=%.2f, Total=%.2f",
+			bs.ID, bs.PNL.RealizedPnL, bs.PNL.UnrealizedPnL, bs.PNL.TotalPnL)
+	}
 }
 
 // UpdateRiskMetrics updates risk metrics

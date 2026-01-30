@@ -134,8 +134,8 @@ func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	// Update market state
 	ps.currentMarketState = FromMarketDataUpdate(md)
 
-	// Update P&L and risk metrics
-	ps.UpdatePNL(ps.currentMarketState.MidPrice)
+	// Update P&L and risk metrics (使用 bid/ask)
+	ps.UpdatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
 	ps.UpdateRiskMetrics(ps.currentMarketState.MidPrice)
 
 	// Check if we need to refresh orders
@@ -169,7 +169,7 @@ func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 
 	// Update P&L if we have market state
 	if ps.currentMarketState != nil {
-		ps.UpdatePNL(ps.currentMarketState.MidPrice)
+		ps.UpdatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
 		ps.UpdateRiskMetrics(ps.currentMarketState.MidPrice)
 	}
 }

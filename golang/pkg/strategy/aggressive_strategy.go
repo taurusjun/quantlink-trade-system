@@ -148,11 +148,13 @@ func (as *AggressiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	if len(md.BidPrice) == 0 || len(md.AskPrice) == 0 {
 		return
 	}
-	midPrice := (md.BidPrice[0] + md.AskPrice[0]) / 2.0
+	bidPrice := md.BidPrice[0]
+	askPrice := md.AskPrice[0]
+	midPrice := (bidPrice + askPrice) / 2.0
 	as.lastPrice = midPrice
 
-	// Update PNL and risk metrics
-	as.BaseStrategy.UpdatePNL(midPrice)
+	// Update PNL and risk metrics (使用对手价)
+	as.BaseStrategy.UpdatePNL(bidPrice, askPrice)
 	as.BaseStrategy.UpdateRiskMetrics(midPrice)
 
 	// Check if we should generate new signals
