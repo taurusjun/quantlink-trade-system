@@ -587,7 +587,49 @@ void SimulatorPlugin::UpdatePosition(const hft::plugin::TradeInfo& trade) {
         }
 
         InternalPosition& pos = it->second;
-        uint32_t closedQty = std::min(qty, pos.volume);
+
+        // 根据 offset 类型确定平仓数量和来源
+        // CLOSE_TODAY: 只能平今仓
+        // CLOSE_YESTERDAY: 只能平昨仓
+        // CLOSE: 优先平今，不足部分平昨
+        uint32_t closedQty = 0;
+        uint32_t close_today = 0;
+        uint32_t close_yesterday = 0;
+        std::string offset_str = "平仓";
+
+        if (trade.offset == hft::plugin::OffsetFlag::CLOSE_TODAY) {
+            // 平今仓
+            closedQty = std::min(qty, pos.today_volume);
+            close_today = closedQty;
+            offset_str = "平今";
+            if (closedQty < qty) {
+                std::cerr << "[SimulatorPlugin] ⚠️ 平今仓不足：需要 " << qty
+                          << "，今仓只有 " << pos.today_volume << std::endl;
+            }
+        } else if (trade.offset == hft::plugin::OffsetFlag::CLOSE_YESTERDAY) {
+            // 平昨仓
+            closedQty = std::min(qty, pos.yesterday_volume);
+            close_yesterday = closedQty;
+            offset_str = "平昨";
+            if (closedQty < qty) {
+                std::cerr << "[SimulatorPlugin] ⚠️ 平昨仓不足：需要 " << qty
+                          << "，昨仓只有 " << pos.yesterday_volume << std::endl;
+            }
+        } else {
+            // CLOSE: 优先平今，不足部分平昨
+            closedQty = std::min(qty, pos.volume);
+            if (pos.today_volume >= closedQty) {
+                close_today = closedQty;
+            } else {
+                close_today = pos.today_volume;
+                close_yesterday = closedQty - close_today;
+            }
+        }
+
+        if (closedQty == 0) {
+            std::cerr << "[SimulatorPlugin] ⚠️ 平仓失败：可平数量为0" << std::endl;
+            return;
+        }
 
         // 计算平仓盈亏
         double close_pnl = 0;
@@ -607,20 +649,15 @@ void SimulatorPlugin::UpdatePosition(const hft::plugin::TradeInfo& trade) {
 
         // 减少持仓
         pos.volume -= closedQty;
-
-        // 更新今昨仓
-        if (pos.today_volume >= closedQty) {
-            pos.today_volume -= closedQty;
-        } else {
-            uint32_t from_yesterday = closedQty - pos.today_volume;
-            pos.today_volume = 0;
-            pos.yesterday_volume -= std::min(pos.yesterday_volume, from_yesterday);
-        }
+        pos.today_volume -= close_today;
+        pos.yesterday_volume -= close_yesterday;
 
         std::string direction_str = (close_direction == hft::plugin::OrderDirection::BUY) ? "多" : "空";
-        std::cout << "[SimulatorPlugin] 平" << direction_str << ": " << closedQty << " @ " << price
+        std::cout << "[SimulatorPlugin] " << offset_str << direction_str << ": " << closedQty << " @ " << price
+                  << " (今:" << close_today << ", 昨:" << close_yesterday << ")"
                   << ", " << direction_str << "头均价 " << pos.avg_price << ", 盈亏 " << close_pnl
-                  << ", 剩余 " << pos.volume << std::endl;
+                  << ", 剩余 " << pos.volume << "(今:" << pos.today_volume << ", 昨:" << pos.yesterday_volume << ")"
+                  << std::endl;
 
         // 持仓归零，移除
         if (pos.volume == 0) {
@@ -689,7 +726,7 @@ bool SimulatorPlugin::CheckRisk(const hft::plugin::OrderRequest& request, std::s
                 return false;
             }
         } else {
-            // 平仓时检查是否有对应持仓
+            // 平仓时检查是否有对应持仓（支持今昨仓区分）
             hft::plugin::OrderDirection close_direction =
                 (request.direction == hft::plugin::OrderDirection::BUY)
                     ? hft::plugin::OrderDirection::SELL   // 买入 → 平空头
@@ -699,10 +736,32 @@ bool SimulatorPlugin::CheckRisk(const hft::plugin::OrderRequest& request, std::s
                                  (close_direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
             auto it = m_positions.find(pos_key);
 
-            if (it == m_positions.end() || it->second.volume < request.volume) {
-                uint32_t available = (it != m_positions.end()) ? it->second.volume : 0;
+            if (it == m_positions.end()) {
                 if (error_msg) {
-                    *error_msg = "Insufficient position to close. Required: " +
+                    *error_msg = "No position to close for " + std::string(request.symbol);
+                }
+                return false;
+            }
+
+            const auto& pos = it->second;
+            uint32_t available = 0;
+            std::string close_type = "总持仓";
+
+            // 根据 offset 类型检查对应的持仓
+            if (request.offset == hft::plugin::OffsetFlag::CLOSE_TODAY) {
+                available = pos.today_volume;
+                close_type = "今仓";
+            } else if (request.offset == hft::plugin::OffsetFlag::CLOSE_YESTERDAY) {
+                available = pos.yesterday_volume;
+                close_type = "昨仓";
+            } else {
+                // CLOSE: 检查总持仓
+                available = pos.volume;
+            }
+
+            if (available < request.volume) {
+                if (error_msg) {
+                    *error_msg = "Insufficient " + close_type + " to close. Required: " +
                                 std::to_string(request.volume) +
                                 ", Available: " + std::to_string(available);
                 }
@@ -753,6 +812,7 @@ std::string SimulatorPlugin::GenerateOrderID() {
 // 根据当前持仓自动设置订单的 offset 字段
 // 与 CTP Plugin 的 SetOpenClose 逻辑一致
 // 使用 symbol_LONG / symbol_SHORT 作为持仓 key（支持锁仓模式）
+// 支持上期所今昨仓区分：CLOSE_TODAY / CLOSE_YESTERDAY
 void SimulatorPlugin::SetOpenClose(hft::plugin::OrderRequest& request) {
     std::lock_guard<std::mutex> lock(m_position_mutex);
 
@@ -763,20 +823,44 @@ void SimulatorPlugin::SetOpenClose(hft::plugin::OrderRequest& request) {
     auto long_it = m_positions.find(long_key);
     auto short_it = m_positions.find(short_key);
 
-    uint32_t long_position = (long_it != m_positions.end()) ? long_it->second.volume : 0;
-    uint32_t short_position = (short_it != m_positions.end()) ? short_it->second.volume : 0;
+    // 判断是否是上期所（需要区分今昨仓）
+    bool is_shfe = (std::string(request.exchange) == "SHFE");
 
     if (request.direction == hft::plugin::OrderDirection::BUY) {
         // 买入：如果有空仓 → 平空，否则 → 开多
-        if (short_position > 0) {
-            request.offset = hft::plugin::OffsetFlag::CLOSE;
+        if (short_it != m_positions.end() && short_it->second.volume > 0) {
+            const auto& pos = short_it->second;
+            if (is_shfe) {
+                // 上期所：优先平今，不足则平昨
+                if (pos.today_volume > 0) {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE_TODAY;
+                } else if (pos.yesterday_volume > 0) {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE_YESTERDAY;
+                } else {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE;
+                }
+            } else {
+                request.offset = hft::plugin::OffsetFlag::CLOSE;
+            }
         } else {
             request.offset = hft::plugin::OffsetFlag::OPEN;
         }
     } else {
         // 卖出：如果有多仓 → 平多，否则 → 开空
-        if (long_position > 0) {
-            request.offset = hft::plugin::OffsetFlag::CLOSE;
+        if (long_it != m_positions.end() && long_it->second.volume > 0) {
+            const auto& pos = long_it->second;
+            if (is_shfe) {
+                // 上期所：优先平今，不足则平昨
+                if (pos.today_volume > 0) {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE_TODAY;
+                } else if (pos.yesterday_volume > 0) {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE_YESTERDAY;
+                } else {
+                    request.offset = hft::plugin::OffsetFlag::CLOSE;
+                }
+            } else {
+                request.offset = hft::plugin::OffsetFlag::CLOSE;
+            }
         } else {
             request.offset = hft::plugin::OffsetFlag::OPEN;
         }
