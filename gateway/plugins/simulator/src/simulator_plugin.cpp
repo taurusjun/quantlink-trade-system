@@ -154,8 +154,8 @@ std::string SimulatorPlugin::SendOrder(const hft::plugin::OrderRequest& request)
     // 复制 request（可能需要修改 offset）
     hft::plugin::OrderRequest modified_request = request;
 
-    // 自动根据持仓设置 offset（参考 ors/China 的做法）
-    // 这样策略层不需要关心开平逻辑
+    // 自动根据持仓设置 offset（与 CTP Plugin 行为一致）
+    // 参考 ctp_td_plugin.cpp 的 SetOpenClose 逻辑
     hft::plugin::OffsetFlag original_offset = modified_request.offset;
     SetOpenClose(modified_request);
 
@@ -525,154 +525,110 @@ void SimulatorPlugin::ProcessOrderImmediate(const std::string& order_id,
     }
 }
 
-// UpdatePosition updates position using Chinese futures net position model
-// 参考 tbsrc 和 Golang BaseStrategy::UpdatePosition
-// 中国期货市场规则：
-// 1. 不允许同时持有多空持仓
-// 2. 买入时先平空再开多
-// 3. 卖出时先平多再开空
-// 4. 模拟交易所自己判断开平，不依赖 offset 字段
+// UpdatePosition - 支持锁仓模式（与真实 CTP 一致）
+// CTP 真实交易所规则：
+// 1. 允许同一合约同时持有多空仓位（锁仓）
+// 2. 根据 offset 字段判断开仓还是平仓
+// 3. offset=OPEN 开仓，offset=CLOSE 平仓
 void SimulatorPlugin::UpdatePosition(const hft::plugin::TradeInfo& trade) {
     std::lock_guard<std::mutex> lock(m_position_mutex);
-
-    // Use symbol as position key (NOT symbol_direction, because we use net position model)
-    std::string pos_key = std::string(trade.symbol);
-
-    // Get or create position
-    InternalPosition& pos = m_positions[pos_key];
-
-    // Initialize position if new
-    if (pos.volume == 0 && pos.total_volume_traded == 0) {
-        pos.symbol = trade.symbol;
-        pos.exchange = trade.exchange;
-        pos.yesterday_volume = 0;
-    }
 
     uint32_t qty = trade.volume;
     double price = trade.price;
 
-    if (trade.direction == hft::plugin::OrderDirection::BUY) {
-        // 买入逻辑：先平空再开多
-        // 1. 检查是否有空头持仓需要平仓
-        if (pos.direction == hft::plugin::OrderDirection::SELL && pos.volume > 0) {
-            // 当前是空头持仓，买入平空
-            uint32_t closedQty = std::min(qty, pos.volume);
+    // 根据 offset 判断是开仓还是平仓
+    bool is_open = (trade.offset == hft::plugin::OffsetFlag::OPEN);
 
-            // 计算平空盈亏: (卖出均价 - 买入价) × 平仓数量
-            double close_pnl = (pos.avg_price - price) * closedQty;
-            {
-                std::lock_guard<std::mutex> lock(m_account_mutex);
-                m_close_profit += close_pnl;
-                m_daily_pnl += close_pnl;
-            }
+    if (is_open) {
+        // ========== 开仓逻辑 ==========
+        // 使用 symbol_direction 作为 key，支持锁仓
+        std::string pos_key = std::string(trade.symbol) + "_" +
+                             (trade.direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
 
-            // 减少空头持仓
-            pos.volume -= closedQty;
+        InternalPosition& pos = m_positions[pos_key];
 
-            // 更新今昨仓
-            if (pos.today_volume >= closedQty) {
-                pos.today_volume -= closedQty;
-            } else {
-                uint32_t from_yesterday = closedQty - pos.today_volume;
-                pos.today_volume = 0;
-                pos.yesterday_volume -= std::min(pos.yesterday_volume, from_yesterday);
-            }
-
-            std::cout << "[SimulatorPlugin] 平空: " << closedQty << " @ " << price
-                      << ", 空头均价 " << pos.avg_price << ", 盈亏 " << close_pnl
-                      << ", 剩余 " << pos.volume << std::endl;
-
-            qty -= closedQty;
-
-            // 如果全部平仓，重置相关数据
-            if (pos.volume == 0) {
-                pos.avg_price = 0;
-                pos.total_cost = 0;
-                pos.total_volume_traded = 0;
-                pos.direction = hft::plugin::OrderDirection::BUY;  // Reset direction
-            }
+        // 初始化持仓
+        if (pos.volume == 0 && pos.total_volume_traded == 0) {
+            pos.symbol = trade.symbol;
+            pos.exchange = trade.exchange;
+            pos.direction = trade.direction;
+            pos.yesterday_volume = 0;
         }
 
-        // 2. 剩余数量开多仓
-        if (qty > 0) {
-            // 更新多头持仓和平均价
-            double oldCost = pos.avg_price * pos.volume;
-            pos.total_cost = oldCost + price * qty;
-            pos.volume += qty;
-            pos.today_volume += qty;
-            pos.total_volume_traded += qty;
-            pos.avg_price = pos.total_cost / pos.total_volume_traded;
-            pos.direction = hft::plugin::OrderDirection::BUY;
-
-            std::cout << "[SimulatorPlugin] 开多: " << qty << " @ " << price
-                      << ", 多头均价 " << pos.avg_price << ", 总持仓 " << pos.volume << std::endl;
-        }
-
-    } else {
-        // 卖出逻辑：先平多再开空
-        // 1. 检查是否有多头持仓需要平仓
-        if (pos.direction == hft::plugin::OrderDirection::BUY && pos.volume > 0) {
-            // 当前是多头持仓，卖出平多
-            uint32_t closedQty = std::min(qty, pos.volume);
-
-            // 计算平多盈亏: (卖出价 - 买入均价) × 平仓数量
-            double close_pnl = (price - pos.avg_price) * closedQty;
-            {
-                std::lock_guard<std::mutex> lock(m_account_mutex);
-                m_close_profit += close_pnl;
-                m_daily_pnl += close_pnl;
-            }
-
-            // 减少多头持仓
-            pos.volume -= closedQty;
-
-            // 更新今昨仓
-            if (pos.today_volume >= closedQty) {
-                pos.today_volume -= closedQty;
-            } else {
-                uint32_t from_yesterday = closedQty - pos.today_volume;
-                pos.today_volume = 0;
-                pos.yesterday_volume -= std::min(pos.yesterday_volume, from_yesterday);
-            }
-
-            std::cout << "[SimulatorPlugin] 平多: " << closedQty << " @ " << price
-                      << ", 多头均价 " << pos.avg_price << ", 盈亏 " << close_pnl
-                      << ", 剩余 " << pos.volume << std::endl;
-
-            qty -= closedQty;
-
-            // 如果全部平仓，重置相关数据
-            if (pos.volume == 0) {
-                pos.avg_price = 0;
-                pos.total_cost = 0;
-                pos.total_volume_traded = 0;
-                pos.direction = hft::plugin::OrderDirection::SELL;  // Reset direction
-            }
-        }
-
-        // 2. 剩余数量开空仓
-        if (qty > 0) {
-            // 更新空头持仓和平均价
-            double oldCost = pos.avg_price * pos.volume;
-            pos.total_cost = oldCost + price * qty;
-            pos.volume += qty;
-            pos.today_volume += qty;
-            pos.total_volume_traded += qty;
-            pos.avg_price = pos.total_cost / pos.total_volume_traded;
-            pos.direction = hft::plugin::OrderDirection::SELL;
-
-            std::cout << "[SimulatorPlugin] 开空: " << qty << " @ " << price
-                      << ", 空头均价 " << pos.avg_price << ", 总持仓 " << pos.volume << std::endl;
-        }
-    }
-
-    // Recalculate margin
-    if (pos.volume > 0) {
+        // 更新持仓和平均价
+        double oldCost = pos.avg_price * pos.volume;
+        pos.total_cost = oldCost + price * qty;
+        pos.volume += qty;
+        pos.today_volume += qty;
+        pos.total_volume_traded += qty;
+        pos.avg_price = pos.total_cost / pos.total_volume_traded;
         pos.margin = CalculateMargin(trade.symbol, price, pos.volume);
+
+        std::string direction_str = (trade.direction == hft::plugin::OrderDirection::BUY) ? "多" : "空";
+        std::cout << "[SimulatorPlugin] 开" << direction_str << ": " << qty << " @ " << price
+                  << ", " << direction_str << "头均价 " << pos.avg_price
+                  << ", 总持仓 " << pos.volume << std::endl;
+
     } else {
-        // No position, remove from map
-        m_positions.erase(pos_key);
-        std::cout << "[SimulatorPlugin] ✅ 持仓归零，移除: " << pos_key << std::endl;
+        // ========== 平仓逻辑 ==========
+        // 平仓方向与开仓相反：买入平空，卖出平多
+        hft::plugin::OrderDirection close_direction =
+            (trade.direction == hft::plugin::OrderDirection::BUY)
+                ? hft::plugin::OrderDirection::SELL   // 买入 → 平空头
+                : hft::plugin::OrderDirection::BUY;   // 卖出 → 平多头
+
+        std::string pos_key = std::string(trade.symbol) + "_" +
+                             (close_direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
+
+        auto it = m_positions.find(pos_key);
+        if (it == m_positions.end() || it->second.volume == 0) {
+            std::cerr << "[SimulatorPlugin] ⚠️ 平仓失败：无持仓 " << pos_key << std::endl;
+            return;
+        }
+
+        InternalPosition& pos = it->second;
+        uint32_t closedQty = std::min(qty, pos.volume);
+
+        // 计算平仓盈亏
+        double close_pnl = 0;
+        if (close_direction == hft::plugin::OrderDirection::BUY) {
+            // 平多：(卖出价 - 买入均价) × 数量
+            close_pnl = (price - pos.avg_price) * closedQty;
+        } else {
+            // 平空：(卖出均价 - 买入价) × 数量
+            close_pnl = (pos.avg_price - price) * closedQty;
+        }
+
+        {
+            std::lock_guard<std::mutex> acc_lock(m_account_mutex);
+            m_close_profit += close_pnl;
+            m_daily_pnl += close_pnl;
+        }
+
+        // 减少持仓
+        pos.volume -= closedQty;
+
+        // 更新今昨仓
+        if (pos.today_volume >= closedQty) {
+            pos.today_volume -= closedQty;
+        } else {
+            uint32_t from_yesterday = closedQty - pos.today_volume;
+            pos.today_volume = 0;
+            pos.yesterday_volume -= std::min(pos.yesterday_volume, from_yesterday);
+        }
+
+        std::string direction_str = (close_direction == hft::plugin::OrderDirection::BUY) ? "多" : "空";
+        std::cout << "[SimulatorPlugin] 平" << direction_str << ": " << closedQty << " @ " << price
+                  << ", " << direction_str << "头均价 " << pos.avg_price << ", 盈亏 " << close_pnl
+                  << ", 剩余 " << pos.volume << std::endl;
+
+        // 持仓归零，移除
+        if (pos.volume == 0) {
+            m_positions.erase(pos_key);
+            std::cout << "[SimulatorPlugin] ✅ 持仓归零，移除: " << pos_key << std::endl;
+        } else {
+            pos.margin = CalculateMargin(trade.symbol, price, pos.volume);
+        }
     }
 }
 
@@ -711,60 +667,44 @@ double SimulatorPlugin::CalculateCommission(const std::string& symbol, double pr
 }
 
 bool SimulatorPlugin::CheckRisk(const hft::plugin::OrderRequest& request, std::string* error_msg) {
-    // Check Chinese futures market rules: cannot open opposite position
-    // 中国期货市场规则：不能开反向仓位
+    // CTP 真实交易所允许锁仓（同一合约同时持有多空仓位）
+    // 不再检查"不能开反向仓"的限制
+
+    // Check max position per symbol (支持锁仓模式，使用 symbol_direction 作为 key)
     {
         std::lock_guard<std::mutex> lock(m_position_mutex);
-
-        // Use symbol as position key (net position model)
-        std::string pos_key = std::string(request.symbol);
-        auto it = m_positions.find(pos_key);
-
-        if (it != m_positions.end() && it->second.volume > 0) {
-            const InternalPosition& pos = it->second;
-
-            // Check if trying to open opposite position
-            if (request.offset == hft::plugin::OffsetFlag::OPEN) {
-                // Has long position, but trying to open short
-                if (pos.direction == hft::plugin::OrderDirection::BUY &&
-                    request.direction == hft::plugin::OrderDirection::SELL) {
-                    if (error_msg) {
-                        *error_msg = "Cannot open SHORT position while holding LONG position for " +
-                                    std::string(request.symbol) +
-                                    " (current long: " + std::to_string(pos.volume) + " lots). " +
-                                    "Please close long position first or use CLOSE offset.";
-                    }
-                    return false;
-                }
-
-                // Has short position, but trying to open long
-                if (pos.direction == hft::plugin::OrderDirection::SELL &&
-                    request.direction == hft::plugin::OrderDirection::BUY) {
-                    if (error_msg) {
-                        *error_msg = "Cannot open LONG position while holding SHORT position for " +
-                                    std::string(request.symbol) +
-                                    " (current short: " + std::to_string(pos.volume) + " lots). " +
-                                    "Please close short position first or use CLOSE offset.";
-                    }
-                    return false;
-                }
-            }
-        }
-    }
-
-    // Check max position per symbol
-    {
-        std::lock_guard<std::mutex> lock(m_position_mutex);
-
-        std::string pos_key = std::string(request.symbol);
-        auto it = m_positions.find(pos_key);
-        uint32_t current_volume = (it != m_positions.end()) ? it->second.volume : 0;
 
         if (request.offset == hft::plugin::OffsetFlag::OPEN) {
+            // 开仓时检查同方向持仓
+            std::string pos_key = std::string(request.symbol) + "_" +
+                                 (request.direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
+            auto it = m_positions.find(pos_key);
+            uint32_t current_volume = (it != m_positions.end()) ? it->second.volume : 0;
+
             if (current_volume + request.volume > static_cast<uint32_t>(m_config.max_position_per_symbol)) {
                 if (error_msg) {
                     *error_msg = "Exceeds max position per symbol: " +
                                 std::to_string(m_config.max_position_per_symbol);
+                }
+                return false;
+            }
+        } else {
+            // 平仓时检查是否有对应持仓
+            hft::plugin::OrderDirection close_direction =
+                (request.direction == hft::plugin::OrderDirection::BUY)
+                    ? hft::plugin::OrderDirection::SELL   // 买入 → 平空头
+                    : hft::plugin::OrderDirection::BUY;   // 卖出 → 平多头
+
+            std::string pos_key = std::string(request.symbol) + "_" +
+                                 (close_direction == hft::plugin::OrderDirection::BUY ? "LONG" : "SHORT");
+            auto it = m_positions.find(pos_key);
+
+            if (it == m_positions.end() || it->second.volume < request.volume) {
+                uint32_t available = (it != m_positions.end()) ? it->second.volume : 0;
+                if (error_msg) {
+                    *error_msg = "Insufficient position to close. Required: " +
+                                std::to_string(request.volume) +
+                                ", Available: " + std::to_string(available);
                 }
                 return false;
             }
@@ -811,30 +751,31 @@ std::string SimulatorPlugin::GenerateOrderID() {
 }
 
 // 根据当前持仓自动设置订单的 offset 字段
-// 参考 ors/China 的 SetCombOffsetFlag 逻辑
+// 与 CTP Plugin 的 SetOpenClose 逻辑一致
+// 使用 symbol_LONG / symbol_SHORT 作为持仓 key（支持锁仓模式）
 void SimulatorPlugin::SetOpenClose(hft::plugin::OrderRequest& request) {
     std::lock_guard<std::mutex> lock(m_position_mutex);
 
-    auto it = m_positions.find(request.symbol);
+    // 查找多头和空头持仓
+    std::string long_key = std::string(request.symbol) + "_LONG";
+    std::string short_key = std::string(request.symbol) + "_SHORT";
 
-    if (it == m_positions.end()) {
-        // 无持仓，开仓
-        request.offset = hft::plugin::OffsetFlag::OPEN;
-        return;
-    }
+    auto long_it = m_positions.find(long_key);
+    auto short_it = m_positions.find(short_key);
 
-    const auto& pos = it->second;
+    uint32_t long_position = (long_it != m_positions.end()) ? long_it->second.volume : 0;
+    uint32_t short_position = (short_it != m_positions.end()) ? short_it->second.volume : 0;
 
     if (request.direction == hft::plugin::OrderDirection::BUY) {
-        // 买入：持有空仓则平空，否则开多
-        if (pos.direction == hft::plugin::OrderDirection::SELL && pos.volume > 0) {
+        // 买入：如果有空仓 → 平空，否则 → 开多
+        if (short_position > 0) {
             request.offset = hft::plugin::OffsetFlag::CLOSE;
         } else {
             request.offset = hft::plugin::OffsetFlag::OPEN;
         }
     } else {
-        // 卖出：持有多仓则平多，否则开空
-        if (pos.direction == hft::plugin::OrderDirection::BUY && pos.volume > 0) {
+        // 卖出：如果有多仓 → 平多，否则 → 开空
+        if (long_position > 0) {
             request.offset = hft::plugin::OffsetFlag::CLOSE;
         } else {
             request.offset = hft::plugin::OffsetFlag::OPEN;
