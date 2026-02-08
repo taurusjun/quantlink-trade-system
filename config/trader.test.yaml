@@ -34,6 +34,17 @@ strategies:
       exit_zscore: 0.2                  # 出场Z-Score阈值
       order_size: 1.0                   # 每条腿的下单数量（测试用1手）
       min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.5                 # 空仓入场阈值
+      long_zscore: 1.5                  # 满仓多头时做多阈值
+      short_zscore: 1.5                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
   # 策略2: 黄金配对套利 (au2604/au2606)
   - id: "test_92202"                    # 策略唯一标识符（黄金）
@@ -56,6 +67,17 @@ strategies:
       exit_zscore: 0.2                  # 出场Z-Score阈值
       order_size: 1.0                   # 每条腿的下单数量（测试用1手）
       min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.6                 # 空仓入场阈值
+      long_zscore: 1.8                  # 满仓多头时做多阈值
+      short_zscore: 1.8                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 10.0       # 跳跃tick数（黄金tick size较小）
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
   # 策略3: 白银近月配对套利 (ag2603/ag2603) - 演示多策略
   - id: "test_92203"                    # 策略唯一标识符（白银近月）
@@ -78,6 +100,17 @@ strategies:
       exit_zscore: 0.3                  # 出场Z-Score阈值
       order_size: 1.0                   # 每条腿的下单数量（测试用1手）
       min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.7                 # 空仓入场阈值
+      long_zscore: 2.0                  # 满仓多头时做多阈值
+      short_zscore: 2.0                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)

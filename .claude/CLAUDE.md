@@ -85,6 +85,75 @@ md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] �
 
 ---
 
+## C++ 代码迁移规则
+
+本项目从 C++ 旧系统 (tbsrc) 迁移到 Golang 新系统。迁移代码时必须严格遵循以下规则。
+
+### 强制要求
+
+**规则 1: 禁止自设默认值**
+- 迁移 C++ 代码时，所有参数必须从配置文件读取
+- 不得自行设定默认值（如 `+ 1.5`、`* 0.3` 等）
+- 如果 C++ 中参数来自配置，Go 中也必须来自配置
+
+**规则 2: 必须先展示 C++ 原代码**
+- 实现任何 C++ 功能迁移前，必须先找到并展示 C++ 原代码
+- 在 `docs/cpp_reference/` 目录中保存关键 C++ 代码片段
+- 如果找不到 C++ 原代码，必须向用户确认后再实现
+
+**规则 3: 逐行对照注释**
+- Go 代码中的关键逻辑必须在注释中写明对应的 C++ 代码
+- 使用 `// C++:` 前缀标注原始 C++ 代码
+
+### 代码注释格式
+
+```go
+// setDynamicThresholds 根据持仓动态调整入场阈值
+// 与 C++ SetThresholds() 完全一致：
+//
+//   C++: auto long_place_diff_thold = m_thold_first->LONG_PLACE - m_thold_first->BEGIN_PLACE;
+//   C++: auto short_place_diff_thold = m_thold_first->BEGIN_PLACE - m_thold_first->SHORT_PLACE;
+//
+func (pas *PairwiseArbStrategy) setDynamicThresholds() {
+    // C++: auto long_place_diff_thold = LONG_PLACE - BEGIN_PLACE
+    longPlaceDiff := pas.longZScore - pas.beginZScore
+    // C++: auto short_place_diff_thold = BEGIN_PLACE - SHORT_PLACE
+    shortPlaceDiff := pas.beginZScore - pas.shortZScore
+    ...
+}
+```
+
+### 参数映射表
+
+迁移时必须维护 C++ 与 Go 的参数映射关系：
+
+| C++ 参数 | Go 参数 | 配置文件字段 |
+|---------|--------|-------------|
+| `BEGIN_PLACE` | `beginZScore` | `begin_zscore` |
+| `LONG_PLACE` | `longZScore` | `long_zscore` |
+| `SHORT_PLACE` | `shortZScore` | `short_zscore` |
+| `BEGIN_REMOVE` | `exitZScore` | `exit_zscore` |
+
+### C++ 参考代码目录
+
+关键 C++ 代码保存在 `docs/cpp_reference/` 目录：
+- `SetThresholds.cpp` - 动态阈值调整逻辑
+- `SendAggressiveOrder.cpp` - 主动追单逻辑
+- `ExecutionStrategy.cpp` - 执行策略基类
+- `README.md` - 索引和说明
+
+### 代码审查清单
+
+迁移 C++ 代码的 PR 必须包含以下检查项：
+- [ ] 已找到并引用 C++ 原代码
+- [ ] 无自定义默认值（所有参数来自配置）
+- [ ] 注释中包含 C++ 对照（使用 `// C++:` 前缀）
+- [ ] 测试用例数据来自 C++ 运行结果
+- [ ] 已更新参数映射表（如有新参数）
+- [ ] 已在 `docs/cpp_reference/` 保存 C++ 代码片段
+
+---
+
 ## 文档规范
 
 ### 文档存放位置

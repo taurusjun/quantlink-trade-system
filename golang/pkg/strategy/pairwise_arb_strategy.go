@@ -43,6 +43,27 @@ type PairwiseArbStrategy struct {
 	slippageTicks     int     // 滑点(tick数)
 	useAggressivePrice bool   // 是否使用主动成交价格
 
+	// 动态阈值参数（参考旧系统 SetThresholds）
+	beginZScore         float64       // 空仓时入场阈值
+	longZScore          float64       // 满仓多头时做多阈值
+	shortZScore         float64       // 满仓空头时做空阈值
+	useDynamicThreshold bool          // 是否启用动态阈值
+	entryZScoreBid      float64       // 运行时：做多入场阈值
+	entryZScoreAsk      float64       // 运行时：做空入场阈值
+
+	// 主动追单参数（参考旧系统 SendAggressiveOrder）
+	aggressiveEnabled       bool          // 是否启用追单
+	aggressiveInterval      time.Duration // 追单间隔
+	aggressiveMaxRetry      int           // 最大追单次数
+	aggressiveSlopTicks     int           // 跳跃tick数
+	aggressiveFailThreshold int           // 失败阈值
+
+	// 追单运行时状态
+	aggRepeat     int       // 当前追单次数
+	aggDirection  int       // 追单方向（1=买，-1=卖，0=无）
+	aggLastTime   time.Time // 上次追单时间
+	aggFailCount  int       // 连续失败次数
+
 	// Spread analyzer (encapsulates spread calculation and statistics)
 	spreadAnalyzer    *spread.SpreadAnalyzer
 
@@ -164,8 +185,68 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 		pas.useAggressivePrice = val
 	}
 
+	// 动态阈值参数（与 C++ 配置一致）
+	// C++ 对应: BEGIN_PLACE, LONG_PLACE, SHORT_PLACE
+	if val, ok := config.Parameters["begin_zscore"].(float64); ok {
+		pas.beginZScore = val
+	} else {
+		pas.beginZScore = pas.entryZScore // 默认使用 entry_zscore
+	}
+	if val, ok := config.Parameters["long_zscore"].(float64); ok {
+		pas.longZScore = val
+	}
+	if val, ok := config.Parameters["short_zscore"].(float64); ok {
+		pas.shortZScore = val
+	}
+	// 是否启用动态阈值（需要配置 long_zscore 和 short_zscore）
+	if val, ok := config.Parameters["use_dynamic_threshold"].(bool); ok {
+		pas.useDynamicThreshold = val
+	} else {
+		// 如果配置了 long_zscore 和 short_zscore，则自动启用
+		pas.useDynamicThreshold = pas.longZScore > 0 && pas.shortZScore > 0
+	}
+	// 初始化运行时阈值
+	pas.entryZScoreBid = pas.beginZScore
+	pas.entryZScoreAsk = pas.beginZScore
+
+	// 主动追单参数
+	if val, ok := config.Parameters["aggressive_enabled"].(bool); ok {
+		pas.aggressiveEnabled = val
+	}
+	if val, ok := config.Parameters["aggressive_interval_ms"].(float64); ok {
+		pas.aggressiveInterval = time.Duration(val) * time.Millisecond
+	} else {
+		pas.aggressiveInterval = 500 * time.Millisecond // 默认 500ms
+	}
+	if val, ok := config.Parameters["aggressive_max_retry"].(float64); ok {
+		pas.aggressiveMaxRetry = int(val)
+	} else {
+		pas.aggressiveMaxRetry = 4 // 默认 4 次
+	}
+	if val, ok := config.Parameters["aggressive_slop_ticks"].(float64); ok {
+		pas.aggressiveSlopTicks = int(val)
+	} else {
+		pas.aggressiveSlopTicks = 20 // 默认 20 ticks
+	}
+	if val, ok := config.Parameters["aggressive_fail_threshold"].(float64); ok {
+		pas.aggressiveFailThreshold = int(val)
+	} else {
+		pas.aggressiveFailThreshold = 3 // 默认 3 次
+	}
+	// 初始化追单状态
+	pas.aggRepeat = 1
+	pas.aggDirection = 0
+
 	log.Printf("[PairwiseArbStrategy:%s] Initialized %s/%s, entry_z=%.2f, exit_z=%.2f, lookback=%d, min_corr=%.2f, slippage=%d ticks",
 		pas.ID, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod, pas.minCorrelation, pas.slippageTicks)
+	if pas.useDynamicThreshold {
+		log.Printf("[PairwiseArbStrategy:%s] Dynamic threshold enabled: begin=%.2f, long=%.2f, short=%.2f",
+			pas.ID, pas.beginZScore, pas.longZScore, pas.shortZScore)
+	}
+	if pas.aggressiveEnabled {
+		log.Printf("[PairwiseArbStrategy:%s] Aggressive order enabled: interval=%v, max_retry=%d, slop_ticks=%d",
+			pas.ID, pas.aggressiveInterval, pas.aggressiveMaxRetry, pas.aggressiveSlopTicks)
+	}
 
 	return nil
 }
@@ -216,34 +297,45 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	avgPrice := (pas.price1 + pas.price2) / 2.0
 	pas.BaseStrategy.UpdateRiskMetrics(avgPrice)
 
+	// 动态调整入场阈值（根据持仓）
+	pas.setDynamicThresholds()
+
 	// Get current statistics from SpreadAnalyzer
 	spreadStats := pas.spreadAnalyzer.GetStats()
 
+	// 计算敞口
+	exposure := pas.calculateExposure()
+
 	// Update condition state for UI display
 	indicators := map[string]float64{
-		"z_score":         spreadStats.ZScore,
-		"entry_threshold": pas.entryZScore,
-		"exit_threshold":  pas.exitZScore,
-		"spread":          spreadStats.CurrentSpread,
-		"spread_mean":     spreadStats.Mean,
-		"spread_std":      spreadStats.Std,
-		"correlation":     spreadStats.Correlation,
-		"min_correlation": pas.minCorrelation,
-		"hedge_ratio":     spreadStats.HedgeRatio,
+		"z_score":            spreadStats.ZScore,
+		"entry_threshold":    pas.entryZScore,
+		"entry_threshold_bid": pas.entryZScoreBid, // 动态做多阈值
+		"entry_threshold_ask": pas.entryZScoreAsk, // 动态做空阈值
+		"exit_threshold":     pas.exitZScore,
+		"spread":             spreadStats.CurrentSpread,
+		"spread_mean":        spreadStats.Mean,
+		"spread_std":         spreadStats.Std,
+		"correlation":        spreadStats.Correlation,
+		"min_correlation":    pas.minCorrelation,
+		"hedge_ratio":        spreadStats.HedgeRatio,
 		// Leg 1 details
 		"leg1_price":    pas.price1,
 		"leg1_position": float64(pas.leg1Position),
 		// Leg 2 details
 		"leg2_price":    pas.price2,
 		"leg2_position": float64(pas.leg2Position),
+		// Exposure (敞口)
+		"exposure":      float64(exposure),
 	}
 
 	// Conditions are met if:
-	// 1. Z-score exceeds entry threshold
+	// 1. Z-score exceeds entry threshold (using dynamic thresholds)
 	// 2. Correlation is above minimum
 	// 3. Enough history data
+	// 使用动态阈值判断：做多需要 -zscore >= entryZScoreBid，做空需要 zscore >= entryZScoreAsk
 	conditionsMet := spreadStats.Std > 1e-10 &&
-		math.Abs(spreadStats.ZScore) >= pas.entryZScore &&
+		(spreadStats.ZScore >= pas.entryZScoreAsk || -spreadStats.ZScore >= pas.entryZScoreBid) &&
 		spreadStats.Correlation >= pas.minCorrelation &&
 		pas.spreadAnalyzer.IsReady(pas.lookbackPeriod)
 
@@ -255,10 +347,19 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	// Debug logging periodically (every 5 seconds)
 	if time.Since(pas.lastTradeTime) > 5*time.Second {
-		log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (need ±%.2f), corr=%.3f (need %.3f), std=%.4f, ready=%v, condMet=%v",
-			pas.ID, spreadStats.ZScore, pas.entryZScore, spreadStats.Correlation, pas.minCorrelation,
-			spreadStats.Std, pas.spreadAnalyzer.IsReady(pas.lookbackPeriod), conditionsMet)
+		if pas.useDynamicThreshold {
+			log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (bid>=%.2f, ask>=%.2f), corr=%.3f, pos=%d, exposure=%d",
+				pas.ID, spreadStats.ZScore, pas.entryZScoreBid, pas.entryZScoreAsk,
+				spreadStats.Correlation, pas.leg1Position, exposure)
+		} else {
+			log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (need ±%.2f), corr=%.3f (need %.3f), std=%.4f, ready=%v, condMet=%v",
+				pas.ID, spreadStats.ZScore, pas.entryZScore, spreadStats.Correlation, pas.minCorrelation,
+				spreadStats.Std, pas.spreadAnalyzer.IsReady(pas.lookbackPeriod), conditionsMet)
+		}
 	}
+
+	// 主动追单检测（优先于正常交易逻辑）
+	pas.sendAggressiveOrder()
 
 	if now.Sub(pas.lastTradeTime) < pas.minTradeInterval {
 		return
@@ -276,6 +377,9 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 
 // generateSignals generates trading signals based on z-score
+// 使用动态阈值：
+// - 做多（long spread）：-zscore >= entryZScoreBid
+// - 做空（short spread）：zscore >= entryZScoreAsk
 func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	// Get current statistics from SpreadAnalyzer
 	spreadStats := pas.spreadAnalyzer.GetStats()
@@ -284,16 +388,16 @@ func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 		return
 	}
 
-	// Entry signals
-	if math.Abs(spreadStats.ZScore) >= pas.entryZScore {
-		// Spread has diverged significantly - enter mean reversion trade
-		if spreadStats.ZScore > 0 {
-			// Spread is too high - short spread (sell symbol1, buy symbol2)
-			pas.generateSpreadSignals(md, "short", pas.orderSize)
-		} else {
-			// Spread is too low - long spread (buy symbol1, sell symbol2)
-			pas.generateSpreadSignals(md, "long", pas.orderSize)
-		}
+	// Entry signals using dynamic thresholds
+	// zscore > 0: spread 偏高，做空 spread（卖 symbol1，买 symbol2）
+	// zscore < 0: spread 偏低，做多 spread（买 symbol1，卖 symbol2）
+	if spreadStats.ZScore >= pas.entryZScoreAsk {
+		// Spread is too high - short spread (sell symbol1, buy symbol2)
+		pas.generateSpreadSignals(md, "short", pas.orderSize)
+		return
+	} else if -spreadStats.ZScore >= pas.entryZScoreBid {
+		// Spread is too low - long spread (buy symbol1, sell symbol2)
+		pas.generateSpreadSignals(md, "long", pas.orderSize)
 		return
 	}
 
@@ -467,6 +571,192 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
 }
 
+// setDynamicThresholds 根据持仓动态调整入场阈值
+// 与 C++ SetThresholds() 完全一致
+// 参考: docs/cpp_reference/SetThresholds.cpp
+//
+// C++ 代码:
+//   auto long_place_diff_thold = m_thold_first->LONG_PLACE - m_thold_first->BEGIN_PLACE;
+//   auto short_place_diff_thold = m_thold_first->BEGIN_PLACE - m_thold_first->SHORT_PLACE;
+//
+//   多头持仓 (netpos > 0):
+//     tholdBidPlace = BEGIN_PLACE + long_place_diff_thold * netpos / maxPos
+//     tholdAskPlace = BEGIN_PLACE - short_place_diff_thold * netpos / maxPos
+//
+//   空头持仓 (netpos < 0):
+//     tholdBidPlace = BEGIN_PLACE + short_place_diff_thold * netpos / maxPos
+//     tholdAskPlace = BEGIN_PLACE - long_place_diff_thold * netpos / maxPos
+func (pas *PairwiseArbStrategy) setDynamicThresholds() {
+	if !pas.useDynamicThreshold || pas.maxPositionSize == 0 {
+		// 未启用动态阈值，使用静态 entryZScore
+		pas.entryZScoreBid = pas.entryZScore
+		pas.entryZScoreAsk = pas.entryZScore
+		return
+	}
+
+	// C++: long_place_diff_thold = LONG_PLACE - BEGIN_PLACE
+	longPlaceDiff := pas.longZScore - pas.beginZScore
+	// C++: short_place_diff_thold = BEGIN_PLACE - SHORT_PLACE
+	shortPlaceDiff := pas.beginZScore - pas.shortZScore
+
+	// 计算持仓比例：netpos / maxPos
+	posRatio := float64(pas.leg1Position) / float64(pas.maxPositionSize)
+
+	if pas.leg1Position == 0 {
+		// C++: 无持仓时使用初始阈值
+		pas.entryZScoreBid = pas.beginZScore
+		pas.entryZScoreAsk = pas.beginZScore
+	} else if pas.leg1Position > 0 {
+		// C++: 多头持仓
+		// tholdBidPlace = BEGIN_PLACE + long_place_diff_thold * netpos / maxPos
+		pas.entryZScoreBid = pas.beginZScore + longPlaceDiff*posRatio
+		// tholdAskPlace = BEGIN_PLACE - short_place_diff_thold * netpos / maxPos
+		pas.entryZScoreAsk = pas.beginZScore - shortPlaceDiff*posRatio
+	} else {
+		// C++: 空头持仓 (netpos < 0)
+		// tholdBidPlace = BEGIN_PLACE + short_place_diff_thold * netpos / maxPos
+		pas.entryZScoreBid = pas.beginZScore + shortPlaceDiff*posRatio
+		// tholdAskPlace = BEGIN_PLACE - long_place_diff_thold * netpos / maxPos
+		pas.entryZScoreAsk = pas.beginZScore - longPlaceDiff*posRatio
+	}
+}
+
+// calculateExposure 计算当前敞口
+// C++ 对应: exposure = m_firstStrat->m_netpos_pass + m_secondStrat->m_netpos_agg
+// 敞口 = leg1Position + leg2Position（理想情况下应为 0）
+// 参考: docs/cpp_reference/SendAggressiveOrder.cpp
+func (pas *PairwiseArbStrategy) calculateExposure() int64 {
+	return pas.leg1Position + pas.leg2Position
+}
+
+// sendAggressiveOrder 主动追单机制
+// 与 C++ SendAggressiveOrder() 完全一致
+// 参考: docs/cpp_reference/SendAggressiveOrder.cpp
+//
+// C++ 逻辑:
+//   1. exposure = m_netpos_pass + m_netpos_agg (敞口计算)
+//   2. if (last_agg_side != side || now - last_agg_time > 500ms) 重置计数
+//   3. 价格递进:
+//      - m_agg_repeat < 3: bid/ask ± tickSize * m_agg_repeat
+//      - m_agg_repeat >= 3: bid/ask ± tickSize * SLOP
+//   4. m_agg_repeat > 3: HandleSquareoff() (触发策略停止)
+func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
+	if !pas.aggressiveEnabled {
+		return
+	}
+
+	// 1. 计算敞口
+	exposure := pas.calculateExposure()
+	if exposure == 0 {
+		// 无敞口，重置追单状态
+		pas.aggRepeat = 1
+		pas.aggDirection = 0
+		return
+	}
+
+	// 2. 确定追单方向
+	// exposure > 0: 多头敞口，需要卖出 leg2 来平衡
+	// exposure < 0: 空头敞口，需要买入 leg2 来平衡
+	var newDirection int
+	var targetSide OrderSide
+	var targetSymbol string
+	var targetQty int64
+	var bid, ask float64
+
+	if exposure > 0 {
+		// 多头敞口：需要卖出
+		newDirection = -1
+		targetSide = OrderSideSell
+		targetSymbol = pas.symbol2
+		targetQty = exposure
+		bid = pas.bid2
+		ask = pas.ask2
+	} else {
+		// 空头敞口：需要买入
+		newDirection = 1
+		targetSide = OrderSideBuy
+		targetSymbol = pas.symbol2
+		targetQty = -exposure
+		bid = pas.bid2
+		ask = pas.ask2
+	}
+
+	// 3. 流控检查：如果方向变化，重置计数；否则检查间隔
+	if pas.aggDirection != newDirection {
+		pas.aggRepeat = 1
+		pas.aggDirection = newDirection
+	} else if time.Since(pas.aggLastTime) < pas.aggressiveInterval {
+		// 同方向追单，间隔不足
+		return
+	}
+
+	// 4. 检查追单次数限制
+	if pas.aggRepeat > pas.aggressiveMaxRetry {
+		// 超过最大追单次数
+		pas.aggFailCount++
+		log.Printf("[PairwiseArb:%s] ⚠️  Aggressive order exceeded max retry (%d), fail count: %d",
+			pas.ID, pas.aggressiveMaxRetry, pas.aggFailCount)
+
+		if pas.aggFailCount >= pas.aggressiveFailThreshold {
+			log.Printf("[PairwiseArb:%s] 🚨 Aggressive order fail threshold reached, exiting strategy!",
+				pas.ID)
+			// 触发策略退出
+			pas.ControlState.RunState = StrategyRunStateExiting
+		}
+		return
+	}
+
+	// 5. 计算追单价格
+	// C++: agg_price = m_agg_repeat < 3
+	//        ? bidPx[0] - tickSize * m_agg_repeat
+	//        : bidPx[0] - tickSize * SLOP
+	tickSize := GetTickSize(targetSymbol)
+	var priceAdjust float64
+	if pas.aggRepeat <= 3 {
+		// C++: m_agg_repeat < 3 -> tickSize * m_agg_repeat
+		priceAdjust = float64(pas.aggRepeat) * tickSize
+	} else {
+		// C++: m_agg_repeat >= 3 -> tickSize * SLOP
+		priceAdjust = float64(pas.aggressiveSlopTicks) * tickSize
+	}
+
+	var orderPrice float64
+	if targetSide == OrderSideBuy {
+		// C++: askPx[0] + tickSize * m_agg_repeat
+		orderPrice = ask + priceAdjust
+	} else {
+		// C++: bidPx[0] - tickSize * m_agg_repeat
+		orderPrice = bid - priceAdjust
+	}
+	orderPrice = RoundToTickSize(orderPrice, tickSize)
+
+	// 6. 发送追单信号
+	signal := &TradingSignal{
+		StrategyID: pas.ID,
+		Symbol:     targetSymbol,
+		Side:       targetSide,
+		Price:      orderPrice,
+		Quantity:   targetQty,
+		Signal:     0, // 追单信号
+		Confidence: 0.8,
+		Timestamp:  time.Now(),
+		Metadata: map[string]interface{}{
+			"type":         "aggressive",
+			"exposure":     exposure,
+			"retry":        pas.aggRepeat,
+			"price_adjust": priceAdjust,
+		},
+	}
+	pas.BaseStrategy.AddSignal(signal)
+
+	log.Printf("[PairwiseArb:%s] 🏃 Aggressive order #%d: %v %s %d @ %.2f (exposure=%d, adjust=%.2f)",
+		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, priceAdjust)
+
+	// 7. 更新追单状态
+	pas.aggLastTime = time.Now()
+	pas.aggRepeat++
+}
+
 // OnOrderUpdate handles order updates
 func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	// CRITICAL: 检查订单是否属于本策略
@@ -505,11 +795,29 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 		} else if symbol == pas.symbol2 {
 			pas.updateLeg2Position(update.Side, qty, price)
 		}
+
+		// 成交后检查敞口，如果敞口为0则重置追单状态
+		exposure := pas.calculateExposure()
+		if exposure == 0 {
+			if pas.aggRepeat > 1 {
+				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (was retry #%d)",
+					pas.ID, pas.aggRepeat-1)
+			}
+			pas.aggRepeat = 1
+			pas.aggDirection = 0
+			pas.aggFailCount = 0 // 成功清除敞口，重置失败计数
+		}
 	}
 }
 
-// updateLeg1Position updates leg1 position statistics (similar to tbsrc ExecutionStrategy)
-// 参考 tbsrc ExecutionStrategy::TradeCallBack - 中国期货净持仓模型
+// updateLeg1Position updates leg1 position statistics
+// 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
+// 参考: docs/cpp_reference/ExecutionStrategy_TradeCallback.cpp
+//
+// 中国期货净持仓模型:
+//   - 买入: 先平空(m_sellQty)，再开多(m_buyQty)
+//   - 卖出: 先平多(m_buyQty)，再开空(m_sellQty)
+//   - 净持仓: m_netpos = m_buyQty - m_sellQty
 func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int64, price float64) {
 	if side == orspb.OrderSide_BUY {
 		// 买入逻辑
@@ -584,8 +892,9 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 		pas.leg1SellQty, pas.leg1SellAvgPrice)
 }
 
-// updateLeg2Position updates leg2 position statistics (similar to tbsrc ExecutionStrategy)
-// 参考 tbsrc ExecutionStrategy::TradeCallBack - 中国期货净持仓模型
+// updateLeg2Position updates leg2 position statistics
+// 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
+// 参考: docs/cpp_reference/ExecutionStrategy_TradeCallback.cpp
 func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int64, price float64) {
 	if side == orspb.OrderSide_BUY {
 		// 买入逻辑
@@ -777,6 +1086,46 @@ func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) e
 		updated = true
 	}
 
+	// 动态阈值参数
+	if val, ok := params["begin_zscore"].(float64); ok {
+		pas.beginZScore = val
+		updated = true
+	}
+	if val, ok := params["long_zscore"].(float64); ok {
+		pas.longZScore = val
+		updated = true
+	}
+	if val, ok := params["short_zscore"].(float64); ok {
+		pas.shortZScore = val
+		updated = true
+	}
+	if val, ok := params["use_dynamic_threshold"].(bool); ok {
+		pas.useDynamicThreshold = val
+		updated = true
+	}
+
+	// 主动追单参数
+	if val, ok := params["aggressive_enabled"].(bool); ok {
+		pas.aggressiveEnabled = val
+		updated = true
+	}
+	if val, ok := params["aggressive_interval_ms"].(float64); ok {
+		pas.aggressiveInterval = time.Duration(val) * time.Millisecond
+		updated = true
+	}
+	if val, ok := params["aggressive_max_retry"].(float64); ok {
+		pas.aggressiveMaxRetry = int(val)
+		updated = true
+	}
+	if val, ok := params["aggressive_slop_ticks"].(float64); ok {
+		pas.aggressiveSlopTicks = int(val)
+		updated = true
+	}
+	if val, ok := params["aggressive_fail_threshold"].(float64); ok {
+		pas.aggressiveFailThreshold = int(val)
+		updated = true
+	}
+
 	if !updated {
 		return fmt.Errorf("no valid parameters found to update")
 	}
@@ -825,15 +1174,28 @@ func (pas *PairwiseArbStrategy) GetCurrentParameters() map[string]interface{} {
 	defer pas.mu.RUnlock()
 
 	return map[string]interface{}{
-		"entry_zscore":       pas.entryZScore,
-		"exit_zscore":        pas.exitZScore,
-		"order_size":         pas.orderSize,
-		"max_position_size":  pas.maxPositionSize,
-		"lookback_period":    pas.lookbackPeriod,
-		"min_correlation":    pas.minCorrelation,
-		"hedge_ratio":        pas.hedgeRatio,
-		"spread_type":        pas.spreadType,
-		"use_cointegration":  pas.useCointegration,
+		"entry_zscore":             pas.entryZScore,
+		"exit_zscore":              pas.exitZScore,
+		"order_size":               pas.orderSize,
+		"max_position_size":        pas.maxPositionSize,
+		"lookback_period":          pas.lookbackPeriod,
+		"min_correlation":          pas.minCorrelation,
+		"hedge_ratio":              pas.hedgeRatio,
+		"spread_type":              pas.spreadType,
+		"use_cointegration":        pas.useCointegration,
+		// 动态阈值参数
+		"use_dynamic_threshold":    pas.useDynamicThreshold,
+		"begin_zscore":             pas.beginZScore,
+		"long_zscore":              pas.longZScore,
+		"short_zscore":             pas.shortZScore,
+		"entry_zscore_bid":         pas.entryZScoreBid, // 运行时值
+		"entry_zscore_ask":         pas.entryZScoreAsk, // 运行时值
+		// 主动追单参数
+		"aggressive_enabled":       pas.aggressiveEnabled,
+		"aggressive_interval_ms":   pas.aggressiveInterval.Milliseconds(),
+		"aggressive_max_retry":     pas.aggressiveMaxRetry,
+		"aggressive_slop_ticks":    pas.aggressiveSlopTicks,
+		"aggressive_fail_threshold": pas.aggressiveFailThreshold,
 	}
 }
 

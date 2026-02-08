@@ -714,6 +714,324 @@ func TestPairwiseArbStrategy_HistoryTracking(t *testing.T) {
 	pas.Stop()
 }
 
+// TestPairwiseArbStrategy_DynamicThreshold 测试动态阈值调整功能
+// 与 C++ SetThresholds() 逻辑一致
+func TestPairwiseArbStrategy_DynamicThreshold(t *testing.T) {
+	pas := NewPairwiseArbStrategy("pairwise_1")
+
+	// 配置与 C++ 一致: BEGIN_PLACE=2.0, LONG_PLACE=3.5, SHORT_PLACE=0.5
+	config := &StrategyConfig{
+		StrategyID:      "pairwise_1",
+		StrategyType:    "pairwise_arb",
+		Symbols:         []string{"SYMBOL1", "SYMBOL2"},
+		MaxPositionSize: 100,
+		Parameters: map[string]interface{}{
+			"lookback_period":       20.0,
+			"entry_zscore":          2.0,
+			"exit_zscore":           0.5,
+			"order_size":            10.0,
+			"max_position_size":     100.0,
+			"use_dynamic_threshold": true,
+			"begin_zscore":          2.0, // BEGIN_PLACE
+			"long_zscore":           3.5, // LONG_PLACE
+			"short_zscore":          0.5, // SHORT_PLACE
+		},
+		Enabled: true,
+	}
+
+	err := pas.Initialize(config)
+	if err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	// 验证动态阈值参数已加载
+	if !pas.useDynamicThreshold {
+		t.Error("useDynamicThreshold should be true")
+	}
+	if pas.beginZScore != 2.0 {
+		t.Errorf("Expected beginZScore 2.0, got %.2f", pas.beginZScore)
+	}
+	if pas.longZScore != 3.5 {
+		t.Errorf("Expected longZScore 3.5, got %.2f", pas.longZScore)
+	}
+	if pas.shortZScore != 0.5 {
+		t.Errorf("Expected shortZScore 0.5, got %.2f", pas.shortZScore)
+	}
+
+	// C++: long_place_diff = LONG_PLACE - BEGIN_PLACE = 3.5 - 2.0 = 1.5
+	// C++: short_place_diff = BEGIN_PLACE - SHORT_PLACE = 2.0 - 0.5 = 1.5
+
+	// 测试空仓时阈值 = beginZScore (C++: 无持仓使用初始阈值)
+	pas.leg1Position = 0
+	pas.setDynamicThresholds()
+	if pas.entryZScoreBid != 2.0 {
+		t.Errorf("Expected entryZScoreBid=2.0 at zero position, got %.2f", pas.entryZScoreBid)
+	}
+	if pas.entryZScoreAsk != 2.0 {
+		t.Errorf("Expected entryZScoreAsk=2.0 at zero position, got %.2f", pas.entryZScoreAsk)
+	}
+
+	// 测试满仓多头 (posRatio=1.0)
+	// C++: tholdBidPlace = BEGIN + long_diff * 1.0 = 2.0 + 1.5 = 3.5
+	// C++: tholdAskPlace = BEGIN - short_diff * 1.0 = 2.0 - 1.5 = 0.5
+	pas.leg1Position = 100
+	pas.setDynamicThresholds()
+	if pas.entryZScoreBid != 3.5 {
+		t.Errorf("Expected entryZScoreBid=3.5 at full long, got %.2f", pas.entryZScoreBid)
+	}
+	if pas.entryZScoreAsk != 0.5 {
+		t.Errorf("Expected entryZScoreAsk=0.5 at full long, got %.2f", pas.entryZScoreAsk)
+	}
+
+	// 测试满仓空头 (posRatio=-1.0)
+	// C++: tholdBidPlace = BEGIN + short_diff * (-1.0) = 2.0 - 1.5 = 0.5
+	// C++: tholdAskPlace = BEGIN - long_diff * (-1.0) = 2.0 + 1.5 = 3.5
+	pas.leg1Position = -100
+	pas.setDynamicThresholds()
+	if pas.entryZScoreBid != 0.5 {
+		t.Errorf("Expected entryZScoreBid=0.5 at full short, got %.2f", pas.entryZScoreBid)
+	}
+	if pas.entryZScoreAsk != 3.5 {
+		t.Errorf("Expected entryZScoreAsk=3.5 at full short, got %.2f", pas.entryZScoreAsk)
+	}
+
+	// 测试半仓多头 (posRatio=0.5)
+	// C++: tholdBidPlace = BEGIN + long_diff * 0.5 = 2.0 + 0.75 = 2.75
+	// C++: tholdAskPlace = BEGIN - short_diff * 0.5 = 2.0 - 0.75 = 1.25
+	pas.leg1Position = 50
+	pas.setDynamicThresholds()
+	if pas.entryZScoreBid != 2.75 {
+		t.Errorf("Expected entryZScoreBid=2.75 at half long, got %.2f", pas.entryZScoreBid)
+	}
+	if pas.entryZScoreAsk != 1.25 {
+		t.Errorf("Expected entryZScoreAsk=1.25 at half long, got %.2f", pas.entryZScoreAsk)
+	}
+}
+
+// TestPairwiseArbStrategy_AggressiveOrder 测试主动追单机制
+func TestPairwiseArbStrategy_AggressiveOrder(t *testing.T) {
+	pas := NewPairwiseArbStrategy("pairwise_1")
+
+	config := &StrategyConfig{
+		StrategyID:      "pairwise_1",
+		StrategyType:    "pairwise_arb",
+		Symbols:         []string{"ag2603", "ag2605"}, // 使用有 tick size 的品种
+		MaxPositionSize: 100,
+		Parameters: map[string]interface{}{
+			"lookback_period":            20.0,
+			"entry_zscore":               2.0,
+			"aggressive_enabled":         true,
+			"aggressive_interval_ms":     100.0,
+			"aggressive_max_retry":       4.0,
+			"aggressive_slop_ticks":      20.0,
+			"aggressive_fail_threshold":  3.0,
+		},
+		Enabled: true,
+	}
+
+	err := pas.Initialize(config)
+	if err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	pas.Start()
+
+	// 验证追单参数已加载
+	if !pas.aggressiveEnabled {
+		t.Error("aggressiveEnabled should be true")
+	}
+	if pas.aggressiveMaxRetry != 4 {
+		t.Errorf("Expected aggressiveMaxRetry=4, got %d", pas.aggressiveMaxRetry)
+	}
+
+	// 测试无敞口时不追单
+	pas.leg1Position = 10
+	pas.leg2Position = -10 // 敞口 = 0
+	pas.bid2 = 6000.0
+	pas.ask2 = 6001.0
+	pas.sendAggressiveOrder()
+	signals := pas.GetSignals()
+	if len(signals) > 0 {
+		t.Error("Should not generate aggressive order when exposure is 0")
+	}
+	if pas.aggRepeat != 1 {
+		t.Errorf("aggRepeat should be reset to 1 when exposure is 0, got %d", pas.aggRepeat)
+	}
+
+	// 测试有敞口时生成追单信号
+	pas.leg1Position = 10
+	pas.leg2Position = -8 // 敞口 = 2（多头敞口，需要卖出）
+	pas.sendAggressiveOrder()
+	signals = pas.GetSignals()
+	if len(signals) != 1 {
+		t.Errorf("Should generate 1 aggressive order signal, got %d", len(signals))
+	}
+	if len(signals) > 0 {
+		if signals[0].Symbol != "ag2605" {
+			t.Errorf("Aggressive order should be for leg2, got %s", signals[0].Symbol)
+		}
+		if signals[0].Side != OrderSideSell {
+			t.Errorf("Aggressive order should be SELL for positive exposure, got %v", signals[0].Side)
+		}
+		if signals[0].Quantity != 2 {
+			t.Errorf("Aggressive order quantity should be 2 (exposure), got %d", signals[0].Quantity)
+		}
+		if signals[0].Metadata["type"] != "aggressive" {
+			t.Error("Order metadata should indicate aggressive type")
+		}
+	}
+	if pas.aggRepeat != 2 {
+		t.Errorf("aggRepeat should be 2 after first aggressive order, got %d", pas.aggRepeat)
+	}
+
+	// GetSignals already clears the signal queue, so no need to call ClearSignals
+
+	// 测试流控：间隔不足时不追单
+	pas.sendAggressiveOrder() // 立即再次调用
+	signals = pas.GetSignals()
+	if len(signals) != 0 {
+		t.Error("Should not generate aggressive order within interval")
+	}
+
+	// 测试空头敞口
+	pas.leg1Position = 8
+	pas.leg2Position = -10 // 敞口 = -2（空头敞口，需要买入）
+	pas.aggDirection = 0   // 重置方向
+	pas.sendAggressiveOrder()
+	signals = pas.GetSignals()
+	if len(signals) != 1 {
+		t.Errorf("Should generate 1 aggressive order signal for short exposure, got %d", len(signals))
+	}
+	if len(signals) > 0 && signals[0].Side != OrderSideBuy {
+		t.Errorf("Aggressive order should be BUY for negative exposure, got %v", signals[0].Side)
+	}
+
+	pas.Stop()
+}
+
+// TestPairwiseArbStrategy_ExposureCalculation 测试敞口计算
+func TestPairwiseArbStrategy_ExposureCalculation(t *testing.T) {
+	pas := NewPairwiseArbStrategy("pairwise_1")
+
+	config := &StrategyConfig{
+		StrategyID:   "pairwise_1",
+		StrategyType: "pairwise_arb",
+		Symbols:      []string{"SYMBOL1", "SYMBOL2"},
+		Enabled:      true,
+	}
+	pas.Initialize(config)
+
+	// 无持仓，敞口 = 0
+	pas.leg1Position = 0
+	pas.leg2Position = 0
+	if pas.calculateExposure() != 0 {
+		t.Errorf("Expected exposure=0, got %d", pas.calculateExposure())
+	}
+
+	// 对冲持仓，敞口 = 0
+	pas.leg1Position = 10
+	pas.leg2Position = -10
+	if pas.calculateExposure() != 0 {
+		t.Errorf("Expected exposure=0 for hedged position, got %d", pas.calculateExposure())
+	}
+
+	// 多头敞口
+	pas.leg1Position = 10
+	pas.leg2Position = -8
+	if pas.calculateExposure() != 2 {
+		t.Errorf("Expected exposure=2, got %d", pas.calculateExposure())
+	}
+
+	// 空头敞口
+	pas.leg1Position = 8
+	pas.leg2Position = -10
+	if pas.calculateExposure() != -2 {
+		t.Errorf("Expected exposure=-2, got %d", pas.calculateExposure())
+	}
+}
+
+// TestPairwiseArbStrategy_DynamicThreshold_Disabled 测试动态阈值禁用时使用静态阈值
+func TestPairwiseArbStrategy_DynamicThreshold_Disabled(t *testing.T) {
+	pas := NewPairwiseArbStrategy("pairwise_1")
+
+	config := &StrategyConfig{
+		StrategyID:      "pairwise_1",
+		StrategyType:    "pairwise_arb",
+		Symbols:         []string{"SYMBOL1", "SYMBOL2"},
+		MaxPositionSize: 100,
+		Parameters: map[string]interface{}{
+			"entry_zscore":          2.0,
+			"use_dynamic_threshold": false, // 禁用动态阈值
+		},
+		Enabled: true,
+	}
+
+	err := pas.Initialize(config)
+	if err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	// 即使有持仓，阈值也应该保持不变
+	pas.leg1Position = 100 // 满仓
+	pas.setDynamicThresholds()
+
+	if pas.entryZScoreBid != 2.0 {
+		t.Errorf("Expected static entryZScoreBid=2.0, got %.2f", pas.entryZScoreBid)
+	}
+	if pas.entryZScoreAsk != 2.0 {
+		t.Errorf("Expected static entryZScoreAsk=2.0, got %.2f", pas.entryZScoreAsk)
+	}
+}
+
+// TestPairwiseArbStrategy_GetCurrentParameters_IncludesNewParams 测试参数查询包含新参数
+func TestPairwiseArbStrategy_GetCurrentParameters_IncludesNewParams(t *testing.T) {
+	pas := NewPairwiseArbStrategy("pairwise_1")
+
+	config := &StrategyConfig{
+		StrategyID:   "pairwise_1",
+		StrategyType: "pairwise_arb",
+		Symbols:      []string{"SYMBOL1", "SYMBOL2"},
+		Parameters: map[string]interface{}{
+			"use_dynamic_threshold":    true,
+			"begin_zscore":             2.0,
+			"long_zscore":              3.5,
+			"short_zscore":             3.5,
+			"aggressive_enabled":       true,
+			"aggressive_interval_ms":   500.0,
+			"aggressive_max_retry":     4.0,
+			"aggressive_slop_ticks":    20.0,
+			"aggressive_fail_threshold": 3.0,
+		},
+		Enabled: true,
+	}
+
+	err := pas.Initialize(config)
+	if err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	params := pas.GetCurrentParameters()
+
+	// 检查动态阈值参数
+	if v, ok := params["use_dynamic_threshold"].(bool); !ok || !v {
+		t.Error("GetCurrentParameters should include use_dynamic_threshold=true")
+	}
+	if v, ok := params["begin_zscore"].(float64); !ok || v != 2.0 {
+		t.Error("GetCurrentParameters should include begin_zscore=2.0")
+	}
+	if v, ok := params["long_zscore"].(float64); !ok || v != 3.5 {
+		t.Error("GetCurrentParameters should include long_zscore=3.5")
+	}
+
+	// 检查追单参数
+	if v, ok := params["aggressive_enabled"].(bool); !ok || !v {
+		t.Error("GetCurrentParameters should include aggressive_enabled=true")
+	}
+	if v, ok := params["aggressive_max_retry"].(int); !ok || v != 4 {
+		t.Errorf("GetCurrentParameters should include aggressive_max_retry=4, got %v", params["aggressive_max_retry"])
+	}
+}
+
 func BenchmarkPairwiseArbStrategy_OnMarketData(b *testing.B) {
 	pas := NewPairwiseArbStrategy("pairwise_1")
 
