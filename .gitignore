@@ -11,6 +11,7 @@ gateway/.cache
 bin/
 golang/bin/
 golang/pkg/proto/
+golang/trader
 *.exe
 
 # IDE
@@ -61,6 +62,7 @@ data/simulator/
 data/positions/
 data/ctp_positions/
 data/market_data/
+golang/pkg/strategy/data/
 
 # Test logs (except reports)
 test_logs/*.log
