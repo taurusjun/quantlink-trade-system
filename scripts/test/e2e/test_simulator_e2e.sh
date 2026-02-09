@@ -8,8 +8,12 @@ set -e
 # 日期: 2026-02-09
 #
 # 用法:
-#   ./scripts/test/e2e/test_simulator_e2e.sh           # 运行测试后退出
-#   ./scripts/test/e2e/test_simulator_e2e.sh --run     # 启动系统并保持运行
+#   ./scripts/test/e2e/test_simulator_e2e.sh              # 运行测试后退出
+#   ./scripts/test/e2e/test_simulator_e2e.sh --run        # 前台运行（Ctrl+C停止）
+#   ./scripts/test/e2e/test_simulator_e2e.sh --background # 后台运行
+#
+# 停止后台服务:
+#   ./scripts/live/stop_all.sh
 #
 # 相关文档:
 #   - 架构说明: @docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md
@@ -21,14 +25,35 @@ cd "$PROJECT_ROOT"
 
 # 参数解析
 RUN_MODE=false
+BACKGROUND_MODE=false
 for arg in "$@"; do
     case $arg in
         --run)
             RUN_MODE=true
-            shift
+            ;;
+        --background)
+            BACKGROUND_MODE=true
             ;;
     esac
 done
+
+# 后台模式：重新执行自己
+if [ "$BACKGROUND_MODE" = true ]; then
+    echo "Starting in background mode..."
+    nohup "$0" --run > log/simulator_system.log 2>&1 &
+    BG_PID=$!
+    sleep 3
+    if ps -p $BG_PID > /dev/null 2>&1; then
+        echo "✓ System started in background (PID: $BG_PID)"
+        echo "  Log: log/simulator_system.log"
+        echo "  Stop: ./scripts/live/stop_all.sh"
+    else
+        echo "✗ Failed to start in background"
+        tail -20 log/simulator_system.log
+        exit 1
+    fi
+    exit 0
+fi
 
 # 颜色定义
 RED='\033[0;31m'
@@ -47,20 +72,28 @@ log_section() {
     echo -e "${BLUE}========================================${NC}\n"
 }
 
-# 清理函数
+# 清理函数（仅在非 --run 模式下自动清理）
 cleanup() {
     if [ "$RUN_MODE" = true ]; then
         log_info "Stopping all services..."
+        pkill -f md_simulator 2>/dev/null || true
+        pkill -f md_gateway 2>/dev/null || true
+        pkill -f ors_gateway 2>/dev/null || true
+        pkill -f counter_bridge 2>/dev/null || true
+        pkill -f "trader -config" 2>/dev/null || true
+        sleep 1
+        ipcs -m 2>/dev/null | grep $(whoami) | awk '{print $2}' | xargs -r ipcrm -m 2>/dev/null || true
+        log_info "All services stopped"
     else
         log_info "Cleaning up..."
+        pkill -f md_simulator 2>/dev/null || true
+        pkill -f md_gateway 2>/dev/null || true
+        pkill -f ors_gateway 2>/dev/null || true
+        pkill -f counter_bridge 2>/dev/null || true
+        pkill -f "trader -config" 2>/dev/null || true
+        sleep 1
+        ipcs -m 2>/dev/null | grep $(whoami) | awk '{print $2}' | xargs -r ipcrm -m 2>/dev/null || true
     fi
-    pkill -f md_simulator || true
-    pkill -f md_gateway || true
-    pkill -f ors_gateway || true
-    pkill -f counter_bridge || true
-    pkill -f "trader -config" || true
-    sleep 1
-    ipcs -m | grep $(whoami) | awk '{print $2}' | xargs ipcrm -m 2>/dev/null || true
 }
 
 trap cleanup EXIT

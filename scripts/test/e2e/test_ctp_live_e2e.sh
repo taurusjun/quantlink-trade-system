@@ -8,8 +8,12 @@ set -e
 # 日期: 2026-02-09
 #
 # 用法:
-#   ./scripts/test/e2e/test_ctp_live_e2e.sh           # 运行测试后退出
-#   ./scripts/test/e2e/test_ctp_live_e2e.sh --run     # 启动系统并保持运行
+#   ./scripts/test/e2e/test_ctp_live_e2e.sh              # 运行测试后退出
+#   ./scripts/test/e2e/test_ctp_live_e2e.sh --run        # 前台运行（Ctrl+C停止）
+#   ./scripts/test/e2e/test_ctp_live_e2e.sh --background # 后台运行
+#
+# 停止后台服务:
+#   ./scripts/live/stop_all.sh
 #
 # 相关文档:
 #   - 架构说明: @docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md
@@ -21,14 +25,36 @@ cd "$PROJECT_ROOT"
 
 # 参数解析
 RUN_MODE=false
+BACKGROUND_MODE=false
 for arg in "$@"; do
     case $arg in
         --run)
             RUN_MODE=true
-            shift
+            ;;
+        --background)
+            BACKGROUND_MODE=true
             ;;
     esac
 done
+
+# 后台模式：重新执行自己
+if [ "$BACKGROUND_MODE" = true ]; then
+    echo "Starting in background mode..."
+    mkdir -p log
+    nohup "$0" --run > log/ctp_live_system.log 2>&1 &
+    BG_PID=$!
+    sleep 3
+    if ps -p $BG_PID > /dev/null 2>&1; then
+        echo "✓ System started in background (PID: $BG_PID)"
+        echo "  Log: log/ctp_live_system.log"
+        echo "  Stop: ./scripts/live/stop_all.sh"
+    else
+        echo "✗ Failed to start in background"
+        tail -20 log/ctp_live_system.log
+        exit 1
+    fi
+    exit 0
+fi
 
 # 颜色定义
 RED='\033[0;31m'
