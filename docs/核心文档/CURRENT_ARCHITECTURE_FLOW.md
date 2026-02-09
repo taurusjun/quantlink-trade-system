@@ -48,7 +48,7 @@
 │  └────────────────────┘              └────────────────────────┘         │
 │                                                ↓ ↑                       │
 │                                      ┌───────────────────────────────┐   │
-│                                      │ Counter Gateway (✅ 已实现)   │   │
+│                                      │ Counter Bridge (✅ 已实现)   │   │
 │                                      │  - 读取Request队列            │   │
 │                                      │  - 写入Response队列           │   │
 │                                      │  - 调用Counter API            │   │
@@ -109,7 +109,7 @@
     │
     ↓ 共享内存 (POSIX shm, lock-free SPSC)
     │
-[Counter Gateway - Request Reader Thread]
+[Counter Bridge - Request Reader Thread]
     │
     │ 5. 从共享内存读取
     │    - req_queue->Pop(raw_req)
@@ -140,7 +140,7 @@
     │
     ↓
     │
-[Counter Gateway - Callback]
+[Counter Bridge - Callback]
     │
     │ 9. 填充响应数据
     │    - OrderResponseRaw结构
@@ -262,10 +262,10 @@ $ ./ors_gateway
 [ORSGateway] Connected to NATS: nats://localhost:4222
 [ORSGateway] gRPC Server: 0.0.0.0:50052
 
-# 终端3: 启动Counter Gateway
-$ ./counter_gateway
+# 终端3: 启动Counter Bridge
+$ ./counter_bridge
 [SimCounter] Connected successfully
-[Counter Gateway started successfully]
+[Counter Bridge started successfully]
 
 # 终端4: 发送测试订单
 $ cd /Users/user/PWorks/RD/quantlink-trade-system/golang
@@ -281,7 +281,7 @@ Order Response:
 [ReqWriter] Written: 1
 [RespReader] Read: 1
 
-# 日志输出 - Counter Gateway:
+# 日志输出 - Counter Bridge:
 [SimCounter] Order received: EX_1768909036580_000000 symbol=ag2412 side=BUY price=7950 qty=10
 [SimCounter] Order accepted: EX_1768909036580_000000
 [Callback] Order accepted: EX_1768909036580_000000 (total: 1)
@@ -301,11 +301,11 @@ Order Response:
 客户端 → ORS Gateway (gRPC):           ~0.1ms
 ORS Gateway 内部处理:                  ~0.006ms
 ORS Gateway → 共享内存:                ~0.001ms
-Counter Gateway 读取:                  ~0.001ms
-Counter Gateway → SimulatedCounter:    ~0.001ms
+Counter Bridge 读取:                  ~0.001ms
+Counter Bridge → SimulatedCounter:    ~0.001ms
 SimulatedCounter 接受延迟:             10ms      ← 模拟延迟
 SimulatedCounter 成交延迟:             50ms      ← 模拟延迟
-Counter Gateway 回调:                  ~0.001ms
+Counter Bridge 回调:                  ~0.001ms
 共享内存 → ORS Gateway:                ~0.001ms
 ORS Gateway NATS发布:                  ~0.1ms
 NATS → 客户端:                         ~0.1ms
@@ -317,7 +317,7 @@ NATS → 客户端:                         ~0.1ms
 
 ```
 不包含SimulatedCounter的模拟延迟:
-客户端 → ORS Gateway → 共享内存 → Counter Gateway →
+客户端 → ORS Gateway → 共享内存 → Counter Bridge →
 Counter API → 回调 → 共享内存 → ORS Gateway → 客户端
 
 估算: ~0.5-1ms
@@ -411,8 +411,8 @@ message OrderRequest {
 2. ORS Gateway (创建Request和Response共享内存)
    └─→ ./ors_gateway
 
-3. Counter Gateway (连接共享内存)
-   └─→ ./counter_gateway
+3. Counter Bridge (连接共享内存)
+   └─→ ./counter_bridge
 
 4. Golang客户端/策略引擎
    └─→ ./bin/ors_client
@@ -421,7 +421,7 @@ message OrderRequest {
 ## 总结
 
 ### ✅ 已完成且可用
-1. **完整订单流**: Golang Client → ORS Gateway → Counter Gateway → SimulatedCounter → 回报
+1. **完整订单流**: Golang Client → ORS Gateway → Counter Bridge → SimulatedCounter → 回报
 2. **共享内存IPC**: SPSC无锁队列，延迟<2μs
 3. **NATS消息总线**: Pub/Sub通信，延迟<100μs
 4. **指标库**: 7个核心指标，可独立使用

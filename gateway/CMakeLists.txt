@@ -132,22 +132,6 @@ target_link_libraries(ors_gateway
     Threads::Threads
 )
 
-# Counter Gateway可执行文件
-set(COUNTER_GATEWAY_SRCS
-    src/main_counter.cpp
-    src/simulated_counter.cpp
-    ${PROTO_SRCS}
-    ${GRPC_SRCS}
-)
-
-add_executable(counter_gateway ${COUNTER_GATEWAY_SRCS})
-
-target_link_libraries(counter_gateway
-    gRPC::grpc++
-    gRPC::grpc++_reflection
-    Threads::Threads
-)
-
 # CTP Market Data Gateway (仅在macOS且yaml-cpp可用时编译)
 if(APPLE AND HAS_YAML_CPP)
     set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
@@ -198,9 +182,9 @@ endif()
 
 # 安装
 if(HAS_CTP_GATEWAY)
-    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway ctp_md_gateway DESTINATION bin)
+    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway ctp_md_gateway DESTINATION bin)
 else()
-    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway counter_gateway DESTINATION bin)
+    install(TARGETS md_gateway md_simulator md_benchmark ors_gateway DESTINATION bin)
 endif()
 
 # ==================== 插件编译选项 ====================

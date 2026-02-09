@@ -21,7 +21,7 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
    - `md_simulator`: 模拟行情数据生成器
    - `md_gateway`: 行情网关（共享内存 → NATS）
    - `ors_gateway`: 订单路由服务（gRPC → 共享内存）
-   - `counter_gateway`: 模拟成交网关
+   - `counter_bridge`: 统一成交网关（支持 CTP/Simulator 插件）
 
 2. **Golang 策略层** (`golang/`)
    - `pkg/trader/`: 交易主程序
@@ -37,7 +37,7 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 ### 数据流向
 
 ```
-md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] → ors_gateway → [SHM] → counter_gateway
+md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
 ```
 
 ---
@@ -955,7 +955,7 @@ tail -f log/trader.test.log | grep "Order sent"
 pkill -f md_simulator
 pkill -f md_gateway
 pkill -f ors_gateway
-pkill -f counter_gateway
+pkill -f counter_bridge
 pkill -f "trader -config"
 
 # 6. 清理共享内存
@@ -992,7 +992,7 @@ grep "Received market data" log/trader.test.log
 
 **检查进程状态**:
 ```bash
-ps aux | grep -E "md_simulator|md_gateway|ors_gateway|counter_gateway|trader"
+ps aux | grep -E "md_simulator|md_gateway|ors_gateway|counter_bridge|trader"
 ```
 
 **检查共享内存**:
@@ -1320,7 +1320,7 @@ chore: 更新依赖版本
 
 **架构**:
 ```
-md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_gateway
+md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
 ```
 
 #### 2. CTP实盘测试

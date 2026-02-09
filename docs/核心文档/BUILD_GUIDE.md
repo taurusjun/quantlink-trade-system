@@ -78,7 +78,7 @@ gateway/build/
 ├── md_simulator      # 行情模拟器
 ├── md_benchmark      # 性能测试工具
 ├── ors_gateway       # 订单网关
-├── counter_gateway   # 交易所网关
+├── counter_bridge   # 交易所网关
 └── ctp_md_gateway    # CTP行情网关（可选）
 ```
 
@@ -290,7 +290,7 @@ quantlink-trade-system/
 │   └── build/               ← C++ 可执行文件
 │       ├── md_gateway
 │       ├── ors_gateway
-│       ├── counter_gateway
+│       ├── counter_bridge
 │       ├── md_simulator
 │       └── md_benchmark
 ├── golang/
