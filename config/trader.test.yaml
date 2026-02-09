@@ -46,7 +46,7 @@ strategies:
       aggressive_slop_ticks: 20.0       # 跳跃tick数
       aggressive_fail_threshold: 3.0    # 失败阈值
       # 多层挂单参数（C++: MAX_QUOTE_LEVEL）
-      enable_multi_level: false         # 是否启用多层挂单（默认关闭）
+      enable_multi_level: true          # 是否启用多层挂单（测试：开启）
       max_quote_level: 3                # 最大挂单层数
       quote_level_sizes: [4, 3, 2]      # 每层下单量
       # 价格优化参数

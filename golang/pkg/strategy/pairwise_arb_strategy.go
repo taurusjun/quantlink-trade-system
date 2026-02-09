@@ -292,7 +292,7 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 		pas.maxQuoteLevel = 5 // 最多支持 5 档
 	}
 
-	// 每层下单量（支持数组配置，处理 []interface{} 和 []int 类型）
+	// 每层下单量（支持数组配置，处理 []interface{} 中的 int/float64 元素）
 	if val, ok := config.Parameters["quote_level_sizes"].([]interface{}); ok {
 		pas.quoteLevelSizes = make([]int64, 0, len(val))
 		for _, v := range val {
