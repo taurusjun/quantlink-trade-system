@@ -1,4 +1,9 @@
 // Package strategy provides trading strategy interfaces and implementations
+//
+// Deprecated: This file (order_map.go) is kept for backward compatibility.
+// New code should use ExtraStrategy's OrdMap, BidMap, and AskMap fields instead.
+// The OrderStats struct in order_stats.go provides full C++ compatible order tracking.
+// See extra_strategy.go for the new implementation.
 package strategy
 
 import (

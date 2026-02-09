@@ -58,10 +58,8 @@ data/market_data/
 ctp_flow/
 
 # Runtime data
-data/simulator/
-data/positions/
-data/ctp_positions/
-data/market_data/
+data/
+golang/data/
 golang/pkg/strategy/data/
 
 # Test logs (except reports)

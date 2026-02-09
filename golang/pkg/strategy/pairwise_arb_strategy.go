@@ -15,8 +15,20 @@ import (
 
 // PairwiseArbStrategy implements a statistical arbitrage / pairs trading strategy
 // It identifies and trades mean-reverting spread between two correlated instruments
+//
+// 架构重构（与 C++ 一致）：
+// C++: m_firstStrat, m_secondStrat 是 ExtraStrategy* 指针
+// Go:  firstStrat, secondStrat 是 *ExtraStrategy 指针
 type PairwiseArbStrategy struct {
 	*BaseStrategy
+
+	// === 腿策略对象（C++: m_firstStrat, m_secondStrat） ===
+	// 使用 ExtraStrategy 封装每条腿的持仓、订单和阈值管理
+	firstStrat  *ExtraStrategy // 第一条腿（原 leg1*）
+	secondStrat *ExtraStrategy // 第二条腿（原 leg2*）
+
+	// === 阈值配置（C++: m_thold_first） ===
+	tholdFirst *ThresholdSet // 阈值配置（用于动态阈值计算）
 
 	// Strategy parameters
 	symbol1           string  // First symbol (e.g., "ag2412")
@@ -64,45 +76,15 @@ type PairwiseArbStrategy struct {
 	aggLastTime   time.Time // 上次追单时间
 	aggFailCount  int       // 连续失败次数
 
-	// C++: SUPPORTING_ORDERS - 限制追单数量
-	// 防止在一个方向上发送过多追单
-	supportingOrders int   // 最大追单数量（配置参数）
-	sellAggOrder     int   // 当前卖单追单计数（C++: sellAggOrder）
-	buyAggOrder      int   // 当前买单追单计数（C++: buyAggOrder）
-
 	// Spread analyzer (encapsulates spread calculation and statistics)
 	spreadAnalyzer    *spread.SpreadAnalyzer
 
-	// Position tracking (separate for each leg)
-	// 参考 tbsrc：每条腿有独立的 ExecutionStrategy，因此需要独立的持仓统计
-	leg1Position      int64
-	leg2Position      int64
-
-	// Leg1 独立持仓统计（类似 tbsrc m_firstStrat）
-	leg1BuyQty        int64
-	leg1SellQty       int64
-	leg1BuyAvgPrice   float64
-	leg1SellAvgPrice  float64
-	leg1BuyTotalQty   int64
-	leg1SellTotalQty  int64
-	leg1BuyTotalValue float64
-	leg1SellTotalValue float64
-	// 昨仓净值（C++: m_netpos_pass_ytd）
-	// 含义：昨日收盘时的净持仓（正=多头，负=空头）
-	// 今仓净值 = leg1Position - leg1YtdPosition
-	leg1YtdPosition   int64 // Leg1 昨仓净值（C++: m_netpos_pass_ytd）
-
-	// Leg2 独立持仓统计（类似 tbsrc m_secondStrat）
-	leg2BuyQty        int64
-	leg2SellQty       int64
-	leg2BuyAvgPrice   float64
-	leg2SellAvgPrice  float64
-	leg2BuyTotalQty   int64
-	leg2SellTotalQty  int64
-	leg2BuyTotalValue float64
-	leg2SellTotalValue float64
-	// 昨仓净值（C++: m_netpos_agg 作为昨仓初值）
-	leg2YtdPosition   int64 // Leg2 昨仓净值
+	// === 兼容字段（逐步迁移到 ExtraStrategy） ===
+	// 这些字段保留用于兼容现有代码，新代码应使用 firstStrat/secondStrat
+	leg1Position      int64 // 兼容：使用 firstStrat.NetPos
+	leg2Position      int64 // 兼容：使用 secondStrat.NetPos
+	leg1YtdPosition   int64 // 兼容：使用 firstStrat.NetPosPassYtd
+	leg2YtdPosition   int64 // 兼容：使用 secondStrat.NetPosPassYtd
 
 	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
 	maxQuoteLevel    int     // 最大挂单层数 (默认: 1, 仅一档)
@@ -115,9 +97,11 @@ type PairwiseArbStrategy struct {
 	bidPrices2 []float64 // Leg2 买盘 5 档价格
 	askPrices2 []float64 // Leg2 卖盘 5 档价格
 
-	// 挂单映射（C++: m_bidMap/m_askMap）
-	leg1OrderMap *OrderPriceMap // Leg1 订单映射
-	leg2OrderMap *OrderPriceMap // Leg2 订单映射
+	// === 已废弃：订单映射已迁移到 ExtraStrategy ===
+	// leg1OrderMap 和 leg2OrderMap 现在使用 firstStrat.OrdMap/BidMap/AskMap
+	// 保留引用用于兼容
+	leg1OrderMap *OrderPriceMap // 兼容：使用 firstStrat 的 maps
+	leg2OrderMap *OrderPriceMap // 兼容：使用 secondStrat 的 maps
 
 	// 价格优化参数（C++: GetBidPrice_first 隐性订单簿检测）
 	enablePriceOptimize bool    // 是否启用价格优化
@@ -136,8 +120,21 @@ type PairwiseArbStrategy struct {
 func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 	maxHistoryLen := 200
 
+	// 创建 ExtraStrategy 实例（C++: m_firstStrat, m_secondStrat）
+	// 注意：Instrument 将在 Initialize 中设置正确的值
+	firstStrat := NewExtraStrategy(1, &Instrument{Symbol: "", TickSize: 1.0})
+	secondStrat := NewExtraStrategy(2, &Instrument{Symbol: "", TickSize: 1.0})
+
+	// 创建阈值配置（C++: m_thold_first）
+	tholdFirst := NewThresholdSet()
+
 	pas := &PairwiseArbStrategy{
 		BaseStrategy:     NewBaseStrategy(id, "pairwise_arb"),
+		// ExtraStrategy 实例
+		firstStrat:       firstStrat,
+		secondStrat:      secondStrat,
+		tholdFirst:       tholdFirst,
+		// 基本参数
 		lookbackPeriod:   100,
 		entryZScore:      2.0,
 		exitZScore:       0.5,
@@ -159,7 +156,7 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 		askPrices1: make([]float64, 5),
 		bidPrices2: make([]float64, 5),
 		askPrices2: make([]float64, 5),
-		// 订单映射
+		// 订单映射（兼容）
 		leg1OrderMap: NewOrderPriceMap(),
 		leg2OrderMap: NewOrderPriceMap(),
 		// 价格优化默认值
@@ -192,6 +189,16 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 
 	pas.symbol1 = config.Symbols[0]
 	pas.symbol2 = config.Symbols[1]
+
+	// 初始化 ExtraStrategy 的 Instrument 信息（C++: m_firstStrat->m_instru, m_secondStrat->m_instru）
+	pas.firstStrat.Instru = &Instrument{
+		Symbol:   pas.symbol1,
+		TickSize: pas.tickSize1,
+	}
+	pas.secondStrat.Instru = &Instrument{
+		Symbol:   pas.symbol2,
+		TickSize: pas.tickSize2,
+	}
 
 	// Load strategy-specific parameters (load spread_type first)
 	if val, ok := config.Parameters["lookback_period"].(float64); ok {
@@ -289,16 +296,18 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	}
 	// C++: SUPPORTING_ORDERS - 限制追单数量，防止单方向发送过多追单
 	// 关键参数！如果设置为 0 则不限制追单数量
+	// 使用 tholdFirst.SupportingOrders 存储
 	if val, ok := config.Parameters["supporting_orders"].(float64); ok {
-		pas.supportingOrders = int(val)
+		pas.tholdFirst.SupportingOrders = int32(val)
 	} else {
-		pas.supportingOrders = 3 // 默认限制 3 个追单
+		pas.tholdFirst.SupportingOrders = 3 // 默认限制 3 个追单
 	}
 	// 初始化追单状态
 	pas.aggRepeat = 1
 	pas.aggDirection = 0
-	pas.sellAggOrder = 0
-	pas.buyAggOrder = 0
+	// 追单计数使用 secondStrat 的字段（C++: sellAggOrder, buyAggOrder）
+	pas.secondStrat.SellAggOrder = 0
+	pas.secondStrat.BuyAggOrder = 0
 
 	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
 	if val, ok := config.Parameters["enable_multi_level"].(bool); ok {
@@ -370,6 +379,26 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 		log.Printf("[PairwiseArbStrategy:%s] Price optimize enabled: gap=%d ticks, tick_size1=%.2f, tick_size2=%.2f",
 			pas.ID, pas.priceOptimizeGap, pas.tickSize1, pas.tickSize2)
 	}
+
+	// === 配置 ThresholdSet（C++: m_thold_first） ===
+	// 将 Z-Score 阈值映射到 ThresholdSet 的 PLACE/REMOVE 字段
+	pas.tholdFirst.BeginPlace = pas.beginZScore
+	pas.tholdFirst.BeginRemove = pas.exitZScore
+	pas.tholdFirst.LongPlace = pas.longZScore
+	pas.tholdFirst.ShortPlace = pas.shortZScore
+	pas.tholdFirst.MaxSize = int32(pas.maxPositionSize)
+	pas.tholdFirst.Size = int32(pas.orderSize)
+	pas.tholdFirst.Slop = float64(pas.aggressiveSlopTicks)
+
+	// 将阈值配置关联到 firstStrat（C++: m_firstStrat->m_thold = m_thold_first）
+	pas.firstStrat.Thold = pas.tholdFirst
+
+	// 更新 Instrument tick size（可能在参数加载后才确定）
+	pas.firstStrat.Instru.TickSize = pas.tickSize1
+	pas.secondStrat.Instru.TickSize = pas.tickSize2
+
+	log.Printf("[PairwiseArbStrategy:%s] ExtraStrategy initialized: firstStrat(symbol=%s), secondStrat(symbol=%s)",
+		pas.ID, pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol)
 
 	return nil
 }
@@ -1085,8 +1114,9 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		// 无敞口，重置追单状态和计数
 		pas.aggRepeat = 1
 		pas.aggDirection = 0
-		pas.sellAggOrder = 0
-		pas.buyAggOrder = 0
+		// 使用 secondStrat 的追单计数（C++: sellAggOrder, buyAggOrder）
+		pas.secondStrat.SellAggOrder = 0
+		pas.secondStrat.BuyAggOrder = 0
 		return
 	}
 
@@ -1120,34 +1150,39 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	// 3. CRITICAL: 检查 SUPPORTING_ORDERS 限制
 	// C++: if (exposure > 0 && sellAggOrder <= SUPPORTING_ORDERS)
 	// C++: if (exposure < 0 && buyAggOrder <= SUPPORTING_ORDERS)
-	if pas.supportingOrders > 0 {
-		if targetSide == OrderSideSell && pas.sellAggOrder > pas.supportingOrders {
+	supportingOrders := int(pas.tholdFirst.SupportingOrders)
+	sellAggOrder := int(pas.secondStrat.SellAggOrder)
+	buyAggOrder := int(pas.secondStrat.BuyAggOrder)
+	if supportingOrders > 0 {
+		if targetSide == OrderSideSell && sellAggOrder > supportingOrders {
 			log.Printf("[PairwiseArb:%s] ⛔ Sell aggressive order limit reached: %d > %d",
-				pas.ID, pas.sellAggOrder, pas.supportingOrders)
+				pas.ID, sellAggOrder, supportingOrders)
 			return
 		}
-		if targetSide == OrderSideBuy && pas.buyAggOrder > pas.supportingOrders {
+		if targetSide == OrderSideBuy && buyAggOrder > supportingOrders {
 			log.Printf("[PairwiseArb:%s] ⛔ Buy aggressive order limit reached: %d > %d",
-				pas.ID, pas.buyAggOrder, pas.supportingOrders)
+				pas.ID, buyAggOrder, supportingOrders)
 			return
 		}
 	}
 
 	// 4. 方向变化检查：如果方向变化，重置计数
-	if pas.aggDirection != newDirection {
+	directionChanged := pas.aggDirection != newDirection
+	if directionChanged {
 		pas.aggRepeat = 1
 		pas.aggDirection = newDirection
-		// 方向变化时也重置对应方向的追单计数
+		// 方向变化时也重置对应方向的追单计数（使用 secondStrat）
 		if newDirection == -1 {
-			pas.sellAggOrder = 0
+			pas.secondStrat.SellAggOrder = 0
 		} else {
-			pas.buyAggOrder = 0
+			pas.secondStrat.BuyAggOrder = 0
 		}
 	}
 
 	// 5. 时间间隔检查
 	// C++: if (last_agg_side != side || now - last_agg_time > 500ms)
-	if time.Since(pas.aggLastTime) < pas.aggressiveInterval {
+	// 方向变化时跳过间隔检查
+	if !directionChanged && time.Since(pas.aggLastTime) < pas.aggressiveInterval {
 		// 同方向追单，间隔不足
 		return
 	}
@@ -1211,21 +1246,21 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 			"total_exposure": totalExposure,
 			"retry":          pas.aggRepeat,
 			"price_adjust":   priceAdjust,
-			"sell_agg_order": pas.sellAggOrder,
-			"buy_agg_order":  pas.buyAggOrder,
+			"sell_agg_order": sellAggOrder,
+			"buy_agg_order":  buyAggOrder,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal)
 
 	log.Printf("[PairwiseArb:%s] 🏃 Aggressive order #%d: %v %s %d @ %.2f (exposure=%d, pending=%d, sellAgg=%d, buyAgg=%d)",
-		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, pendingNetpos, pas.sellAggOrder, pas.buyAggOrder)
+		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, pendingNetpos, sellAggOrder, buyAggOrder)
 
 	// 9. 更新追单状态
-	// C++: sellAggOrder++ / buyAggOrder++
+	// C++: sellAggOrder++ / buyAggOrder++（使用 secondStrat）
 	if targetSide == OrderSideSell {
-		pas.sellAggOrder++
+		pas.secondStrat.SellAggOrder++
 	} else {
-		pas.buyAggOrder++
+		pas.secondStrat.BuyAggOrder++
 	}
 	pas.aggLastTime = time.Now()
 	pas.aggRepeat++
@@ -1312,15 +1347,17 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 		// 成交后检查敞口，如果敞口为0则重置追单状态
 		exposure := pas.calculateExposure()
 		if exposure == 0 {
-			if pas.aggRepeat > 1 || pas.sellAggOrder > 0 || pas.buyAggOrder > 0 {
+			sellAggOrder := int(pas.secondStrat.SellAggOrder)
+			buyAggOrder := int(pas.secondStrat.BuyAggOrder)
+			if pas.aggRepeat > 1 || sellAggOrder > 0 || buyAggOrder > 0 {
 				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (retry=%d, sellAgg=%d, buyAgg=%d)",
-					pas.ID, pas.aggRepeat-1, pas.sellAggOrder, pas.buyAggOrder)
+					pas.ID, pas.aggRepeat-1, sellAggOrder, buyAggOrder)
 			}
 			pas.aggRepeat = 1
 			pas.aggDirection = 0
 			pas.aggFailCount = 0   // 成功清除敞口，重置失败计数
-			pas.sellAggOrder = 0   // 重置卖追单计数
-			pas.buyAggOrder = 0    // 重置买追单计数
+			pas.secondStrat.SellAggOrder = 0   // 重置卖追单计数（使用 secondStrat）
+			pas.secondStrat.BuyAggOrder = 0    // 重置买追单计数（使用 secondStrat）
 		}
 	}
 }
@@ -1390,177 +1427,62 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 	}
 }
 
-// updateLeg1Position updates leg1 position statistics
+// updateLeg1Position updates leg1 position statistics using ExtraStrategy
 // 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
 // 参考: tbsrc/Strategies/ExecutionStrategy.cpp
 //
-// 中国期货净持仓模型:
-//   - 买入: 先平空(m_sellQty)，再开多(m_buyQty)
-//   - 卖出: 先平多(m_buyQty)，再开空(m_sellQty)
-//   - 净持仓: m_netpos = m_buyQty - m_sellQty
-//
-// C++ 原代码中 m_netpos_pass_ytd 仅用于日志打印，实际的今/昨仓处理在 CTP Plugin 层
-// 今仓净值 = leg1Position - leg1YtdPosition (C++: m_netpos_pass - m_netpos_pass_ytd)
+// 重构：使用 firstStrat.ProcessTrade() 处理持仓更新
 func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int64, price float64) {
-	if side == orspb.OrderSide_BUY {
-		// 买入逻辑
-		pas.leg1BuyTotalQty += qty
-		pas.leg1BuyTotalValue += float64(qty) * price
-
-		// 检查是否有空头需要平仓
-		if pas.leg1Position < 0 {
-			// 平空
-			closedQty := qty
-			if closedQty > pas.leg1SellQty {
-				closedQty = pas.leg1SellQty
-			}
-			pas.leg1SellQty -= closedQty
-			pas.leg1Position += closedQty
-			qty -= closedQty
-
-			if pas.leg1SellQty == 0 {
-				pas.leg1SellAvgPrice = 0
-			}
-		}
-
-		// 开多
-		if qty > 0 {
-			totalCost := pas.leg1BuyAvgPrice * float64(pas.leg1BuyQty)
-			totalCost += price * float64(qty)
-			pas.leg1BuyQty += qty
-			pas.leg1Position += qty
-			if pas.leg1BuyQty > 0 {
-				pas.leg1BuyAvgPrice = totalCost / float64(pas.leg1BuyQty)
-			}
-			// C++: TBLOG << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
-			todayNet := pas.leg1Position - pas.leg1YtdPosition
-			log.Printf("[PairwiseArb:%s] Leg1 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
-				pas.ID, qty, price, pas.leg1BuyAvgPrice, pas.leg1Position, pas.leg1YtdPosition, todayNet)
-		}
-	} else {
-		// 卖出逻辑
-		pas.leg1SellTotalQty += qty
-		pas.leg1SellTotalValue += float64(qty) * price
-
-		// 检查是否有多头需要平仓
-		if pas.leg1Position > 0 {
-			// 平多
-			closedQty := qty
-			if closedQty > pas.leg1BuyQty {
-				closedQty = pas.leg1BuyQty
-			}
-			pas.leg1BuyQty -= closedQty
-			pas.leg1Position -= closedQty
-			qty -= closedQty
-
-			if pas.leg1BuyQty == 0 {
-				pas.leg1BuyAvgPrice = 0
-			}
-		}
-
-		// 开空
-		if qty > 0 {
-			totalCost := pas.leg1SellAvgPrice * float64(pas.leg1SellQty)
-			totalCost += price * float64(qty)
-			pas.leg1SellQty += qty
-			pas.leg1Position -= qty
-			if pas.leg1SellQty > 0 {
-				pas.leg1SellAvgPrice = totalCost / float64(pas.leg1SellQty)
-			}
-			// C++: TBLOG << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
-			todayNet := pas.leg1Position - pas.leg1YtdPosition
-			log.Printf("[PairwiseArb:%s] Leg1 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
-				pas.ID, qty, price, pas.leg1SellAvgPrice, pas.leg1Position, pas.leg1YtdPosition, todayNet)
-		}
+	// 转换方向类型
+	txnSide := TransactionTypeBuy
+	if side == orspb.OrderSide_SELL {
+		txnSide = TransactionTypeSell
 	}
 
-	todayNet := pas.leg1Position - pas.leg1YtdPosition
-	// C++: TBLOG << " m_netpos_pass:" << m_firstStrat->m_netpos_pass << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
-	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f) [ytd=%d, 2day=%d]",
-		pas.ID, pas.symbol1, pas.leg1Position, pas.leg1BuyQty, pas.leg1BuyAvgPrice,
-		pas.leg1SellQty, pas.leg1SellAvgPrice, pas.leg1YtdPosition, todayNet)
+	// 使用 ExtraStrategy.ProcessTrade 处理
+	// 注意：这里需要一个 dummy orderID，因为这是从外部更新调用
+	pas.firstStrat.ProcessTrade(0, int32(qty), price, txnSide)
+
+	// 同步兼容字段
+	pas.leg1Position = int64(pas.firstStrat.NetPos)
+	pas.leg1YtdPosition = int64(pas.firstStrat.NetPosPassYtd)
+
+	// 日志输出
+	todayNet := pas.firstStrat.NetPos - pas.firstStrat.NetPosPassYtd
+	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%.0f@%.2f, Sell=%.0f@%.2f) [ytd=%d, 2day=%d]",
+		pas.ID, pas.symbol1, pas.firstStrat.NetPos,
+		pas.firstStrat.BuyQty, pas.firstStrat.BuyAvgPrice,
+		pas.firstStrat.SellQty, pas.firstStrat.SellAvgPrice,
+		pas.firstStrat.NetPosPassYtd, todayNet)
 }
 
-// updateLeg2Position updates leg2 position statistics
+// updateLeg2Position updates leg2 position statistics using ExtraStrategy
 // 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
 // 参考: tbsrc/Strategies/ExecutionStrategy.cpp
 //
-// C++ 原代码中 Leg2 使用 m_netpos_agg，今仓净值同样是差值计算
+// 重构：使用 secondStrat.ProcessTrade() 处理持仓更新
 func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int64, price float64) {
-	if side == orspb.OrderSide_BUY {
-		// 买入逻辑
-		pas.leg2BuyTotalQty += qty
-		pas.leg2BuyTotalValue += float64(qty) * price
-
-		// 检查是否有空头需要平仓
-		if pas.leg2Position < 0 {
-			// 平空
-			closedQty := qty
-			if closedQty > pas.leg2SellQty {
-				closedQty = pas.leg2SellQty
-			}
-			pas.leg2SellQty -= closedQty
-			pas.leg2Position += closedQty
-			qty -= closedQty
-
-			if pas.leg2SellQty == 0 {
-				pas.leg2SellAvgPrice = 0
-			}
-		}
-
-		// 开多
-		if qty > 0 {
-			totalCost := pas.leg2BuyAvgPrice * float64(pas.leg2BuyQty)
-			totalCost += price * float64(qty)
-			pas.leg2BuyQty += qty
-			pas.leg2Position += qty
-			if pas.leg2BuyQty > 0 {
-				pas.leg2BuyAvgPrice = totalCost / float64(pas.leg2BuyQty)
-			}
-			todayNet := pas.leg2Position - pas.leg2YtdPosition
-			log.Printf("[PairwiseArb:%s] Leg2 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
-				pas.ID, qty, price, pas.leg2BuyAvgPrice, pas.leg2Position, pas.leg2YtdPosition, todayNet)
-		}
-	} else {
-		// 卖出逻辑
-		pas.leg2SellTotalQty += qty
-		pas.leg2SellTotalValue += float64(qty) * price
-
-		// 检查是否有多头需要平仓
-		if pas.leg2Position > 0 {
-			// 平多
-			closedQty := qty
-			if closedQty > pas.leg2BuyQty {
-				closedQty = pas.leg2BuyQty
-			}
-			pas.leg2BuyQty -= closedQty
-			pas.leg2Position -= closedQty
-			qty -= closedQty
-
-			if pas.leg2BuyQty == 0 {
-				pas.leg2BuyAvgPrice = 0
-			}
-		}
-
-		// 开空
-		if qty > 0 {
-			totalCost := pas.leg2SellAvgPrice * float64(pas.leg2SellQty)
-			totalCost += price * float64(qty)
-			pas.leg2SellQty += qty
-			pas.leg2Position -= qty
-			if pas.leg2SellQty > 0 {
-				pas.leg2SellAvgPrice = totalCost / float64(pas.leg2SellQty)
-			}
-			todayNet := pas.leg2Position - pas.leg2YtdPosition
-			log.Printf("[PairwiseArb:%s] Leg2 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
-				pas.ID, qty, price, pas.leg2SellAvgPrice, pas.leg2Position, pas.leg2YtdPosition, todayNet)
-		}
+	// 转换方向类型
+	txnSide := TransactionTypeBuy
+	if side == orspb.OrderSide_SELL {
+		txnSide = TransactionTypeSell
 	}
 
-	todayNet := pas.leg2Position - pas.leg2YtdPosition
-	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f) [ytd=%d, 2day=%d]",
-		pas.ID, pas.symbol2, pas.leg2Position, pas.leg2BuyQty, pas.leg2BuyAvgPrice,
-		pas.leg2SellQty, pas.leg2SellAvgPrice, pas.leg2YtdPosition, todayNet)
+	// 使用 ExtraStrategy.ProcessTrade 处理
+	// 注意：这里需要一个 dummy orderID，因为这是从外部更新调用
+	pas.secondStrat.ProcessTrade(0, int32(qty), price, txnSide)
+
+	// 同步兼容字段
+	pas.leg2Position = int64(pas.secondStrat.NetPos)
+	pas.leg2YtdPosition = int64(pas.secondStrat.NetPosPassYtd)
+
+	// 日志输出
+	todayNet := pas.secondStrat.NetPos - pas.secondStrat.NetPosPassYtd
+	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%.0f@%.2f, Sell=%.0f@%.2f) [ytd=%d, 2day=%d]",
+		pas.ID, pas.symbol2, pas.secondStrat.NetPos,
+		pas.secondStrat.BuyQty, pas.secondStrat.BuyAvgPrice,
+		pas.secondStrat.SellQty, pas.secondStrat.SellAvgPrice,
+		pas.secondStrat.NetPosPassYtd, todayNet)
 }
 
 // OnTimer handles timer events
@@ -1886,21 +1808,49 @@ func (pas *PairwiseArbStrategy) Stop() error {
 }
 
 // InitializePositions 实现PositionInitializer接口：从外部初始化持仓
+// C++: 对应从 CTP 查询持仓后初始化 m_firstStrat/m_secondStrat 的 m_netpos_pass
 func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArbStrategy:%s] Initializing positions from external source", pas.ID)
+	log.Printf("[PairwiseArbStrategy:%s] Initializing positions from external source (CTP)", pas.ID)
 
-	// 初始化leg持仓
+	// 初始化 leg1 持仓 (firstStrat)
 	if qty, exists := positions[pas.symbol1]; exists {
 		pas.leg1Position = qty
+		// 同步到 ExtraStrategy
+		// C++: m_firstStrat->m_netpos_pass = qty
+		if pas.firstStrat != nil {
+			pas.firstStrat.NetPosPass = int32(qty)
+			pas.firstStrat.NetPos = int32(qty)
+			if qty > 0 {
+				pas.firstStrat.BuyQty = float64(qty)
+			} else if qty < 0 {
+				pas.firstStrat.SellQty = float64(-qty)
+			}
+			log.Printf("[PairwiseArbStrategy:%s] Initialized firstStrat position: %s NetPosPass=%d",
+				pas.ID, pas.symbol1, pas.firstStrat.NetPosPass)
+		}
 		log.Printf("[PairwiseArbStrategy:%s] Initialized leg1 position: %s = %d",
 			pas.ID, pas.symbol1, qty)
 	}
 
+	// 初始化 leg2 持仓 (secondStrat)
 	if qty, exists := positions[pas.symbol2]; exists {
 		pas.leg2Position = qty
+		// 同步到 ExtraStrategy
+		// C++: m_secondStrat->m_netpos_pass = qty (注意：secondStrat 通常是主动单腿)
+		if pas.secondStrat != nil {
+			pas.secondStrat.NetPosPass = int32(qty)
+			pas.secondStrat.NetPos = int32(qty)
+			if qty > 0 {
+				pas.secondStrat.BuyQty = float64(qty)
+			} else if qty < 0 {
+				pas.secondStrat.SellQty = float64(-qty)
+			}
+			log.Printf("[PairwiseArbStrategy:%s] Initialized secondStrat position: %s NetPosPass=%d",
+				pas.ID, pas.symbol2, pas.secondStrat.NetPosPass)
+		}
 		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2 position: %s = %d",
 			pas.ID, pas.symbol2, qty)
 	}
@@ -2004,10 +1954,11 @@ func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
 // updatePairwisePNL calculates P&L for pairwise strategy
 // 参考 tbsrc PairwiseArbStrategy: 每条腿有独立的 ExecutionStrategy，因此有独立的平均价格
 // arbi_unrealisedPNL = m_firstStrat->m_unrealisedPNL + m_secondStrat->m_unrealisedPNL
+// 重构：使用 firstStrat/secondStrat 的 BuyAvgPrice/SellAvgPrice
 func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 	var unrealizedPnL float64 = 0
 
-	// Leg1 浮动盈亏（使用对手价和 Leg1 独立的平均价格）
+	// Leg1 浮动盈亏（使用对手价和 firstStrat 的平均价格）
 	// 参考 tbsrc ExecutionStrategy::CalculatePNL
 	if pas.leg1Position != 0 {
 		var leg1PnL float64
@@ -2017,13 +1968,13 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 		if pas.leg1Position > 0 {
 			// Leg1 多头: 使用卖一价（bid），因为平仓时要卖出
 			// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice)
-			avgCost = pas.leg1BuyAvgPrice  // ✅ 使用 Leg1 独立的买入均价
+			avgCost = pas.firstStrat.BuyAvgPrice  // 使用 firstStrat 的买入均价
 			counterPrice = pas.bid1
 			leg1PnL = (counterPrice - avgCost) * float64(pas.leg1Position)
 		} else {
 			// Leg1 空头: 使用买一价（ask），因为平仓时要买入
 			// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0])
-			avgCost = pas.leg1SellAvgPrice  // ✅ 使用 Leg1 独立的卖出均价
+			avgCost = pas.firstStrat.SellAvgPrice  // 使用 firstStrat 的卖出均价
 			counterPrice = pas.ask1
 			leg1PnL = (avgCost - counterPrice) * float64(-pas.leg1Position)
 		}
@@ -2033,7 +1984,7 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 			pas.ID, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice)
 	}
 
-	// Leg2 浮动盈亏（使用对手价和 Leg2 独立的平均价格）
+	// Leg2 浮动盈亏（使用对手价和 secondStrat 的平均价格）
 	// 参考 tbsrc ExecutionStrategy::CalculatePNL
 	if pas.leg2Position != 0 {
 		var leg2PnL float64
@@ -2042,12 +1993,12 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 
 		if pas.leg2Position > 0 {
 			// Leg2 多头: 使用卖一价（bid）
-			avgCost = pas.leg2BuyAvgPrice  // ✅ 使用 Leg2 独立的买入均价
+			avgCost = pas.secondStrat.BuyAvgPrice  // 使用 secondStrat 的买入均价
 			counterPrice = pas.bid2
 			leg2PnL = (counterPrice - avgCost) * float64(pas.leg2Position)
 		} else {
 			// Leg2 空头: 使用买一价（ask）
-			avgCost = pas.leg2SellAvgPrice  // ✅ 使用 Leg2 独立的卖出均价
+			avgCost = pas.secondStrat.SellAvgPrice  // 使用 secondStrat 的卖出均价
 			counterPrice = pas.ask2
 			leg2PnL = (avgCost - counterPrice) * float64(-pas.leg2Position)
 		}

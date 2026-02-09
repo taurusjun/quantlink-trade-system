@@ -767,6 +767,8 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 				log.Printf("[WebSocket] Order %s raw status value: %d", orderID, orderUpdate.Status)
 			}
 			switch orderUpdate.Status {
+			case 0: // STATUS_UNKNOWN - 订单刚发送，等待确认
+				status = "PENDING"
 			case 1: // PENDING
 				status = "PENDING"
 			case 2: // SUBMITTED
@@ -786,7 +788,7 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 			case 9: // EXPIRED
 				status = "EXPIRED"
 			default:
-				status = "UNKNOWN"
+				status = "PENDING" // 默认显示为 PENDING 而非 UNKNOWN
 			}
 			if orderIdx < 5 {
 				log.Printf("[WebSocket] Order %s mapped to status: %s", orderID, status)

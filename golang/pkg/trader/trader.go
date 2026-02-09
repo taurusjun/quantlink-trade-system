@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -602,23 +603,57 @@ func (t *Trader) verifyPositionsOnStartup() error {
 
 	if len(mismatches) > 0 {
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
-		log.Println("[Trader] ⚠️  CRITICAL: Position mismatch on startup!")
+		log.Println("[Trader] ⚠️  Position mismatch detected, auto-correcting...")
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
 		log.Println("[Trader] CTP positions do not match saved positions:")
 		for _, msg := range mismatches {
 			log.Printf("[Trader]     %s", msg)
 		}
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
-		log.Println("[Trader] This may indicate:")
-		log.Println("[Trader]   1. External trades were executed (from other software)")
-		log.Println("[Trader]   2. System was not shut down properly")
-		log.Println("[Trader]   3. Position data corruption")
-		log.Println("[Trader] ════════════════════════════════════════════════════════════")
-		log.Println("[Trader] Please verify positions manually before restarting!")
-		log.Println("[Trader] To skip this check, delete: data/positions/*.json")
-		log.Println("[Trader] ════════════════════════════════════════════════════════════")
+		log.Println("[Trader] Auto-correction: Using CTP positions as source of truth")
 
-		return fmt.Errorf("position mismatch on startup: CTP positions do not match saved positions")
+		// 1. 清除旧的持仓文件
+		log.Println("[Trader] Step 1: Clearing old position files...")
+		if err := t.clearPositionFiles(); err != nil {
+			log.Printf("[Trader] Warning: Failed to clear position files: %v", err)
+		}
+
+		// 2. 等待 CTP 持仓查询完成并重新获取最新数据
+		log.Println("[Trader] Step 2: Waiting for CTP position query to complete...")
+		if err := t.waitForCTPPositionReady(); err != nil {
+			log.Printf("[Trader] Warning: Failed to wait for CTP positions: %v", err)
+		}
+
+		// 获取最新的 CTP 持仓
+		t.positionsMu.RLock()
+		latestPosMap := make(map[string]int64)
+		for _, posList := range t.positionsByExchange {
+			for _, pos := range posList {
+				qty := int64(pos.Volume)
+				if pos.Direction == "SHORT" || pos.Direction == "short" {
+					qty = -qty
+				}
+				latestPosMap[pos.Symbol] += qty
+			}
+		}
+		t.positionsMu.RUnlock()
+
+		// 3. 使用 CTP 查询的持仓初始化策略
+		log.Println("[Trader] Step 3: Initializing strategies with CTP positions...")
+		if err := t.initializeStrategiesWithCTPPositions(latestPosMap); err != nil {
+			log.Printf("[Trader] Warning: Failed to initialize strategies: %v", err)
+		}
+
+		// 4. 保存新的持仓文件
+		log.Println("[Trader] Step 4: Saving new position files...")
+		if err := t.savePositionSnapshots(); err != nil {
+			log.Printf("[Trader] Warning: Failed to save position snapshots: %v", err)
+		}
+
+		log.Println("[Trader] ════════════════════════════════════════════════════════════")
+		log.Println("[Trader] ✓ Position auto-correction completed")
+		log.Println("[Trader] ════════════════════════════════════════════════════════════")
+		return nil
 	}
 
 	log.Println("[Trader] ✓ Position verification passed: CTP positions match saved positions")
@@ -1333,4 +1368,178 @@ func (t *Trader) GetModelReloadHistory() []ModelReloadHistory {
 	}
 
 	return t.ModelWatcher.GetHistory(10)
+}
+
+// waitForCTPPositionReady 等待 CTP 持仓查询完成
+// CTP 查询接口返回 -1 表示还在查询中，需要等待
+func (t *Trader) waitForCTPPositionReady() error {
+	if t.Engine == nil {
+		return fmt.Errorf("engine not initialized")
+	}
+
+	orsClient := t.Engine.GetORSClient()
+	if orsClient == nil {
+		return fmt.Errorf("ORS client not available")
+	}
+
+	maxRetries := 30 // 最多等待 60 秒
+	retryInterval := 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		log.Printf("[Trader] Waiting for CTP position query to complete (attempt %d/%d)...", attempt, maxRetries)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		positions, err := orsClient.QueryPositions(ctx, "", "")
+		cancel()
+
+		if err == nil && positions != nil {
+			// 检查是否有有效数据（不是 -1 状态）
+			hasValidData := false
+			for _, posList := range positions {
+				if len(posList) > 0 {
+					// 检查第一个持仓数据是否有效（Volume >= 0）
+					for _, pos := range posList {
+						if pos.Volume >= 0 {
+							hasValidData = true
+							break
+						}
+					}
+				}
+				if hasValidData {
+					break
+				}
+			}
+
+			if hasValidData || len(positions) == 0 {
+				// 有有效数据或没有持仓
+				log.Printf("[Trader] ✓ CTP position query completed (attempt %d)", attempt)
+
+				// 更新 positionsByExchange
+				t.positionsMu.Lock()
+				t.positionsByExchange = positions
+				t.positionsMu.Unlock()
+
+				return nil
+			}
+		}
+
+		if err != nil {
+			log.Printf("[Trader] Position query attempt %d: %v", attempt, err)
+		} else {
+			log.Printf("[Trader] Position query attempt %d: data not ready yet", attempt)
+		}
+
+		if attempt < maxRetries {
+			time.Sleep(retryInterval)
+		}
+	}
+
+	return fmt.Errorf("CTP position query did not complete after %d attempts", maxRetries)
+}
+
+// clearPositionFiles 清除所有持仓快照文件
+func (t *Trader) clearPositionFiles() error {
+	positionDir := "data/positions"
+
+	// 检查目录是否存在
+	if _, err := os.Stat(positionDir); os.IsNotExist(err) {
+		log.Printf("[Trader] Position directory does not exist: %s", positionDir)
+		return nil
+	}
+
+	// 读取目录中的所有文件
+	files, err := os.ReadDir(positionDir)
+	if err != nil {
+		return fmt.Errorf("failed to read position directory: %w", err)
+	}
+
+	// 删除所有 .json 文件
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+			filePath := filepath.Join(positionDir, file.Name())
+			if err := os.Remove(filePath); err != nil {
+				log.Printf("[Trader] Warning: Failed to remove %s: %v", filePath, err)
+			} else {
+				log.Printf("[Trader] Removed old position file: %s", filePath)
+			}
+		}
+	}
+
+	return nil
+}
+
+// initializeStrategiesWithCTPPositions 使用 CTP 持仓初始化策略
+func (t *Trader) initializeStrategiesWithCTPPositions(ctpPosMap map[string]int64) error {
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		// 多策略模式
+		for _, sid := range t.StrategyMgr.GetStrategyIDs() {
+			strat, exists := t.StrategyMgr.GetStrategy(sid)
+			if !exists {
+				log.Printf("[Trader] Warning: Strategy %s not found", sid)
+				continue
+			}
+
+			if posInit, ok := strat.(strategy.PositionInitializer); ok {
+				if err := posInit.InitializePositions(ctpPosMap); err != nil {
+					log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", sid, err)
+				} else {
+					log.Printf("[Trader] Initialized positions for strategy %s from CTP", sid)
+				}
+			}
+		}
+	} else if t.Strategy != nil {
+		// 单策略模式
+		if posInit, ok := t.Strategy.(strategy.PositionInitializer); ok {
+			if err := posInit.InitializePositions(ctpPosMap); err != nil {
+				return fmt.Errorf("failed to initialize positions: %w", err)
+			}
+			log.Printf("[Trader] Initialized positions for strategy %s from CTP", t.Strategy.GetID())
+		}
+	}
+
+	return nil
+}
+
+// savePositionSnapshots 保存所有策略的持仓快照
+func (t *Trader) savePositionSnapshots() error {
+	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+		// 多策略模式
+		for _, sid := range t.StrategyMgr.GetStrategyIDs() {
+			strat, exists := t.StrategyMgr.GetStrategy(sid)
+			if !exists {
+				log.Printf("[Trader] Warning: Strategy %s not found", sid)
+				continue
+			}
+
+			if posProvider, ok := strat.(strategy.PositionProvider); ok {
+				posMap := posProvider.GetPositionsBySymbol()
+				snapshot := strategy.PositionSnapshot{
+					StrategyID: sid,
+					Timestamp:  time.Now(),
+					SymbolsPos: posMap,
+				}
+				if err := strategy.SavePositionSnapshot(snapshot); err != nil {
+					log.Printf("[Trader] Warning: Failed to save positions for %s: %v", sid, err)
+				} else {
+					log.Printf("[Trader] Saved position snapshot for strategy %s", sid)
+				}
+			}
+		}
+	} else if t.Strategy != nil {
+		// 单策略模式
+		if posProvider, ok := t.Strategy.(strategy.PositionProvider); ok {
+			posMap := posProvider.GetPositionsBySymbol()
+			snapshot := strategy.PositionSnapshot{
+				StrategyID: t.Strategy.GetID(),
+				Timestamp:  time.Now(),
+				SymbolsPos: posMap,
+			}
+			if err := strategy.SavePositionSnapshot(snapshot); err != nil {
+				return fmt.Errorf("failed to save positions: %w", err)
+			}
+			log.Printf("[Trader] Saved position snapshot for strategy %s", t.Strategy.GetID())
+		}
+	}
+
+	return nil
 }

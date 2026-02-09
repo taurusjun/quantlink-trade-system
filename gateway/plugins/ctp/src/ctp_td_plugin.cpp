@@ -1284,6 +1284,8 @@ void CTPTDPlugin::UpdatePositionFromCTP() {
     }
 
     // 更新持仓管理数据
+    // CTP 可能对同一合约的同一方向返回多条记录（今仓/昨仓分别返回）
+    // 需要累加而不是覆盖
     std::lock_guard<std::mutex> pos_lock(m_position_mutex);
     m_positions.clear();
 
@@ -1295,19 +1297,27 @@ void CTPTDPlugin::UpdatePositionFromCTP() {
         pos.exchange = pos_info.exchange;
 
         if (pos_info.direction == OrderDirection::BUY) {
-            // 多头持仓
-            pos.long_position = pos_info.volume;
-            pos.long_today_position = pos_info.today_volume;
-            pos.long_yesterday_position = pos_info.yesterday_volume;
-            pos.long_avg_price = pos_info.avg_price;
+            // 多头持仓 - 累加
+            pos.long_position += pos_info.volume;
+            pos.long_today_position += pos_info.today_volume;
+            pos.long_yesterday_position += pos_info.yesterday_volume;
+            // 均价取最后一条的值（或者应该加权平均，但这里简化处理）
+            if (pos_info.avg_price > 0) {
+                pos.long_avg_price = pos_info.avg_price;
+            }
         } else {
-            // 空头持仓
-            pos.short_position = pos_info.volume;
-            pos.short_today_position = pos_info.today_volume;
-            pos.short_yesterday_position = pos_info.yesterday_volume;
-            pos.short_avg_price = pos_info.avg_price;
+            // 空头持仓 - 累加
+            pos.short_position += pos_info.volume;
+            pos.short_today_position += pos_info.today_volume;
+            pos.short_yesterday_position += pos_info.yesterday_volume;
+            if (pos_info.avg_price > 0) {
+                pos.short_avg_price = pos_info.avg_price;
+            }
         }
+    }
 
+    // 打印最终的持仓状态
+    for (const auto& [symbol, pos] : m_positions) {
         std::cout << "[CTPTDPlugin] Position: " << symbol
                   << " Long=" << pos.long_position << "(T:" << pos.long_today_position << ",Y:" << pos.long_yesterday_position << ")"
                   << " Short=" << pos.short_position << "(T:" << pos.short_today_position << ",Y:" << pos.short_yesterday_position << ")"
