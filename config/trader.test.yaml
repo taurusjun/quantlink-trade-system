@@ -45,6 +45,15 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 20.0       # 跳跃tick数
       aggressive_fail_threshold: 3.0    # 失败阈值
+      # 多层挂单参数（C++: MAX_QUOTE_LEVEL）
+      enable_multi_level: false         # 是否启用多层挂单（默认关闭）
+      max_quote_level: 3                # 最大挂单层数
+      quote_level_sizes: [4, 3, 2]      # 每层下单量
+      # 价格优化参数
+      enable_price_optimize: false      # 是否启用价格优化（默认关闭）
+      price_optimize_gap: 2             # 触发优化的 tick 跳跃数
+      tick_size_1: 1.0                  # Leg1 最小变动单位
+      tick_size_2: 1.0                  # Leg2 最小变动单位
 
   # 策略2: 黄金配对套利 (au2604/au2606)
   - id: "test_92202"                    # 策略唯一标识符（黄金）

@@ -46,6 +46,15 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 20.0       # 跳跃tick数
       aggressive_fail_threshold: 3.0    # 失败阈值
+      # 多层挂单参数 (C++: MAX_QUOTE_LEVEL)
+      enable_multi_level: false         # 是否启用多层挂单（实盘默认关闭）
+      max_quote_level: 3                # 最大挂单层数
+      quote_level_sizes: [2, 1, 1]      # 每层下单量（实盘：更保守）
+      # 价格优化参数
+      enable_price_optimize: false      # 是否启用价格优化（实盘默认关闭）
+      price_optimize_gap: 2             # 触发优化的 tick 跳跃数
+      tick_size_1: 1.0                  # Leg1 最小变动单位（白银：1元/千克）
+      tick_size_2: 1.0                  # Leg2 最小变动单位（白银：1元/千克）
 
   # 策略2: 黄金配对套利 (au2604/au2606)
   - id: "live_au_spread"                # 策略唯一标识符（黄金）
@@ -80,6 +89,15 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 10.0       # 跳跃tick数（黄金tick较小）
       aggressive_fail_threshold: 3.0    # 失败阈值
+      # 多层挂单参数 (C++: MAX_QUOTE_LEVEL)
+      enable_multi_level: false         # 是否启用多层挂单（实盘默认关闭）
+      max_quote_level: 3                # 最大挂单层数
+      quote_level_sizes: [1, 1, 1]      # 每层下单量（黄金：更保守）
+      # 价格优化参数
+      enable_price_optimize: false      # 是否启用价格优化（实盘默认关闭）
+      price_optimize_gap: 3             # 触发优化的 tick 跳跃数（黄金tick小，gap大一点）
+      tick_size_1: 0.02                 # Leg1 最小变动单位（黄金：0.02元/克）
+      tick_size_2: 0.02                 # Leg2 最小变动单位（黄金：0.02元/克）
 
 # ═══════════════════════════════════════════════════════════
 # Instrument Specifications (品种规格配置)

@@ -92,6 +92,27 @@ type PairwiseArbStrategy struct {
 	leg2BuyTotalValue float64
 	leg2SellTotalValue float64
 
+	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
+	maxQuoteLevel    int     // 最大挂单层数 (默认: 1, 仅一档)
+	quoteLevelSizes  []int64 // 每层下单量 (默认: [orderSize])
+	enableMultiLevel bool    // 是否启用多层挂单
+
+	// 订单簿深度（5档价格）
+	bidPrices1 []float64 // Leg1 买盘 5 档价格
+	askPrices1 []float64 // Leg1 卖盘 5 档价格
+	bidPrices2 []float64 // Leg2 买盘 5 档价格
+	askPrices2 []float64 // Leg2 卖盘 5 档价格
+
+	// 挂单映射（C++: m_bidMap/m_askMap）
+	leg1OrderMap *OrderPriceMap // Leg1 订单映射
+	leg2OrderMap *OrderPriceMap // Leg2 订单映射
+
+	// 价格优化参数（C++: GetBidPrice_first 隐性订单簿检测）
+	enablePriceOptimize bool    // 是否启用价格优化
+	priceOptimizeGap    int     // 触发优化的 tick 跳跃数
+	tickSize1           float64 // Leg1 最小变动单位
+	tickSize2           float64 // Leg2 最小变动单位
+
 	mu sync.RWMutex
 }
 
@@ -113,6 +134,23 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 		minTradeInterval: 3 * time.Second,
 		// SpreadAnalyzer 将在 Initialize 中创建（需要知道 symbol 名称）
 		spreadAnalyzer:   nil,
+		// 多层挂单默认值
+		maxQuoteLevel:    1,
+		quoteLevelSizes:  []int64{10},
+		enableMultiLevel: false,
+		// 订单簿深度
+		bidPrices1: make([]float64, 5),
+		askPrices1: make([]float64, 5),
+		bidPrices2: make([]float64, 5),
+		askPrices2: make([]float64, 5),
+		// 订单映射
+		leg1OrderMap: NewOrderPriceMap(),
+		leg2OrderMap: NewOrderPriceMap(),
+		// 价格优化默认值
+		enablePriceOptimize: false,
+		priceOptimizeGap:    2,
+		tickSize1:           1.0,
+		tickSize2:           1.0,
 	}
 
 	// 预创建一个临时的 SpreadAnalyzer（将在 Initialize 时重新创建）
@@ -237,6 +275,51 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	pas.aggRepeat = 1
 	pas.aggDirection = 0
 
+	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
+	if val, ok := config.Parameters["enable_multi_level"].(bool); ok {
+		pas.enableMultiLevel = val
+	}
+	if val, ok := config.Parameters["max_quote_level"].(float64); ok {
+		pas.maxQuoteLevel = int(val)
+		if pas.maxQuoteLevel < 1 {
+			pas.maxQuoteLevel = 1
+		}
+		if pas.maxQuoteLevel > 5 {
+			pas.maxQuoteLevel = 5 // 最多支持 5 档
+		}
+	}
+	// 每层下单量（支持数组配置）
+	if val, ok := config.Parameters["quote_level_sizes"].([]interface{}); ok {
+		pas.quoteLevelSizes = make([]int64, 0, len(val))
+		for _, v := range val {
+			if size, ok := v.(float64); ok {
+				pas.quoteLevelSizes = append(pas.quoteLevelSizes, int64(size))
+			}
+		}
+	}
+	// 如果未配置每层量，则使用默认的 orderSize
+	if len(pas.quoteLevelSizes) == 0 {
+		pas.quoteLevelSizes = make([]int64, pas.maxQuoteLevel)
+		for i := range pas.quoteLevelSizes {
+			pas.quoteLevelSizes[i] = pas.orderSize
+		}
+	}
+
+	// 价格优化参数
+	if val, ok := config.Parameters["enable_price_optimize"].(bool); ok {
+		pas.enablePriceOptimize = val
+	}
+	if val, ok := config.Parameters["price_optimize_gap"].(float64); ok {
+		pas.priceOptimizeGap = int(val)
+	}
+	// tick_size 参数
+	if val, ok := config.Parameters["tick_size_1"].(float64); ok {
+		pas.tickSize1 = val
+	}
+	if val, ok := config.Parameters["tick_size_2"].(float64); ok {
+		pas.tickSize2 = val
+	}
+
 	log.Printf("[PairwiseArbStrategy:%s] Initialized %s/%s, entry_z=%.2f, exit_z=%.2f, lookback=%d, min_corr=%.2f, slippage=%d ticks",
 		pas.ID, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod, pas.minCorrelation, pas.slippageTicks)
 	if pas.useDynamicThreshold {
@@ -246,6 +329,14 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if pas.aggressiveEnabled {
 		log.Printf("[PairwiseArbStrategy:%s] Aggressive order enabled: interval=%v, max_retry=%d, slop_ticks=%d",
 			pas.ID, pas.aggressiveInterval, pas.aggressiveMaxRetry, pas.aggressiveSlopTicks)
+	}
+	if pas.enableMultiLevel {
+		log.Printf("[PairwiseArbStrategy:%s] Multi-level quoting enabled: max_level=%d, sizes=%v",
+			pas.ID, pas.maxQuoteLevel, pas.quoteLevelSizes)
+	}
+	if pas.enablePriceOptimize {
+		log.Printf("[PairwiseArbStrategy:%s] Price optimize enabled: gap=%d ticks, tick_size1=%.2f, tick_size2=%.2f",
+			pas.ID, pas.priceOptimizeGap, pas.tickSize1, pas.tickSize2)
 	}
 
 	return nil
@@ -274,11 +365,15 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		pas.bid1 = md.BidPrice[0]
 		pas.ask1 = md.AskPrice[0]
 		pas.spreadAnalyzer.UpdatePrice1(midPrice, int64(md.Timestamp))
+		// 更新订单簿深度（多层挂单用）
+		pas.updateOrderbookDepth(md.BidPrice, md.AskPrice, true)
 	} else if md.Symbol == pas.symbol2 {
 		pas.price2 = midPrice
 		pas.bid2 = md.BidPrice[0]
 		pas.ask2 = md.AskPrice[0]
 		pas.spreadAnalyzer.UpdatePrice2(midPrice, int64(md.Timestamp))
+		// 更新订单簿深度（多层挂单用）
+		pas.updateOrderbookDepth(md.BidPrice, md.AskPrice, false)
 	}
 
 	// Need both prices to calculate spread
@@ -371,7 +466,12 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Generate signals based on z-score
-	pas.generateSignals(md)
+	// 使用多层挂单或单层挂单
+	if pas.enableMultiLevel {
+		pas.generateMultiLevelSignals(md)
+	} else {
+		pas.generateSignals(md)
+	}
 	pas.lastTradeTime = now
 }
 
@@ -405,6 +505,28 @@ func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	if pas.leg1Position != 0 && math.Abs(spreadStats.ZScore) <= pas.exitZScore {
 		// Spread has reverted to mean - close positions
 		pas.generateExitSignals(md)
+	}
+}
+
+// updateOrderbookDepth 更新订单簿深度数据
+// 用于多层挂单时获取各档价格
+func (pas *PairwiseArbStrategy) updateOrderbookDepth(bidPrices, askPrices []float64, isLeg1 bool) {
+	if isLeg1 {
+		// 更新 Leg1 的订单簿深度
+		for i := 0; i < len(pas.bidPrices1) && i < len(bidPrices); i++ {
+			pas.bidPrices1[i] = bidPrices[i]
+		}
+		for i := 0; i < len(pas.askPrices1) && i < len(askPrices); i++ {
+			pas.askPrices1[i] = askPrices[i]
+		}
+	} else {
+		// 更新 Leg2 的订单簿深度
+		for i := 0; i < len(pas.bidPrices2) && i < len(bidPrices); i++ {
+			pas.bidPrices2[i] = bidPrices[i]
+		}
+		for i := 0; i < len(pas.askPrices2) && i < len(askPrices); i++ {
+			pas.askPrices2[i] = askPrices[i]
+		}
 	}
 }
 
@@ -569,6 +691,256 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 
 	// 注意：不在这里直接重置持仓
 	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
+}
+
+// generateMultiLevelSignals 生成多层挂单信号
+// C++: 对应 MAX_QUOTE_LEVEL 多层挂单逻辑，在多个价位同时挂单
+//
+// 多层挂单的好处：
+// 1. 提高成交概率：如果一档没有成交，二档、三档仍有机会
+// 2. 降低滑点：被动挂单而非主动吃单
+// 3. 分散风险：不同价位的仓位分配
+func (pas *PairwiseArbStrategy) generateMultiLevelSignals(md *mdpb.MarketDataUpdate) {
+	// Get current statistics from SpreadAnalyzer
+	spreadStats := pas.spreadAnalyzer.GetStats()
+
+	if spreadStats.Std < 1e-10 {
+		return
+	}
+
+	// Exit signals - 平仓信号不使用多层挂单
+	if pas.leg1Position != 0 && math.Abs(spreadStats.ZScore) <= pas.exitZScore {
+		pas.generateExitSignals(md)
+		return
+	}
+
+	// Check position limits
+	if math.Abs(float64(pas.leg1Position)) >= float64(pas.maxPositionSize) {
+		return
+	}
+
+	// 遍历每一层，生成挂单信号
+	for level := 0; level < pas.maxQuoteLevel; level++ {
+		// 确保有足够的订单簿深度数据
+		if level >= len(pas.bidPrices1) || level >= len(pas.askPrices1) {
+			break
+		}
+
+		// 获取该层的挂单价格
+		bidPrice := pas.bidPrices1[level]
+		askPrice := pas.askPrices1[level]
+
+		// 跳过无效价格
+		if bidPrice <= 0 || askPrice <= 0 {
+			continue
+		}
+
+		// 检查该层是否已有挂单（避免重复挂单）
+		if pas.leg1OrderMap.HasOrderAtPrice(bidPrice, OrderSideBuy) {
+			continue
+		}
+		if pas.leg1OrderMap.HasOrderAtPrice(askPrice, OrderSideSell) {
+			continue
+		}
+
+		// 获取该层的下单量
+		qty := pas.orderSize
+		if level < len(pas.quoteLevelSizes) {
+			qty = pas.quoteLevelSizes[level]
+		}
+
+		// 计算该层的价差
+		// 做多 spread：用 Leg1 买价 - Leg2 卖价
+		// 做空 spread：用 Leg1 卖价 - Leg2 买价
+		longSpread := bidPrice - pas.ask2
+		shortSpread := askPrice - pas.bid2
+
+		// 计算该层的等效 Z-Score
+		longZScore := 0.0
+		shortZScore := 0.0
+		if spreadStats.Std > 1e-10 {
+			longZScore = (longSpread - spreadStats.Mean) / spreadStats.Std
+			shortZScore = (shortSpread - spreadStats.Mean) / spreadStats.Std
+		}
+
+		// 优化挂单价格（检测隐性订单簿）
+		optimizedBidPrice := pas.optimizeOrderPrice(OrderSideBuy, level, bidPrice, pas.tickSize1)
+		optimizedAskPrice := pas.optimizeOrderPrice(OrderSideSell, level, askPrice, pas.tickSize1)
+
+		// 做多信号：-longZScore >= entryZScoreBid
+		// 注意：longZScore 通常为负（因为买价 < 卖价），所以取负值比较
+		if -longZScore >= pas.entryZScoreBid {
+			pas.generateLevelSignal("long", level, optimizedBidPrice, qty, spreadStats)
+		}
+
+		// 做空信号：shortZScore >= entryZScoreAsk
+		if shortZScore >= pas.entryZScoreAsk {
+			pas.generateLevelSignal("short", level, optimizedAskPrice, qty, spreadStats)
+		}
+	}
+}
+
+// generateLevelSignal 生成指定层级的挂单信号
+// C++: 对应每层独立的信号生成逻辑
+func (pas *PairwiseArbStrategy) generateLevelSignal(direction string, level int, price float64, qty int64, stats spread.SpreadStats) {
+	var signal1Side, signal2Side OrderSide
+	if direction == "long" {
+		signal1Side = OrderSideBuy
+		signal2Side = OrderSideSell
+	} else {
+		signal1Side = OrderSideSell
+		signal2Side = OrderSideBuy
+	}
+
+	// Calculate hedge quantity using current hedge ratio
+	hedgeQty := int64(math.Round(float64(qty) * stats.HedgeRatio))
+
+	// Generate signal for leg 1 (被动单)
+	signal1 := &TradingSignal{
+		StrategyID:  pas.ID,
+		Symbol:      pas.symbol1,
+		Side:        signal1Side,
+		Price:       price,
+		Quantity:    qty,
+		OrderType:   OrderTypeLimit,
+		TimeInForce: TimeInForceGTC,
+		Signal:      -stats.ZScore,
+		Confidence:  math.Min(1.0, math.Abs(stats.ZScore)/5.0),
+		Timestamp:   time.Now(),
+		Category:    SignalCategoryPassive, // 被动单
+		QuoteLevel:  level,
+		Metadata: map[string]interface{}{
+			"type":        "entry",
+			"leg":         1,
+			"direction":   direction,
+			"level":       level,
+			"z_score":     stats.ZScore,
+			"spread":      stats.CurrentSpread,
+			"hedge_ratio": stats.HedgeRatio,
+		},
+	}
+	pas.BaseStrategy.AddSignal(signal1)
+
+	// 计算 Leg2 的挂单价格
+	var price2 float64
+	if direction == "long" {
+		// 做多 spread：Leg2 卖出，使用 ask 价格
+		if level < len(pas.askPrices2) && pas.askPrices2[level] > 0 {
+			price2 = pas.optimizeOrderPrice(signal2Side, level, pas.askPrices2[level], pas.tickSize2)
+		} else {
+			price2 = pas.ask2
+		}
+	} else {
+		// 做空 spread：Leg2 买入，使用 bid 价格
+		if level < len(pas.bidPrices2) && pas.bidPrices2[level] > 0 {
+			price2 = pas.optimizeOrderPrice(signal2Side, level, pas.bidPrices2[level], pas.tickSize2)
+		} else {
+			price2 = pas.bid2
+		}
+	}
+
+	// Generate signal for leg 2 (被动单)
+	signal2 := &TradingSignal{
+		StrategyID:  pas.ID,
+		Symbol:      pas.symbol2,
+		Side:        signal2Side,
+		Price:       price2,
+		Quantity:    hedgeQty,
+		OrderType:   OrderTypeLimit,
+		TimeInForce: TimeInForceGTC,
+		Signal:      stats.ZScore,
+		Confidence:  math.Min(1.0, math.Abs(stats.ZScore)/5.0),
+		Timestamp:   time.Now(),
+		Category:    SignalCategoryPassive, // 被动单
+		QuoteLevel:  level,
+		Metadata: map[string]interface{}{
+			"type":        "entry",
+			"leg":         2,
+			"direction":   direction,
+			"level":       level,
+			"z_score":     stats.ZScore,
+			"spread":      stats.CurrentSpread,
+			"hedge_ratio": stats.HedgeRatio,
+		},
+	}
+	pas.BaseStrategy.AddSignal(signal2)
+
+	log.Printf("[PairwiseArbStrategy:%s] Level %d %s spread: z=%.2f, leg1=%v@%.2f %d, leg2=%v@%.2f %d",
+		pas.ID, level, direction, stats.ZScore, signal1Side, price, qty, signal2Side, price2, hedgeQty)
+}
+
+// optimizeOrderPrice 优化挂单价格
+// C++: 对应 GetBidPrice_first() 等方法中的隐性订单簿检测
+//
+// 当检测到价格跳跃（隐性订单簿）时，可以适当优化挂单价格以提高成交概率
+// 例如：如果二档和一档之间有较大的价格跳跃，可能存在隐性流动性
+//
+// 参数:
+//   - side: 买卖方向
+//   - level: 当前挂单层级
+//   - basePrice: 基础挂单价格
+//   - tickSize: 最小变动单位
+//
+// 返回优化后的价格
+func (pas *PairwiseArbStrategy) optimizeOrderPrice(side OrderSide, level int, basePrice float64, tickSize float64) float64 {
+	// 一档不优化，或者未启用价格优化
+	if level == 0 || !pas.enablePriceOptimize {
+		return basePrice
+	}
+
+	// 获取前一档价格
+	var prevPrice float64
+	if side == OrderSideBuy {
+		if level-1 < len(pas.bidPrices1) {
+			prevPrice = pas.bidPrices1[level-1]
+		}
+	} else {
+		if level-1 < len(pas.askPrices1) {
+			prevPrice = pas.askPrices1[level-1]
+		}
+	}
+
+	if prevPrice <= 0 {
+		return basePrice
+	}
+
+	// 计算价格跳跃（tick 数）
+	var gap float64
+	if side == OrderSideBuy {
+		// 买单：前一档价格 > 当前档价格，gap = (prevPrice - basePrice) / tickSize
+		gap = (prevPrice - basePrice) / tickSize
+	} else {
+		// 卖单：前一档价格 < 当前档价格，gap = (basePrice - prevPrice) / tickSize
+		gap = (basePrice - prevPrice) / tickSize
+	}
+
+	// 检测是否存在价格跳跃
+	if gap > float64(pas.priceOptimizeGap) {
+		// 存在隐性订单簿，优化挂单价格
+		var optimizedPrice float64
+		if side == OrderSideBuy {
+			// 买单：尝试提高价格一个 tick（更激进）
+			optimizedPrice = basePrice + tickSize
+		} else {
+			// 卖单：尝试降低价格一个 tick（更激进）
+			optimizedPrice = basePrice - tickSize
+		}
+
+		// 验证优化后的价格是否合理
+		// 买单优化价格不能超过前一档价格
+		// 卖单优化价格不能低于前一档价格
+		if side == OrderSideBuy && optimizedPrice < prevPrice {
+			log.Printf("[PairwiseArbStrategy:%s] Price optimize: level=%d, gap=%.0f ticks, %.2f -> %.2f",
+				pas.ID, level, gap, basePrice, optimizedPrice)
+			return optimizedPrice
+		} else if side == OrderSideSell && optimizedPrice > prevPrice {
+			log.Printf("[PairwiseArbStrategy:%s] Price optimize: level=%d, gap=%.0f ticks, %.2f -> %.2f",
+				pas.ID, level, gap, basePrice, optimizedPrice)
+			return optimizedPrice
+		}
+	}
+
+	return basePrice
 }
 
 // setDynamicThresholds 根据持仓动态调整入场阈值
@@ -782,6 +1154,9 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	pas.UpdatePosition(update)
 	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.ID, pas.EstimatedPosition)
 
+	// 维护订单映射（多层挂单用）
+	pas.updateOrderMaps(update)
+
 	// Update leg-specific positions (similar to tbsrc: each leg has its own ExecutionStrategy)
 	// 参考 tbsrc ExecutionStrategy::TradeCallBack
 	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
@@ -806,6 +1181,63 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 			pas.aggRepeat = 1
 			pas.aggDirection = 0
 			pas.aggFailCount = 0 // 成功清除敞口，重置失败计数
+		}
+	}
+}
+
+// updateOrderMaps 根据订单状态更新订单映射
+// C++: 维护 m_bidMap/m_askMap 用于避免重复挂单
+func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
+	if !pas.enableMultiLevel {
+		return // 未启用多层挂单，不需要维护订单映射
+	}
+
+	symbol := update.Symbol
+	orderID := update.OrderId
+	var orderMap *OrderPriceMap
+
+	// 确定是哪个 leg 的订单
+	if symbol == pas.symbol1 {
+		orderMap = pas.leg1OrderMap
+	} else if symbol == pas.symbol2 {
+		orderMap = pas.leg2OrderMap
+	} else {
+		return // 不属于本策略的品种
+	}
+
+	switch update.Status {
+	case orspb.OrderStatus_ACCEPTED, orspb.OrderStatus_PARTIALLY_FILLED:
+		// 订单确认或部分成交，添加到映射
+		var side OrderSide
+		if update.Side == orspb.OrderSide_BUY {
+			side = OrderSideBuy
+		} else {
+			side = OrderSideSell
+		}
+
+		// 从订单中获取 level（如果在 metadata 中）
+		level := 0
+		// 注意：实际实现中可能需要从订单的扩展字段获取 level
+
+		order := &PriceOrder{
+			Price:     update.Price,
+			OrderID:   orderID,
+			Symbol:    symbol,
+			Side:      side,
+			Quantity:  int64(update.Quantity),
+			FilledQty: int64(update.FilledQty),
+			Level:     level,
+		}
+		orderMap.AddOrder(order)
+		log.Printf("[PairwiseArb:%s] Added order to map: %s@%.2f, side=%v, level=%d",
+			pas.ID, orderID, update.Price, side, level)
+
+	case orspb.OrderStatus_FILLED, orspb.OrderStatus_CANCELED, orspb.OrderStatus_REJECTED:
+		// 订单完成或取消，从映射中移除
+		removed := orderMap.RemoveOrder(orderID)
+		if removed != nil {
+			log.Printf("[PairwiseArb:%s] Removed order from map: %s@%.2f, status=%v",
+				pas.ID, orderID, removed.Price, update.Status)
 		}
 	}
 }
