@@ -5,16 +5,30 @@ set -e
 # 脚本名称: test_simulator_e2e.sh
 # 用途: 模拟交易所端到端测试
 # 作者: QuantLink Team
-# 日期: 2026-01-30
+# 日期: 2026-02-09
+#
+# 用法:
+#   ./scripts/test/e2e/test_simulator_e2e.sh           # 运行测试后退出
+#   ./scripts/test/e2e/test_simulator_e2e.sh --run     # 启动系统并保持运行
 #
 # 相关文档:
-#   - 实施报告: @docs/功能实现/模拟交易所完整实施计划_2026-01-30.md
 #   - 架构说明: @docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md
 # ============================================
 
 # 获取项目根目录
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$PROJECT_ROOT"
+
+# 参数解析
+RUN_MODE=false
+for arg in "$@"; do
+    case $arg in
+        --run)
+            RUN_MODE=true
+            shift
+            ;;
+    esac
+done
 
 # 颜色定义
 RED='\033[0;31m'
@@ -23,18 +37,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-log_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_section() {
     echo -e "\n${BLUE}========================================${NC}"
     echo -e "${BLUE}$1${NC}"
@@ -43,7 +49,11 @@ log_section() {
 
 # 清理函数
 cleanup() {
-    log_info "Cleaning up..."
+    if [ "$RUN_MODE" = true ]; then
+        log_info "Stopping all services..."
+    else
+        log_info "Cleaning up..."
+    fi
     pkill -f md_simulator || true
     pkill -f md_gateway || true
     pkill -f ors_gateway || true
@@ -68,17 +78,14 @@ start_component() {
         return 0
     else
         log_error "$name failed to start"
-        cat $logfile
+        cat $logfile | tail -20
         return 1
     fi
 }
 
-# 主测试逻辑
-main() {
-    log_section "Simulator End-to-End Test"
-
-    # 1. 直接启动各组件（不通过 start_simulator.sh，避免 exit trap 问题）
-    log_info "Starting system components..."
+# 启动系统
+start_system() {
+    log_section "Starting Simulator System"
     mkdir -p log data/simulator
 
     # 启动 NATS
@@ -88,13 +95,9 @@ main() {
     fi
     log_success "NATS server ready"
 
-    # 启动 md_simulator
+    # 启动各组件
     start_component "md_simulator" "./gateway/build/md_simulator" "log/md_simulator.log" || exit 1
-
-    # 启动 md_gateway
     start_component "md_gateway" "./gateway/build/md_gateway" "log/md_gateway.log" || exit 1
-
-    # 启动 ors_gateway
     start_component "ors_gateway" "./gateway/build/ors_gateway" "log/ors_gateway.log" || exit 1
 
     # 启动 counter_bridge
@@ -104,7 +107,7 @@ main() {
         log_success "counter_bridge started"
     else
         log_error "counter_bridge failed to start"
-        cat log/counter_bridge.log
+        cat log/counter_bridge.log | tail -20
         exit 1
     fi
 
@@ -115,25 +118,26 @@ main() {
         log_success "trader started"
     else
         log_error "trader failed to start"
-        cat log/trader.log
+        cat log/trader.log | tail -20
         exit 1
     fi
 
-    # 等待 API 服务就绪（使用轮询而不是固定等待）
+    # 等待 API 服务就绪
     log_info "Waiting for API to be ready..."
     for i in $(seq 1 30); do
         if curl -s http://localhost:9201/api/v1/strategy/status > /dev/null 2>&1; then
-            log_success "API is ready after ${i} seconds"
+            log_success "API is ready"
             break
         fi
         sleep 1
         echo -n "."
     done
     echo ""
+}
 
-    # 2. 验证所有进程运行
+# 验证进程
+verify_processes() {
     log_section "Verifying Processes"
-
     MISSING=""
     for proc in md_simulator md_gateway ors_gateway counter_bridge trader; do
         if pgrep -f "$proc" > /dev/null; then
@@ -146,29 +150,25 @@ main() {
 
     if [ -n "$MISSING" ]; then
         log_error "Missing processes:$MISSING"
-        cat log/simulator_e2e.log
         exit 1
     fi
+}
 
-    # 3. 测试 API 端点
+# 运行测试
+run_tests() {
+    # 测试 API 端点
     log_section "Testing API Endpoints"
 
-    # 策略状态
     log_info "Testing strategy status..."
     STATUS=$(curl -s http://localhost:9201/api/v1/strategy/status 2>&1 || echo "CURL_FAILED")
-    log_info "API Response: $STATUS"
-    if echo "$STATUS" | grep -q "strategy_id"; then
+    if echo "$STATUS" | grep -q "strategy_id\|success"; then
         log_success "Strategy status API working"
-    elif echo "$STATUS" | grep -q "success"; then
-        # API 返回成功但可能字段名不同
-        log_success "Strategy status API working (alternate format)"
     else
         log_error "Strategy status API failed"
         echo "$STATUS"
         exit 1
     fi
 
-    # 持仓查询
     log_info "Testing position query..."
     POSITIONS=$(curl -s http://localhost:8080/positions || echo "FAILED")
     if echo "$POSITIONS" | grep -q "success"; then
@@ -179,13 +179,10 @@ main() {
         exit 1
     fi
 
-    # 4. 激活策略
+    # 激活策略
     log_section "Activating Strategy"
-
     log_info "Sending activate request..."
     ACTIVATE_RESP=$(curl -s -X POST http://localhost:9201/api/v1/strategy/activate)
-    echo "$ACTIVATE_RESP"
-
     if echo "$ACTIVATE_RESP" | grep -q "success.*true"; then
         log_success "Strategy activated"
     else
@@ -193,17 +190,13 @@ main() {
         exit 1
     fi
 
-    # 5. 等待订单生成
+    # 等待订单生成
     log_section "Waiting for Orders"
-
     log_info "Monitoring for order generation (30 seconds)..."
-    TIMEOUT=30
+    TRADER_LOG="log/trader.test.log"
     ORDER_FOUND=0
 
-    # 检查 trader.test.log（配置中指定的日志文件）
-    TRADER_LOG="log/trader.test.log"
-
-    for i in $(seq 1 $TIMEOUT); do
+    for i in $(seq 1 30); do
         if grep -q "Order sent" "$TRADER_LOG" 2>/dev/null; then
             ORDER_FOUND=1
             break
@@ -214,18 +207,16 @@ main() {
     echo ""
 
     if [ $ORDER_FOUND -eq 1 ]; then
-        log_success "Orders detected in trader log"
-        grep "Order sent" "$TRADER_LOG" | tail -5
+        log_success "Orders detected"
+        grep "Order sent" "$TRADER_LOG" | tail -3
     else
-        log_error "No orders generated within $TIMEOUT seconds"
-        echo "Last 20 lines of $TRADER_LOG:"
+        log_error "No orders generated within 30 seconds"
         tail -20 "$TRADER_LOG"
         exit 1
     fi
 
-    # 6. 验证订单成交
+    # 验证订单成交
     log_section "Verifying Order Execution"
-
     sleep 3
     if grep -q "Trade\|FILLED\|Order sent" "$TRADER_LOG" 2>/dev/null || \
        grep -q "FILLED" log/counter_bridge.log 2>/dev/null; then
@@ -235,36 +226,53 @@ main() {
         exit 1
     fi
 
-    # 7. 检查持仓更新
-    log_section "Checking Position Updates"
-
-    FINAL_POSITIONS=$(curl -s http://localhost:8080/positions)
-    if echo "$FINAL_POSITIONS" | grep -q '"volume":[1-9]'; then
-        log_success "Positions updated"
-        echo "$FINAL_POSITIONS" | jq '.'
-    else
-        log_error "No positions found"
-        echo "$FINAL_POSITIONS"
-    fi
-
-    # 8. 测试总结
+    # 测试总结
     log_section "Test Summary"
-
     log_success "All tests passed!"
     echo ""
-    echo "Test Results:"
     echo "  ✓ System startup"
     echo "  ✓ All processes running"
     echo "  ✓ API endpoints working"
     echo "  ✓ Strategy activation"
     echo "  ✓ Order generation"
     echo "  ✓ Order execution"
-    echo "  ✓ Position updates"
-    echo ""
+}
 
-    # 等待用户查看结果
-    log_info "Test completed. Press Ctrl+C to stop all services."
-    wait
+# 显示运行信息
+show_run_info() {
+    log_section "System Running"
+    echo "Endpoints:"
+    echo "  Dashboard:     http://localhost:9201/dashboard"
+    echo "  API:           http://localhost:9201/api/v1"
+    echo "  Positions:     http://localhost:8080/positions"
+    echo ""
+    echo "Commands:"
+    echo "  Activate:      curl -X POST http://localhost:9201/api/v1/strategy/activate"
+    echo "  Status:        curl http://localhost:9201/api/v1/strategy/status | jq"
+    echo "  Logs:          tail -f log/trader.log"
+    echo ""
+    echo "Press Ctrl+C to stop all services."
+}
+
+# 主逻辑
+main() {
+    if [ "$RUN_MODE" = true ]; then
+        log_section "Simulator System (Run Mode)"
+    else
+        log_section "Simulator End-to-End Test"
+    fi
+
+    start_system
+    verify_processes
+
+    if [ "$RUN_MODE" = true ]; then
+        show_run_info
+        # 保持运行
+        while true; do sleep 1; done
+    else
+        run_tests
+        log_info "Test completed. Cleaning up..."
+    fi
 }
 
 main "$@"

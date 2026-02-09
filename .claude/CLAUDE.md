@@ -1304,37 +1304,43 @@ chore: 更新依赖版本
 
 ### 核心测试脚本
 
-系统保留两类核心测试脚本（位于 `scripts/` 目录）：
+所有脚本统一使用 `--run` 参数控制行为：
+- **无参数**: 运行测试后自动退出
+- **--run**: 启动系统并保持运行
 
 #### 1. 模拟测试
 
-| 脚本 | 用途 | 运行命令 |
-|------|------|----------|
-| `test/e2e/test_simulator_e2e.sh` | 模拟交易所端到端测试 | `./scripts/test/e2e/test_simulator_e2e.sh` |
-| `live/start_simulator.sh` | 启动模拟交易系统 | `./scripts/live/start_simulator.sh` |
+```bash
+# 运行测试（验证后退出）
+./scripts/test/e2e/test_simulator_e2e.sh
 
-**模拟测试架构**:
+# 启动系统并保持运行
+./scripts/test/e2e/test_simulator_e2e.sh --run
+```
+
+**架构**:
 ```
 md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_gateway
 ```
 
 #### 2. CTP实盘测试
 
-| 脚本 | 用途 | 运行命令 |
-|------|------|----------|
-| `test/e2e/test_ctp_live_e2e.sh` | CTP实盘端到端测试 | `./scripts/test/e2e/test_ctp_live_e2e.sh` |
-| `live/start_ctp_live.sh` | 启动CTP实盘系统 | `./scripts/live/start_ctp_live.sh` |
+```bash
+# 运行测试（验证后退出）
+./scripts/test/e2e/test_ctp_live_e2e.sh
 
-**CTP实盘架构**:
+# 启动系统并保持运行
+./scripts/test/e2e/test_ctp_live_e2e.sh --run
+```
+
+**架构**:
 ```
 CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → counter_bridge(CTP) → CTP交易服务器
 ```
 
 ### 测试前置条件
 
-**模拟测试**:
-- 无需额外配置
-- 使用 `config/trader.test.yaml`
+**模拟测试**: 无需额外配置，使用 `config/trader.test.yaml`
 
 **CTP实盘测试**:
 - 需要 `config/ctp/ctp_md.secret.yaml` (行情账号)
@@ -1346,14 +1352,6 @@ CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → tr
 ```bash
 ./scripts/live/stop_all.sh
 ```
-
-### 归档脚本
-
-其他脚本已移至 `scripts/archive/` 目录，包括：
-- 构建脚本（build_*.sh）
-- 部署脚本（prepare_deploy.sh, quick_deploy.sh）
-- 单元测试、集成测试、功能测试脚本
-- 交易操作脚本
 
 ---
 
@@ -1367,10 +1365,10 @@ CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → tr
 
 ## 📋 项目重组历史
 
-**2026-02-09**: 整理测试脚本
-- 保留核心端到端测试脚本（模拟测试 + CTP实盘测试）
-- 其他脚本移至 scripts/archive/
-- 在 CLAUDE.md 添加测试规则
+**2026-02-09**: 合并简化测试脚本
+- 统一使用 `--run` 参数控制运行模式
+- 移除 live/ 目录中的重复脚本，只保留 stop_all.sh
+- 核心脚本：test_simulator_e2e.sh、test_ctp_live_e2e.sh
 
 **2026-01-30**: 建立文档与脚本关联体系
 - 创建 CROSS_REFERENCE.md 交叉索引文件
