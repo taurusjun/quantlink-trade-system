@@ -279,20 +279,27 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if val, ok := config.Parameters["enable_multi_level"].(bool); ok {
 		pas.enableMultiLevel = val
 	}
+	// max_quote_level 支持 int 和 float64 类型
 	if val, ok := config.Parameters["max_quote_level"].(float64); ok {
 		pas.maxQuoteLevel = int(val)
-		if pas.maxQuoteLevel < 1 {
-			pas.maxQuoteLevel = 1
-		}
-		if pas.maxQuoteLevel > 5 {
-			pas.maxQuoteLevel = 5 // 最多支持 5 档
-		}
+	} else if val, ok := config.Parameters["max_quote_level"].(int); ok {
+		pas.maxQuoteLevel = val
 	}
-	// 每层下单量（支持数组配置）
+	if pas.maxQuoteLevel < 1 {
+		pas.maxQuoteLevel = 1
+	}
+	if pas.maxQuoteLevel > 5 {
+		pas.maxQuoteLevel = 5 // 最多支持 5 档
+	}
+
+	// 每层下单量（支持数组配置，处理 []interface{} 和 []int 类型）
 	if val, ok := config.Parameters["quote_level_sizes"].([]interface{}); ok {
 		pas.quoteLevelSizes = make([]int64, 0, len(val))
 		for _, v := range val {
-			if size, ok := v.(float64); ok {
+			switch size := v.(type) {
+			case float64:
+				pas.quoteLevelSizes = append(pas.quoteLevelSizes, int64(size))
+			case int:
 				pas.quoteLevelSizes = append(pas.quoteLevelSizes, int64(size))
 			}
 		}
