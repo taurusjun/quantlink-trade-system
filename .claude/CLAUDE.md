@@ -13,6 +13,70 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 
 ---
 
+## ⚠️ 代码库位置定义（重要）
+
+**必须区分以下两个代码库，绝对不可混淆！**
+
+### C++ 原代码（旧系统 - 迁移源）
+
+| 项目 | 路径 | 说明 |
+|------|------|------|
+| **tbsrc** | `/Users/user/PWorks/RD/tbsrc/` | C++ 原始交易系统（策略层） |
+| **hftbase** | `/Users/user/PWorks/RD/hftbase/` | HFT 基础设施库 |
+| **ors** | `/Users/user/PWorks/RD/ors/` | 订单路由服务 |
+
+**tbsrc 目录结构**:
+| 子目录 | 说明 |
+|--------|------|
+| `tbsrc/Strategies/` | 原始策略实现 |
+| `tbsrc/Strategies/include/` | 策略类定义 |
+| `tbsrc/common/` | 公共组件 |
+| `tbsrc/main/` | 主程序 |
+
+**关键 C++ 原代码文件**:
+- `tbsrc/Strategies/PairwiseArbStrategy.cpp` - 配对套利策略
+- `tbsrc/Strategies/ExecutionStrategy.cpp` - 执行策略基类
+- `tbsrc/Strategies/include/ExecutionStrategy.h` - 策略头文件
+- `hftbase/` - HFT 基础库（行情处理、订单管理等）
+- `ors/` - 订单路由服务
+
+### 新代码（当前项目 - 迁移目标）
+
+| 项目 | 路径 | 说明 |
+|------|------|------|
+| **quantlink-trade-system** | `/Users/user/PWorks/RD/quantlink-trade-system/` | 新系统（迁移目标） |
+| Golang 策略 | `golang/pkg/strategy/` | Go 策略实现 |
+| C++ 网关（新写） | `gateway/` | 新写的 C++ 网关代码 |
+
+**注意**: `quantlink-trade-system/gateway/` 下的 C++ 代码是**新写的网关代码**，**不是原代码**！
+
+### 迁移对照表
+
+| C++ 原代码 (tbsrc) | Go 新代码 (quantlink-trade-system) |
+|-------------------|-----------------------------------|
+| `tbsrc/Strategies/PairwiseArbStrategy.cpp` | `golang/pkg/strategy/pairwise_arb_strategy.go` |
+| `tbsrc/Strategies/ExecutionStrategy.cpp` | `golang/pkg/strategy/base_strategy.go` |
+| `tbsrc/Strategies/include/ExecutionStrategy.h` | `golang/pkg/strategy/types.go` |
+
+### 搜索原代码的正确方式
+
+```bash
+# ✅ 正确：在原代码目录中搜索
+grep -r "m_netpos_pass_ytd" /Users/user/PWorks/RD/tbsrc/
+grep -r "某关键字" /Users/user/PWorks/RD/hftbase/
+grep -r "某关键字" /Users/user/PWorks/RD/ors/
+
+# ❌ 错误：在 quantlink-trade-system 中搜索（这里是新代码）
+grep -r "m_netpos_pass_ytd" /Users/user/PWorks/RD/quantlink-trade-system/
+```
+
+**原代码根目录汇总**:
+- `/Users/user/PWorks/RD/tbsrc/` - 策略和交易逻辑
+- `/Users/user/PWorks/RD/hftbase/` - HFT 基础设施
+- `/Users/user/PWorks/RD/ors/` - 订单路由服务
+
+---
+
 ## 系统架构
 
 ### 核心组件
@@ -89,6 +153,35 @@ md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] �
 
 本项目从 C++ 旧系统 (tbsrc) 迁移到 Golang 新系统。迁移代码时必须严格遵循以下规则。
 
+### ⚠️ 原代码位置（重要）
+
+**C++ 原代码路径（三个独立目录）**:
+- `/Users/user/PWorks/RD/tbsrc/` - 策略和交易逻辑
+- `/Users/user/PWorks/RD/hftbase/` - HFT 基础设施库
+- `/Users/user/PWorks/RD/ors/` - 订单路由服务
+
+```
+/Users/user/PWorks/RD/
+├── tbsrc/                         # 策略层原代码
+│   ├── Strategies/                # 策略实现
+│   │   ├── PairwiseArbStrategy.cpp
+│   │   ├── ExecutionStrategy.cpp
+│   │   ├── PairwiseArbETFStrategy.cpp
+│   │   ├── PairwiseArbOptStrategy.cpp
+│   │   └── include/
+│   │       └── ExecutionStrategy.h
+│   ├── common/                    # 公共组件
+│   └── main/                      # 主程序
+│
+├── hftbase/                       # HFT 基础设施原代码
+│   └── (行情处理、订单管理等)
+│
+└── ors/                           # 订单路由服务原代码
+    └── (订单路由相关)
+```
+
+**注意**: `/Users/user/PWorks/RD/quantlink-trade-system/gateway/` 是**新写的 C++ 网关代码**，不是原代码！
+
 ### 强制要求
 
 **规则 1: 禁止自设默认值**
@@ -98,12 +191,14 @@ md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] �
 
 **规则 2: 必须先展示 C++ 原代码**
 - 实现任何 C++ 功能迁移前，必须先找到并展示 C++ 原代码
+- **原代码路径**: `/Users/user/PWorks/RD/tbsrc/`
 - 在 `docs/cpp_reference/` 目录中保存关键 C++ 代码片段
 - 如果找不到 C++ 原代码，必须向用户确认后再实现
 
 **规则 3: 逐行对照注释**
 - Go 代码中的关键逻辑必须在注释中写明对应的 C++ 代码
 - 使用 `// C++:` 前缀标注原始 C++ 代码
+- 注释中引用原代码时使用格式: `// 参考: tbsrc/Strategies/xxx.cpp:行号`
 
 ### 代码注释格式
 
@@ -127,12 +222,16 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 
 迁移时必须维护 C++ 与 Go 的参数映射关系：
 
-| C++ 参数 | Go 参数 | 配置文件字段 |
-|---------|--------|-------------|
-| `BEGIN_PLACE` | `beginZScore` | `begin_zscore` |
-| `LONG_PLACE` | `longZScore` | `long_zscore` |
-| `SHORT_PLACE` | `shortZScore` | `short_zscore` |
-| `BEGIN_REMOVE` | `exitZScore` | `exit_zscore` |
+| C++ 参数 | Go 参数 | 配置文件字段 | 原代码位置 |
+|---------|--------|-------------|-----------|
+| `BEGIN_PLACE` | `beginZScore` | `begin_zscore` | ExecutionStrategy.h |
+| `LONG_PLACE` | `longZScore` | `long_zscore` | ExecutionStrategy.h |
+| `SHORT_PLACE` | `shortZScore` | `short_zscore` | ExecutionStrategy.h |
+| `BEGIN_REMOVE` | `exitZScore` | `exit_zscore` | ExecutionStrategy.h |
+| `m_netpos_pass` | `leg1Position` | - | ExecutionStrategy.h:112 |
+| `m_netpos_pass_ytd` | `leg1YtdPosition` | - | ExecutionStrategy.h:113 |
+| `avgSpreadRatio_ori` | `spreadAnalyzer.Mean` | - | PairwiseArbStrategy.cpp:31 |
+| `tValue` | `tValue` | `t_value` | PairwiseArbStrategy.cpp |
 
 ### C++ 参考代码目录
 
@@ -141,6 +240,17 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 - `SendAggressiveOrder.cpp` - 主动追单逻辑
 - `ExecutionStrategy.cpp` - 执行策略基类
 - `README.md` - 索引和说明
+
+### C++ 原代码关键文件速查
+
+| 功能 | 原代码文件 | 行号 |
+|------|-----------|------|
+| 策略初始化 | `tbsrc/Strategies/PairwiseArbStrategy.cpp` | 7-84 |
+| 昨仓初始化 | `tbsrc/Strategies/PairwiseArbStrategy.cpp` | 33-38 |
+| 动态阈值 | `tbsrc/Strategies/ExecutionStrategy.cpp` | SetThresholds() |
+| 主动追单 | `tbsrc/Strategies/PairwiseArbStrategy.cpp` | SendAggressiveOrder() |
+| 成交回调 | `tbsrc/Strategies/PairwiseArbStrategy.cpp` | ORSCallBack() |
+| 持仓字段定义 | `tbsrc/Strategies/include/ExecutionStrategy.h` | 111-114 |
 
 ### 代码审查清单
 

@@ -81,6 +81,10 @@ type PairwiseArbStrategy struct {
 	leg1SellTotalQty  int64
 	leg1BuyTotalValue float64
 	leg1SellTotalValue float64
+	// 昨仓净值（C++: m_netpos_pass_ytd）
+	// 含义：昨日收盘时的净持仓（正=多头，负=空头）
+	// 今仓净值 = leg1Position - leg1YtdPosition
+	leg1YtdPosition   int64 // Leg1 昨仓净值（C++: m_netpos_pass_ytd）
 
 	// Leg2 独立持仓统计（类似 tbsrc m_secondStrat）
 	leg2BuyQty        int64
@@ -91,6 +95,8 @@ type PairwiseArbStrategy struct {
 	leg2SellTotalQty  int64
 	leg2BuyTotalValue float64
 	leg2SellTotalValue float64
+	// 昨仓净值（C++: m_netpos_agg 作为昨仓初值）
+	leg2YtdPosition   int64 // Leg2 昨仓净值
 
 	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
 	maxQuoteLevel    int     // 最大挂单层数 (默认: 1, 仅一档)
@@ -112,6 +118,10 @@ type PairwiseArbStrategy struct {
 	priceOptimizeGap    int     // 触发优化的 tick 跳跃数
 	tickSize1           float64 // Leg1 最小变动单位
 	tickSize2           float64 // Leg2 最小变动单位
+
+	// 外部 tValue 调整参数（C++: avgSpreadRatio = avgSpreadRatio_ori + tValue）
+	// tValue 允许外部信号调整价差均值，使策略更容易入场或出场
+	tValue float64 // 外部调整值（正值提高均值，负值降低均值）
 
 	mu sync.RWMutex
 }
@@ -487,6 +497,10 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 // 使用动态阈值：
 // - 做多（long spread）：-zscore >= entryZScoreBid
 // - 做空（short spread）：zscore >= entryZScoreAsk
+//
+// tValue 调整（C++: avgSpreadRatio = avgSpreadRatio_ori + tValue）：
+// - tValue > 0: 提高均值，使做空更容易触发（zscore更大）
+// - tValue < 0: 降低均值，使做多更容易触发（zscore更小/更负）
 func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 	// Get current statistics from SpreadAnalyzer
 	spreadStats := pas.spreadAnalyzer.GetStats()
@@ -495,21 +509,31 @@ func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 		return
 	}
 
+	// 应用外部 tValue 调整
+	// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue
+	// 调整后的 Z-Score = (spread - (mean + tValue)) / std = zscore_ori - tValue/std
+	adjustedZScore := spreadStats.ZScore
+	if pas.tValue != 0 && spreadStats.Std > 1e-10 {
+		// tValue > 0: zscore 降低（均值升高，当前spread相对更低）
+		// tValue < 0: zscore 升高（均值降低，当前spread相对更高）
+		adjustedZScore = (spreadStats.CurrentSpread - (spreadStats.Mean + pas.tValue)) / spreadStats.Std
+	}
+
 	// Entry signals using dynamic thresholds
 	// zscore > 0: spread 偏高，做空 spread（卖 symbol1，买 symbol2）
 	// zscore < 0: spread 偏低，做多 spread（买 symbol1，卖 symbol2）
-	if spreadStats.ZScore >= pas.entryZScoreAsk {
+	if adjustedZScore >= pas.entryZScoreAsk {
 		// Spread is too high - short spread (sell symbol1, buy symbol2)
 		pas.generateSpreadSignals(md, "short", pas.orderSize)
 		return
-	} else if -spreadStats.ZScore >= pas.entryZScoreBid {
+	} else if -adjustedZScore >= pas.entryZScoreBid {
 		// Spread is too low - long spread (buy symbol1, sell symbol2)
 		pas.generateSpreadSignals(md, "long", pas.orderSize)
 		return
 	}
 
-	// Exit signals
-	if pas.leg1Position != 0 && math.Abs(spreadStats.ZScore) <= pas.exitZScore {
+	// Exit signals（使用调整后的Z-Score）
+	if pas.leg1Position != 0 && math.Abs(adjustedZScore) <= pas.exitZScore {
 		// Spread has reverted to mean - close positions
 		pas.generateExitSignals(md)
 	}
@@ -707,6 +731,8 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 // 1. 提高成交概率：如果一档没有成交，二档、三档仍有机会
 // 2. 降低滑点：被动挂单而非主动吃单
 // 3. 分散风险：不同价位的仓位分配
+//
+// tValue 调整同 generateSignals
 func (pas *PairwiseArbStrategy) generateMultiLevelSignals(md *mdpb.MarketDataUpdate) {
 	// Get current statistics from SpreadAnalyzer
 	spreadStats := pas.spreadAnalyzer.GetStats()
@@ -715,8 +741,17 @@ func (pas *PairwiseArbStrategy) generateMultiLevelSignals(md *mdpb.MarketDataUpd
 		return
 	}
 
+	// 应用外部 tValue 调整到均值
+	adjustedMean := spreadStats.Mean + pas.tValue
+
+	// 计算调整后的 Z-Score（用于出场判断）
+	adjustedZScore := spreadStats.ZScore
+	if pas.tValue != 0 && spreadStats.Std > 1e-10 {
+		adjustedZScore = (spreadStats.CurrentSpread - adjustedMean) / spreadStats.Std
+	}
+
 	// Exit signals - 平仓信号不使用多层挂单
-	if pas.leg1Position != 0 && math.Abs(spreadStats.ZScore) <= pas.exitZScore {
+	if pas.leg1Position != 0 && math.Abs(adjustedZScore) <= pas.exitZScore {
 		pas.generateExitSignals(md)
 		return
 	}
@@ -762,12 +797,12 @@ func (pas *PairwiseArbStrategy) generateMultiLevelSignals(md *mdpb.MarketDataUpd
 		longSpread := bidPrice - pas.ask2
 		shortSpread := askPrice - pas.bid2
 
-		// 计算该层的等效 Z-Score
+		// 计算该层的等效 Z-Score（使用调整后的均值）
 		longZScore := 0.0
 		shortZScore := 0.0
 		if spreadStats.Std > 1e-10 {
-			longZScore = (longSpread - spreadStats.Mean) / spreadStats.Std
-			shortZScore = (shortSpread - spreadStats.Mean) / spreadStats.Std
+			longZScore = (longSpread - adjustedMean) / spreadStats.Std
+			shortZScore = (shortSpread - adjustedMean) / spreadStats.Std
 		}
 
 		// 优化挂单价格（检测隐性订单簿）
@@ -1251,12 +1286,15 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 
 // updateLeg1Position updates leg1 position statistics
 // 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
-// 参考: docs/cpp_reference/ExecutionStrategy_TradeCallback.cpp
+// 参考: tbsrc/Strategies/ExecutionStrategy.cpp
 //
 // 中国期货净持仓模型:
 //   - 买入: 先平空(m_sellQty)，再开多(m_buyQty)
 //   - 卖出: 先平多(m_buyQty)，再开空(m_sellQty)
 //   - 净持仓: m_netpos = m_buyQty - m_sellQty
+//
+// C++ 原代码中 m_netpos_pass_ytd 仅用于日志打印，实际的今/昨仓处理在 CTP Plugin 层
+// 今仓净值 = leg1Position - leg1YtdPosition (C++: m_netpos_pass - m_netpos_pass_ytd)
 func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int64, price float64) {
 	if side == orspb.OrderSide_BUY {
 		// 买入逻辑
@@ -1288,8 +1326,10 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 			if pas.leg1BuyQty > 0 {
 				pas.leg1BuyAvgPrice = totalCost / float64(pas.leg1BuyQty)
 			}
-			log.Printf("[PairwiseArb:%s] Leg1 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d",
-				pas.ID, qty, price, pas.leg1BuyAvgPrice, pas.leg1Position)
+			// C++: TBLOG << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
+			todayNet := pas.leg1Position - pas.leg1YtdPosition
+			log.Printf("[PairwiseArb:%s] Leg1 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
+				pas.ID, qty, price, pas.leg1BuyAvgPrice, pas.leg1Position, pas.leg1YtdPosition, todayNet)
 		}
 	} else {
 		// 卖出逻辑
@@ -1321,19 +1361,25 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 			if pas.leg1SellQty > 0 {
 				pas.leg1SellAvgPrice = totalCost / float64(pas.leg1SellQty)
 			}
-			log.Printf("[PairwiseArb:%s] Leg1 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d",
-				pas.ID, qty, price, pas.leg1SellAvgPrice, pas.leg1Position)
+			// C++: TBLOG << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
+			todayNet := pas.leg1Position - pas.leg1YtdPosition
+			log.Printf("[PairwiseArb:%s] Leg1 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
+				pas.ID, qty, price, pas.leg1SellAvgPrice, pas.leg1Position, pas.leg1YtdPosition, todayNet)
 		}
 	}
 
-	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f)",
+	todayNet := pas.leg1Position - pas.leg1YtdPosition
+	// C++: TBLOG << " m_netpos_pass:" << m_firstStrat->m_netpos_pass << " m_netpos_pass_ytd:" << m_firstStrat->m_netpos_pass_ytd
+	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f) [ytd=%d, 2day=%d]",
 		pas.ID, pas.symbol1, pas.leg1Position, pas.leg1BuyQty, pas.leg1BuyAvgPrice,
-		pas.leg1SellQty, pas.leg1SellAvgPrice)
+		pas.leg1SellQty, pas.leg1SellAvgPrice, pas.leg1YtdPosition, todayNet)
 }
 
 // updateLeg2Position updates leg2 position statistics
 // 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
-// 参考: docs/cpp_reference/ExecutionStrategy_TradeCallback.cpp
+// 参考: tbsrc/Strategies/ExecutionStrategy.cpp
+//
+// C++ 原代码中 Leg2 使用 m_netpos_agg，今仓净值同样是差值计算
 func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int64, price float64) {
 	if side == orspb.OrderSide_BUY {
 		// 买入逻辑
@@ -1365,8 +1411,9 @@ func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int
 			if pas.leg2BuyQty > 0 {
 				pas.leg2BuyAvgPrice = totalCost / float64(pas.leg2BuyQty)
 			}
-			log.Printf("[PairwiseArb:%s] Leg2 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d",
-				pas.ID, qty, price, pas.leg2BuyAvgPrice, pas.leg2Position)
+			todayNet := pas.leg2Position - pas.leg2YtdPosition
+			log.Printf("[PairwiseArb:%s] Leg2 开多: %d @ %.2f, 多头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
+				pas.ID, qty, price, pas.leg2BuyAvgPrice, pas.leg2Position, pas.leg2YtdPosition, todayNet)
 		}
 	} else {
 		// 卖出逻辑
@@ -1398,14 +1445,16 @@ func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int
 			if pas.leg2SellQty > 0 {
 				pas.leg2SellAvgPrice = totalCost / float64(pas.leg2SellQty)
 			}
-			log.Printf("[PairwiseArb:%s] Leg2 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d",
-				pas.ID, qty, price, pas.leg2SellAvgPrice, pas.leg2Position)
+			todayNet := pas.leg2Position - pas.leg2YtdPosition
+			log.Printf("[PairwiseArb:%s] Leg2 开空: %d @ %.2f, 空头均价 %.2f, 净持仓 %d (ytd=%d, 2day=%d)",
+				pas.ID, qty, price, pas.leg2SellAvgPrice, pas.leg2Position, pas.leg2YtdPosition, todayNet)
 		}
 	}
 
-	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f)",
+	todayNet := pas.leg2Position - pas.leg2YtdPosition
+	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%d@%.2f, Sell=%d@%.2f) [ytd=%d, 2day=%d]",
 		pas.ID, pas.symbol2, pas.leg2Position, pas.leg2BuyQty, pas.leg2BuyAvgPrice,
-		pas.leg2SellQty, pas.leg2SellAvgPrice)
+		pas.leg2SellQty, pas.leg2SellAvgPrice, pas.leg2YtdPosition, todayNet)
 }
 
 // OnTimer handles timer events
@@ -1448,6 +1497,21 @@ func (pas *PairwiseArbStrategy) Start() error {
 			log.Printf("[PairwiseArbStrategy:%s] Restored leg2 position: %s = %d",
 				pas.ID, pas.symbol2, qty)
 		}
+
+		// 恢复昨仓净值（C++: m_netpos_pass_ytd）
+		// 注意：SymbolsYesterdayPos 存储的是昨仓净值，今仓 = 当前持仓 - 昨仓
+		if snapshot.SymbolsYesterdayPos != nil {
+			if ytdPos, exists := snapshot.SymbolsYesterdayPos[pas.symbol1]; exists {
+				pas.leg1YtdPosition = ytdPos
+			}
+			if ytdPos, exists := snapshot.SymbolsYesterdayPos[pas.symbol2]; exists {
+				pas.leg2YtdPosition = ytdPos
+			}
+		}
+		leg1TodayNet := pas.leg1Position - pas.leg1YtdPosition
+		leg2TodayNet := pas.leg2Position - pas.leg2YtdPosition
+		log.Printf("[PairwiseArbStrategy:%s] Restored ytd positions: leg1=[ytd=%d, 2day=%d], leg2=[ytd=%d, 2day=%d]",
+			pas.ID, pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
 
 		// 恢复BaseStrategy持仓（符合新的持仓模型）
 		pas.EstimatedPosition.NetQty = snapshot.TotalNetQty
@@ -1565,6 +1629,15 @@ func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) e
 		updated = true
 	}
 
+	// 外部 tValue 调整（C++: avgSpreadRatio = avgSpreadRatio_ori + tValue）
+	if val, ok := params["t_value"].(float64); ok {
+		oldTValue := pas.tValue
+		pas.tValue = val
+		log.Printf("[PairwiseArbStrategy:%s] tValue updated via ApplyParameters: %.4f -> %.4f",
+			pas.ID, oldTValue, val)
+		updated = true
+	}
+
 	if !updated {
 		return fmt.Errorf("no valid parameters found to update")
 	}
@@ -1635,7 +1708,31 @@ func (pas *PairwiseArbStrategy) GetCurrentParameters() map[string]interface{} {
 		"aggressive_max_retry":     pas.aggressiveMaxRetry,
 		"aggressive_slop_ticks":    pas.aggressiveSlopTicks,
 		"aggressive_fail_threshold": pas.aggressiveFailThreshold,
+		// 外部 tValue 调整
+		"t_value":                  pas.tValue,
 	}
+}
+
+// SetTValue 设置外部 tValue 调整值
+// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue
+// tValue 允许外部信号调整价差均值，使策略更容易入场或出场
+//
+// 参数:
+//   - value: 调整值（正值提高均值使做空更容易，负值降低均值使做多更容易）
+func (pas *PairwiseArbStrategy) SetTValue(value float64) {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	oldValue := pas.tValue
+	pas.tValue = value
+	log.Printf("[PairwiseArbStrategy:%s] tValue updated: %.4f -> %.4f", pas.ID, oldValue, value)
+}
+
+// GetTValue 获取当前 tValue 值
+func (pas *PairwiseArbStrategy) GetTValue() float64 {
+	pas.mu.RLock()
+	defer pas.mu.RUnlock()
+	return pas.tValue
 }
 
 // Stop stops the strategy
@@ -1643,7 +1740,7 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	// 保存当前持仓到文件
+	// 保存当前持仓到文件（包括昨/今仓区分）
 	snapshot := PositionSnapshot{
 		StrategyID:    pas.ID,
 		Timestamp:     time.Now(),
@@ -1657,14 +1754,23 @@ func (pas *PairwiseArbStrategy) Stop() error {
 			pas.symbol1: pas.leg1Position,
 			pas.symbol2: pas.leg2Position,
 		},
+		// 昨仓净值（C++: m_netpos_pass_ytd）
+		// 注意：收盘时当前持仓变成"昨仓"，所以保存当前持仓作为下一交易日的昨仓
+		SymbolsYesterdayPos: map[string]int64{
+			pas.symbol1: pas.leg1Position, // 收盘持仓 = 下一交易日的昨仓
+			pas.symbol2: pas.leg2Position,
+		},
 	}
 
 	if err := SavePositionSnapshot(snapshot); err != nil {
 		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to save position snapshot: %v", pas.ID, err)
 		// 不阻断停止流程
 	} else {
-		log.Printf("[PairwiseArbStrategy:%s] Position snapshot saved: Long=%d, Short=%d, Net=%d",
-			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty)
+		leg1TodayNet := pas.leg1Position - pas.leg1YtdPosition
+		leg2TodayNet := pas.leg2Position - pas.leg2YtdPosition
+		log.Printf("[PairwiseArbStrategy:%s] Position snapshot saved: Long=%d, Short=%d, Net=%d [leg1: ytd=%d, 2day=%d] [leg2: ytd=%d, 2day=%d]",
+			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty,
+			pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
 	}
 
 	pas.ControlState.RunState = StrategyRunStateStopped
@@ -1742,6 +1848,7 @@ func (pas *PairwiseArbStrategy) GetSpreadStatus() map[string]interface{} {
 }
 
 // GetLegsInfo returns detailed information for each leg (for UI display)
+// 包括昨/今仓区分信息
 func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
@@ -1761,18 +1868,26 @@ func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
 		leg2Side = "short"
 	}
 
+	// C++: 2day = m_netpos_pass - m_netpos_pass_ytd
+	leg1TodayNet := pas.leg1Position - pas.leg1YtdPosition
+	leg2TodayNet := pas.leg2Position - pas.leg2YtdPosition
+
 	return []map[string]interface{}{
 		{
-			"symbol":   pas.symbol1,
-			"price":    pas.price1,
-			"position": pas.leg1Position,
-			"side":     leg1Side,
+			"symbol":        pas.symbol1,
+			"price":         pas.price1,
+			"position":      pas.leg1Position,
+			"side":          leg1Side,
+			"ytd_position":  pas.leg1YtdPosition, // 昨仓净值 (C++: m_netpos_pass_ytd)
+			"today_net":     leg1TodayNet,        // 今仓净值 (C++: m_netpos_pass - m_netpos_pass_ytd)
 		},
 		{
-			"symbol":   pas.symbol2,
-			"price":    pas.price2,
-			"position": pas.leg2Position,
-			"side":     leg2Side,
+			"symbol":        pas.symbol2,
+			"price":         pas.price2,
+			"position":      pas.leg2Position,
+			"side":          leg2Side,
+			"ytd_position":  pas.leg2YtdPosition,
+			"today_net":     leg2TodayNet,
 		},
 	}
 }

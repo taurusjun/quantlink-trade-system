@@ -20,6 +20,10 @@ type PositionSnapshot struct {
 	AvgLongPrice  float64           `json:"avg_long_price"`
 	AvgShortPrice float64           `json:"avg_short_price"`
 	RealizedPnL   float64           `json:"realized_pnl"`
+	// 昨仓净值（中国期货特有）
+	// C++: m_netpos_pass_ytd - 昨日收盘时的净持仓
+	// 今仓净值 = SymbolsPos[symbol] - SymbolsYesterdayPos[symbol]
+	SymbolsYesterdayPos map[string]int64 `json:"symbols_yesterday_position,omitempty"` // symbol -> ytd_position
 }
 
 // PositionInitializer 接口：支持从外部初始化持仓

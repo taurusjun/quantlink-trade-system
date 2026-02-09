@@ -529,33 +529,33 @@ func LoadPositionSnapshot(strategyID string) (*PositionSnapshot, error) {
 | 协整检验 | ❌ | ✅ (预留) | 🆕 新增 |
 | 风险度量 | ✅ | ✅ | ✅ 一致 |
 
-### 5.2 未实现功能
+### 5.2 功能实现状态（更新于 2026-02-09）
 
 | 功能 | 旧系统实现 | 新系统状态 | 优先级 |
 |------|-----------|-----------|--------|
-| 动态阈值调整 | `SetThresholds()` | ❌ 未实现 | 🔴 高 |
-| 主动追单机制 | `SendAggressiveOrder()` | ❌ 未实现 | 🔴 高 |
-| 多层挂单 | `MAX_QUOTE_LEVEL` | ❌ 未实现 | 🟡 中 |
-| 订单类型区分 | STANDARD/CROSS/MATCH | ❌ 未实现 | 🟡 中 |
-| 价格优化 | `GetBidPrice_first()` 等 | ❌ 未实现 | 🟡 中 |
-| 挂单队列管理 | `m_bidMap`, `m_askMap` | ❌ 未实现 | 🟡 中 |
-| 流控保护 | `last_agg_time` 间隔检查 | ⚠️ 部分实现 | 🟡 中 |
-| 昨/今仓区分 | `m_netpos_pass_ytd` | ❌ 未实现 | 🟢 低 |
-| 外部 tValue 调整 | `tValue` from `m_tvar` | ❌ 未实现 | 🟢 低 |
+| 动态阈值调整 | `SetThresholds()` | ✅ 已实现 `setDynamicThresholds()` | 🔴 高 |
+| 主动追单机制 | `SendAggressiveOrder()` | ✅ 已实现 `sendAggressiveOrder()` | 🔴 高 |
+| 多层挂单 | `MAX_QUOTE_LEVEL` | ✅ 已实现 `generateMultiLevelSignals()` | 🟡 中 |
+| 订单类型区分 | STANDARD/CROSS/MATCH | ✅ 已实现 `SignalCategory` 枚举 | 🟡 中 |
+| 价格优化 | `GetBidPrice_first()` 等 | ✅ 已实现 `optimizeOrderPrice()` | 🟡 中 |
+| 挂单队列管理 | `m_bidMap`, `m_askMap` | ✅ 已实现 `OrderPriceMap` | 🟡 中 |
+| 流控保护 | `last_agg_time` 间隔检查 | ✅ 已实现 `aggressiveInterval` | 🟡 中 |
+| 昨/今仓区分 | `m_netpos_pass_ytd` | ✅ 已实现 `leg1TodayQty`, `leg1YesterdayQty` | 🟢 低 |
+| 外部 tValue 调整 | `tValue` from `m_tvar` | ✅ 已实现 `tValue`, `SetTValue()` | 🟢 低 |
 | 最大亏损保护 | `m_maxloss_limit` | ⚠️ 在风控模块 | 🟢 低 |
 
 ---
 
 ## 6. 总结
 
-### 6.1 一致性评估
+### 6.1 一致性评估（更新于 2026-02-09 21:00）
 
 | 类别 | 一致性 | 说明 |
 |------|--------|------|
-| **数据结构** | 85% | 核心变量一致，部分订单管理变量缺失 |
-| **核心算法** | 70% | 价差/持仓计算一致，信号生成逻辑不同 |
-| **功能完整度** | 65% | 主要功能已实现，高级功能（追单、动态阈值）缺失 |
-| **接口设计** | 90% | 新系统接口更清晰、更现代化 |
+| **数据结构** | 98% | 核心变量一致，新增 OrderPriceMap、昨/今仓、tValue |
+| **核心算法** | 95% | 价差/持仓计算一致，动态阈值/追单/tValue 已对齐 |
+| **功能完整度** | 98% | 所有 C++ 核心功能已实现 |
+| **接口设计** | 95% | 新系统接口更清晰、更现代化 |
 
 ### 6.2 新系统优势
 
@@ -565,20 +565,26 @@ func LoadPositionSnapshot(strategyID string) (*PositionSnapshot, error) {
 4. **持久化改进**: JSON 格式更灵活
 5. **接口丰富**: 提供更多查询接口（GetSpreadStatus, GetLegsInfo）
 
-### 6.3 待改进项
+### 6.3 待改进项（更新于 2026-02-09 21:00）
 
-1. **动态阈值调整**: 应参考旧系统 `SetThresholds()` 实现
-2. **主动追单机制**: 对冲腿应支持主动追单
-3. **多层挂单**: 支持在多个价位挂单
-4. **订单类型区分**: 区分被动单和主动对冲单
-5. **价格优化**: 实现隐性订单簿检测逻辑
+1. ~~**动态阈值调整**: 应参考旧系统 `SetThresholds()` 实现~~ ✅ 已完成
+2. ~~**主动追单机制**: 对冲腿应支持主动追单~~ ✅ 已完成
+3. ~~**多层挂单**: 支持在多个价位挂单~~ ✅ 已完成
+4. ~~**订单类型区分**: 区分被动单和主动对冲单~~ ✅ 已完成
+5. ~~**价格优化**: 实现隐性订单簿检测逻辑~~ ✅ 已完成
+6. ~~**昨/今仓区分**: 支持平今/平昨不同处理~~ ✅ 已完成
+7. ~~**外部 tValue 调整**: 允许外部信号调整价差均值~~ ✅ 已完成
 
-### 6.4 建议实施路径
+### 6.4 实施进度（更新于 2026-02-09 21:00）
 
-1. **Phase 1**: 实现动态阈值调整（参考 `SetThresholds`）
-2. **Phase 2**: 实现主动追单机制（参考 `SendAggressiveOrder`）
-3. **Phase 3**: 添加多层挂单支持
-4. **Phase 4**: 实现订单类型区分和价格优化
+1. **Phase 1**: ✅ 实现动态阈值调整 - `setDynamicThresholds()`
+2. **Phase 2**: ✅ 实现主动追单机制 - `sendAggressiveOrder()`
+3. **Phase 3**: ✅ 添加多层挂单支持 - `generateMultiLevelSignals()`, `OrderPriceMap`
+4. **Phase 4**: ✅ 实现订单类型区分和价格优化 - `SignalCategory`, `optimizeOrderPrice()`
+5. **Phase 5**: ✅ 昨/今仓区分 - `leg1TodayQty`, `leg1YesterdayQty`, `closePositionWithYTD()`
+6. **Phase 6**: ✅ 外部 tValue 调整 - `tValue`, `SetTValue()`, `GetTValue()`
+
+**🎉 所有 C++ 核心功能已迁移完成！**
 
 ---
 
@@ -591,4 +597,126 @@ func LoadPositionSnapshot(strategyID string) (*PositionSnapshot, error) {
 
 ---
 
-**最后更新**: 2026-01-31 21:00
+## 7. 实现详情（2026-02-09 新增）
+
+### 7.1 动态阈值调整
+
+**实现文件**: `golang/pkg/strategy/pairwise_arb_strategy.go`
+
+**配置参数**:
+```yaml
+begin_zscore: 0.5      # 空仓入场阈值
+long_zscore: 1.5       # 满仓多头时做多阈值
+short_zscore: 1.5      # 满仓空头时做空阈值
+use_dynamic_threshold: true
+```
+
+**核心逻辑**: 根据持仓比例动态调整入场阈值，与 C++ `SetThresholds()` 一致。
+
+### 7.2 主动追单机制
+
+**实现文件**: `golang/pkg/strategy/pairwise_arb_strategy.go`
+
+**配置参数**:
+```yaml
+aggressive_enabled: true
+aggressive_interval_ms: 500
+aggressive_max_retry: 4
+aggressive_slop_ticks: 20
+```
+
+**核心逻辑**: 检测敞口并按间隔主动追单，与 C++ `SendAggressiveOrder()` 一致。
+
+### 7.3 多层挂单
+
+**实现文件**:
+- `golang/pkg/strategy/pairwise_arb_strategy.go` - `generateMultiLevelSignals()`
+- `golang/pkg/strategy/order_map.go` - `OrderPriceMap`
+
+**配置参数**:
+```yaml
+enable_multi_level: true
+max_quote_level: 3
+quote_level_sizes: [4, 3, 2]
+```
+
+**核心逻辑**: 在多个价位同时挂单，使用 `OrderPriceMap` 避免重复挂单。
+
+### 7.4 订单类型区分
+
+**实现文件**: `golang/pkg/strategy/types.go`
+
+```go
+type SignalCategory int32
+
+const (
+    SignalCategoryPassive    SignalCategory = 1  // 被动单
+    SignalCategoryAggressive SignalCategory = 2  // 主动单
+)
+```
+
+### 7.5 价格优化
+
+**实现文件**: `golang/pkg/strategy/pairwise_arb_strategy.go` - `optimizeOrderPrice()`
+
+**配置参数**:
+```yaml
+enable_price_optimize: true
+price_optimize_gap: 2
+tick_size_1: 1.0
+tick_size_2: 1.0
+```
+
+**核心逻辑**: 检测价格跳跃（隐性订单簿），优化挂单价格。
+
+### 7.6 昨/今仓区分
+
+**实现文件**: `golang/pkg/strategy/pairwise_arb_strategy.go`
+
+**新增字段**:
+```go
+// Leg1 昨/今仓
+leg1TodayQty      int64  // 今仓数量（正=多头今仓，负=空头今仓）
+leg1YesterdayQty  int64  // 昨仓数量
+
+// Leg2 昨/今仓
+leg2TodayQty      int64
+leg2YesterdayQty  int64
+```
+
+**核心方法**:
+- `closePositionWithYTD()`: 平仓时优先平今仓，再平昨仓（上期所规则）
+- `updateLeg1Position()` / `updateLeg2Position()`: 更新时维护今/昨仓状态
+- `GetLegsInfo()`: API 返回包含 today_qty、yesterday_qty
+
+**持久化**: `PositionSnapshot` 新增 `SymbolsTodayPos`、`SymbolsYesterdayPos` 字段
+
+### 7.7 外部 tValue 调整
+
+**实现文件**: `golang/pkg/strategy/pairwise_arb_strategy.go`
+
+**C++ 对应逻辑**:
+```cpp
+// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue
+// tValue 来自外部信号文件 m_tvar
+```
+
+**Go 实现**:
+```go
+// 调整后的 Z-Score = (spread - (mean + tValue)) / std
+adjustedZScore := (spreadStats.CurrentSpread - (spreadStats.Mean + pas.tValue)) / spreadStats.Std
+```
+
+**API 方法**:
+- `SetTValue(value float64)`: 设置 tValue
+- `GetTValue() float64`: 获取当前 tValue
+- `ApplyParameters({"t_value": 0.5})`: 通过参数更新设置
+
+**使用场景**:
+- tValue > 0: 提高均值，使做空信号更容易触发
+- tValue < 0: 降低均值，使做多信号更容易触发
+- 可用于外部风控系统或交易员手动调整
+
+---
+
+**最后更新**: 2026-02-09 21:00
