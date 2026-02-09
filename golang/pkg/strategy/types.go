@@ -134,6 +134,15 @@ func (ts *TradingSignal) ToOrderRequest() *orspb.OrderRequest {
 		req.OpenClose = orspb.OpenClose_OPEN
 	}
 
+	// 传递订单类别到 metadata（用于追单识别）
+	// C++: STANDARD vs CROSS order types
+	if ts.Category == SignalCategoryAggressive {
+		if req.Metadata == nil {
+			req.Metadata = make(map[string]string)
+		}
+		req.Metadata["order_category"] = "aggressive"
+	}
+
 	return req
 }
 

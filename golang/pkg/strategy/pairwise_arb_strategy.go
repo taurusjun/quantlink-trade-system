@@ -1193,6 +1193,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	orderPrice = RoundToTickSize(orderPrice, tickSize)
 
 	// 8. 发送追单信号
+	// C++: SendAskOrder2/SendBidOrder2 with CROSS type
 	signal := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     targetSymbol,
@@ -1202,6 +1203,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		Signal:     0, // 追单信号
 		Confidence: 0.8,
 		Timestamp:  time.Now(),
+		Category:   SignalCategoryAggressive, // 🔑 关键：标记为主动单（C++: CROSS）
 		Metadata: map[string]interface{}{
 			"type":           "aggressive",
 			"exposure":       exposure,
@@ -1233,15 +1235,36 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 // C++ 对应: CalcPendingNetposAgg()
 // 参考: tbsrc/Strategies/PairwiseArbStrategy.cpp:688-699
 //
-// 注意：当前实现简化为返回0，主要依赖 SUPPORTING_ORDERS 限制追单数量
-// 完整实现需要在订单发送时标记类别，并在订单映射中跟踪
+// C++ 原代码:
+//   for (auto &it : *m_ordMap2) {
+//       auto &order = it.second;
+//       if (order->m_ordType == CROSS || order->m_ordType == MATCH)
+//           order->m_side == BUY ? netpos_agg_pending += order->m_openQty
+//                                : netpos_agg_pending -= order->m_openQty;
+//   }
 func (pas *PairwiseArbStrategy) calculatePendingNetpos() int64 {
-	// 简化实现：依赖 SUPPORTING_ORDERS 限制追单数量
-	// 完整实现需要：
-	// 1. 在发送追单时标记订单为 SignalCategoryAggressive
-	// 2. 在 updateOrderMaps 中正确识别追单类别
-	// 3. 遍历 leg2OrderMap 计算待成交的追单净头寸
-	return 0
+	var netposPending int64
+
+	// 遍历 leg2 订单映射，计算待成交的 CROSS/MATCH 类型订单净头寸
+	if pas.leg2OrderMap != nil {
+		pas.leg2OrderMap.mu.RLock()
+		for _, order := range pas.leg2OrderMap.orderByID {
+			// C++: if (order->m_ordType == CROSS || order->m_ordType == MATCH)
+			// 只统计主动单（追单）的待成交量
+			if order.Category == SignalCategoryAggressive {
+				// C++: m_openQty = 待成交数量
+				pendingQty := order.Quantity - order.FilledQty
+				if order.Side == OrderSideBuy {
+					netposPending += pendingQty
+				} else {
+					netposPending -= pendingQty
+				}
+			}
+		}
+		pas.leg2OrderMap.mu.RUnlock()
+	}
+
+	return netposPending
 }
 
 // OnOrderUpdate handles order updates
@@ -1334,8 +1357,14 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 		// 注意：实际实现中可能需要从订单的扩展字段获取 level
 
 		// 确定订单类别（C++: STANDARD/CROSS/MATCH）
-		// 默认为被动单，主动单需要在发送时标记
+		// 从 metadata 中读取 order_category 字段
+		// 如果 metadata["order_category"] == "aggressive"，则为主动单
 		category := SignalCategoryPassive
+		if update.Metadata != nil {
+			if cat, ok := update.Metadata["order_category"]; ok && cat == "aggressive" {
+				category = SignalCategoryAggressive
+			}
+		}
 
 		order := &PriceOrder{
 			Price:     update.Price,
