@@ -1,6 +1,8 @@
-# Scripts 目录说明
+# Scripts 脚本目录
 
-**最后更新**: 2026-01-30
+本目录包含 QuantLink Trade System 的核心测试脚本。
+
+**最后更新**: 2026-02-09
 
 ---
 
@@ -8,208 +10,112 @@
 
 ```
 scripts/
-├── README.md                      # 本文档
-│
-├── 构建脚本
-│   ├── build_gateway.sh          # 编译 C++ Gateway
-│   ├── build_golang.sh           # 编译 Golang Trader
-│   └── generate_proto.sh         # 生成 Protobuf 代码
-│
-├── 部署脚本
-│   ├── prepare_deploy.sh         # 准备部署环境
-│   └── quick_deploy.sh           # 快速部署
-│
-├── 依赖安装
-│   ├── install_dependencies.sh   # 安装系统依赖
-│   └── install_nats_c.sh         # 安装 NATS C 客户端
-│
+├── README.md                      # 本文件
 ├── test/                          # 测试脚本
-│   ├── e2e/                      # 端到端测试
-│   │   ├── test_full_chain.sh    # 完整链路测试
-│   │   ├── test_ctp_e2e.sh       # CTP 端到端测试
-│   │   ├── test_ctp_e2e_full.sh  # CTP 完整测试
-│   │   ├── check_ctp_e2e.sh      # 检查 CTP 测试状态
-│   │   └── stop_ctp_e2e.sh       # 停止 CTP 测试
-│   │
-│   ├── integration/              # 集成测试
-│   │   ├── test_multi_strategy_dashboard.sh          # 多策略 Dashboard 测试
-│   │   ├── test_multi_strategy_hot_reload.sh         # 多策略热加载测试
-│   │   ├── test_multi_strategy_websocket_e2e.sh      # 多策略 WebSocket 测试
-│   │   ├── test_multi_strategy_with_hotreload.sh     # 多策略+热加载集成测试
-│   │   └── test_dashboard_simulator.sh               # Dashboard 模拟器测试
-│   │
-│   ├── unit/                     # 单元测试
-│   │   ├── test_ctp_account.sh   # CTP 账户查询测试
-│   │   ├── test_ctp_query.sh     # CTP 查询功能测试
-│   │   ├── test_ctp_trading.sh   # CTP 交易功能测试
-│   │   ├── test_websocket.sh     # WebSocket 功能测试
-│   │   └── verify_param_loading.sh # 参数加载验证
-│   │
-│   └── feature/                  # 功能测试
-│       ├── test_position_persistence.sh  # 持仓持久化测试
-│       └── test_position_query.sh        # 持仓查询测试
-│
-├── live/                         # 实盘脚本
-│   ├── start_live_test.sh        # 启动实盘测试
-│   ├── start_full_test.sh        # 启动完整实盘测试
-│   ├── monitor_live_test.sh      # 监控实盘测试
-│   └── monitor_live.sh           # 实盘监控
-│
-├── trading/                      # 交易操作脚本
-│   ├── trade_ag2603.sh           # 交易 ag2603
-│   ├── close_ag2603.sh           # 平仓 ag2603
-│   ├── query_position.sh         # 查询持仓
-│   └── get_market_price.sh       # 获取市场价格
-│
-└── backtest/                     # 回测脚本
-    └── run_backtest.sh           # 运行回测
+│   └── e2e/                       # 端到端测试
+│       ├── test_simulator_e2e.sh  # 模拟交易所端到端测试
+│       ├── test_ctp_live_e2e.sh   # CTP实盘端到端测试
+│       └── test_full_chain.sh     # 完整链路测试
+├── live/                          # 实盘启动脚本
+│   ├── start_simulator.sh         # 启动模拟交易系统
+│   ├── start_ctp_live.sh          # 启动CTP实盘系统
+│   └── stop_all.sh                # 停止所有服务
+└── archive/                       # 已归档脚本（历史版本）
 ```
 
 ---
 
-## 🚀 常用脚本
+## 🚀 核心脚本说明
 
-### 构建项目
+### 1. 模拟测试
+
+**test/e2e/test_simulator_e2e.sh** - 模拟交易所端到端测试
+- 启动完整模拟环境（md_simulator → md_gateway → trader → ors_gateway → counter_gateway）
+- 验证订单全链路流转
+- 适用于开发和调试阶段
 
 ```bash
-# 编译 C++ Gateway
-./scripts/build_gateway.sh
-
-# 编译 Golang Trader
-./scripts/build_golang.sh
-
-# 生成 Protobuf 代码
-./scripts/generate_proto.sh
+./scripts/test/e2e/test_simulator_e2e.sh
 ```
 
-### 运行测试
+**live/start_simulator.sh** - 启动模拟交易系统
+- 长期运行的模拟环境
+- 用于功能测试和策略调试
 
 ```bash
-# 端到端测试
-./scripts/test/e2e/test_full_chain.sh
-
-# CTP 完整测试
-./scripts/test/e2e/test_ctp_e2e_full.sh
-
-# 多策略热加载测试
-./scripts/test/integration/test_multi_strategy_hot_reload.sh
-
-# 持仓管理测试
-./scripts/test/feature/test_position_query.sh
+./scripts/live/start_simulator.sh
 ```
 
-### 实盘操作
+### 2. CTP实盘测试
+
+**test/e2e/test_ctp_live_e2e.sh** - CTP实盘端到端测试
+- 连接真实CTP行情和交易服务器（SimNow标准环境）
+- 验证实盘订单流转
+- 需要配置 `config/ctp/ctp_md.secret.yaml` 和 `config/ctp/ctp_td.secret.yaml`
 
 ```bash
-# 启动实盘测试
-./scripts/live/start_live_test.sh
-
-# 监控实盘运行
-./scripts/live/monitor_live.sh
-
-# 查询持仓
-./scripts/trading/query_position.sh
-
-# 获取市场价格
-./scripts/trading/get_market_price.sh
+./scripts/test/e2e/test_ctp_live_e2e.sh
 ```
 
-### 部署
+**live/start_ctp_live.sh** - 启动CTP实盘系统
+- 生产环境启动脚本
+- 自动检查配置完整性
+- 支持 Ctrl+C 安全停止
 
 ```bash
-# 准备部署环境
-./scripts/prepare_deploy.sh
+./scripts/live/start_ctp_live.sh
+```
 
-# 快速部署
-./scripts/quick_deploy.sh
+### 3. 停止服务
+
+**live/stop_all.sh** - 停止所有交易服务
+```bash
+./scripts/live/stop_all.sh
 ```
 
 ---
 
-## 📝 脚本命名规范
+## ⚙️ 配置要求
 
-- **测试脚本**: `test_*.sh`
-- **启动脚本**: `start_*.sh`
-- **停止脚本**: `stop_*.sh`
-- **监控脚本**: `monitor_*.sh`
-- **构建脚本**: `build_*.sh`
-- **安装脚本**: `install_*.sh`
+### 模拟测试
+- 无额外配置，使用 `config/trader.test.yaml`
+
+### CTP实盘测试
+需要创建以下 secret 文件：
+
+**config/ctp/ctp_md.secret.yaml**
+```yaml
+ctp:
+  user_id: "你的用户ID"
+  password: "你的密码"
+```
+
+**config/ctp/ctp_td.secret.yaml**
+```yaml
+ctp:
+  user_id: "你的用户ID"
+  password: "你的密码"
+  investor_id: "你的投资者ID"
+```
 
 ---
 
-## 🔧 脚本开发规范
+## ⚠️ 注意事项
 
-### 1. 脚本头部模板
-
-```bash
-#!/bin/bash
-set -e  # 遇到错误立即退出
-
-# 脚本说明
-# 用途: [脚本用途]
-# 作者: [作者]
-# 日期: [日期]
-
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$PROJECT_ROOT"
-```
-
-### 2. 错误处理
-
-```bash
-# 检查命令是否成功
-if ! command_here; then
-    echo "ERROR: Command failed"
-    exit 1
-fi
-
-# 检查文件是否存在
-if [ ! -f "required_file" ]; then
-    echo "ERROR: File not found"
-    exit 1
-fi
-```
-
-### 3. 日志输出
-
-```bash
-echo "[INFO] Starting process..."
-echo "[WARN] Warning message"
-echo "[ERROR] Error occurred" >&2  # 输出到 stderr
-```
-
-### 4. 清理资源
-
-```bash
-# 捕获退出信号，确保清理
-trap cleanup EXIT
-
-cleanup() {
-    echo "Cleaning up..."
-    pkill -f process_name
-    rm -f temp_file
-}
-```
+1. 实盘测试前请确认 SimNow 服务器状态
+2. 标准环境交易时段：周一至周五 9:00-15:00
+3. 测试完成后务必运行 `stop_all.sh` 停止所有服务
+4. 归档脚本在 `archive/` 目录，如需使用请查阅对应文档
 
 ---
 
 ## 📚 相关文档
 
+- 架构说明: [docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md](../docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md)
+- 使用指南: [docs/核心文档/USAGE.md](../docs/核心文档/USAGE.md)
 - 构建指南: [docs/核心文档/BUILD_GUIDE.md](../docs/核心文档/BUILD_GUIDE.md)
-- 使用说明: [docs/核心文档/USAGE.md](../docs/核心文档/USAGE.md)
-- 测试报告: [docs/测试报告/](../docs/测试报告/)
 
 ---
 
-## 🔗 快速链接
-
-- **项目根目录**: `/Users/user/PWorks/RD/quantlink-trade-system/`
-- **Gateway 源码**: `gateway/`
-- **Golang 源码**: `golang/`
-- **配置文件**: `config/`
-- **日志目录**: `log/`
-
----
-
-**整理日期**: 2026-01-30
-**脚本总数**: 29 个
+**整理日期**: 2026-02-09
+**核心脚本数**: 6 个

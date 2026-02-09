@@ -50,15 +50,15 @@ func TestBaseStrategy_Position(t *testing.T) {
 	bs := NewBaseStrategy("test_strategy", "test")
 
 	// Initial position should be zero
-	pos := bs.GetPosition()
+	pos := bs.GetEstimatedPosition()
 	if pos.NetQty != 0 {
 		t.Errorf("Expected NetQty 0, got %d", pos.NetQty)
 	}
-	if pos.LongQty != 0 {
-		t.Errorf("Expected LongQty 0, got %d", pos.LongQty)
+	if pos.BuyQty != 0 {
+		t.Errorf("Expected BuyQty 0, got %d", pos.BuyQty)
 	}
-	if pos.ShortQty != 0 {
-		t.Errorf("Expected ShortQty 0, got %d", pos.ShortQty)
+	if pos.SellQty != 0 {
+		t.Errorf("Expected SellQty 0, got %d", pos.SellQty)
 	}
 }
 
@@ -81,18 +81,19 @@ func TestBaseStrategy_UpdatePosition(t *testing.T) {
 
 	bs.UpdatePosition(update)
 
-	pos := bs.GetPosition()
-	if pos.LongQty != 10 {
-		t.Errorf("Expected LongQty 10, got %d", pos.LongQty)
+	pos := bs.GetEstimatedPosition()
+	if pos.BuyQty != 10 {
+		t.Errorf("Expected BuyQty 10, got %d", pos.BuyQty)
 	}
 	if pos.NetQty != 10 {
 		t.Errorf("Expected NetQty 10, got %d", pos.NetQty)
 	}
-	if pos.AvgLongPrice != 100.0 {
-		t.Errorf("Expected AvgLongPrice 100.0, got %.2f", pos.AvgLongPrice)
+	if pos.BuyAvgPrice != 100.0 {
+		t.Errorf("Expected BuyAvgPrice 100.0, got %.2f", pos.BuyAvgPrice)
 	}
 
-	// Simulate a sell fill
+	// Simulate a sell fill - 这会平掉部分多头持仓（净持仓模型）
+	// 在净持仓模型中，卖出时如果有多头持仓，会先平掉多头
 	update2 := &orspb.OrderUpdate{
 		OrderId:       "order_2",
 		ClientOrderId: "client_2",
@@ -108,15 +109,16 @@ func TestBaseStrategy_UpdatePosition(t *testing.T) {
 
 	bs.UpdatePosition(update2)
 
-	pos = bs.GetPosition()
+	pos = bs.GetEstimatedPosition()
+	// 净持仓模型：买入10，卖出5平仓，剩余 NetQty=5, BuyQty=5, SellQty=0
 	if pos.NetQty != 5 {
 		t.Errorf("Expected NetQty 5, got %d", pos.NetQty)
 	}
-	if pos.LongQty != 10 {
-		t.Errorf("Expected LongQty 10, got %d", pos.LongQty)
+	if pos.BuyQty != 5 {
+		t.Errorf("Expected BuyQty 5 (after closing 5 long), got %d", pos.BuyQty)
 	}
-	if pos.ShortQty != 5 {
-		t.Errorf("Expected ShortQty 5, got %d", pos.ShortQty)
+	if pos.SellQty != 0 {
+		t.Errorf("Expected SellQty 0 (no short position), got %d", pos.SellQty)
 	}
 }
 
@@ -160,8 +162,8 @@ func TestBaseStrategy_PNL(t *testing.T) {
 	}
 	bs.UpdatePosition(sell)
 
-	// Update PNL with current price
-	bs.UpdatePNL(110.0)
+	// Update PNL with current price (bidPrice, askPrice)
+	bs.UpdatePNL(110.0, 110.5)
 
 	pnl = bs.GetPNL()
 	if pnl.RealizedPnL != 100.0 {
@@ -266,7 +268,7 @@ func TestBaseStrategy_Reset(t *testing.T) {
 	if len(bs.GetSignals()) != 0 {
 		t.Error("Signals should be cleared after reset")
 	}
-	if bs.GetPosition().NetQty != 0 {
+	if bs.GetEstimatedPosition().NetQty != 0 {
 		t.Error("Position should be zero after reset")
 	}
 	if bs.GetPNL().TotalPnL != 0 {
@@ -334,10 +336,10 @@ func BenchmarkBaseStrategy_UpdatePosition(b *testing.B) {
 func BenchmarkBaseStrategy_UpdatePNL(b *testing.B) {
 	bs := NewBaseStrategy("test_strategy", "test")
 	bs.EstimatedPosition.NetQty = 10
-	bs.EstimatedPosition.AvgLongPrice = 100.0
+	bs.EstimatedPosition.BuyAvgPrice = 100.0
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		bs.UpdatePNL(105.0)
+		bs.UpdatePNL(105.0, 105.5)
 	}
 }

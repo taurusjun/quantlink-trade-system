@@ -35,6 +35,16 @@ strategies:
       order_size: 2.0                   # 每次下单2手（适中）
       min_correlation: 0.0              # 最小相关系数
       slippage_ticks: 0.0               # 滑点
+      # 动态阈值参数 (C++: BEGIN_PLACE, LONG_PLACE, SHORT_PLACE)
+      begin_zscore: 1.0                 # 空仓入场阈值
+      long_zscore: 2.0                  # 满仓多头时做多阈值
+      short_zscore: 0.5                 # 满仓空头时做空阈值
+      # 主动追单参数 (C++: SendAggressiveOrder)
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
 # ═══════════════════════════════════════════════════════════
 # Session Configuration (交易时段)

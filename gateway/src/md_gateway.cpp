@@ -345,8 +345,8 @@ void MDGateway::Run() {
     std::cout << "[MDGateway] gRPC server listening on "
               << m_config.grpc_listen_addr << std::endl;
 
-    // 等待服务器关闭
-    m_grpc_server->Wait();
+    // 注意：不在这里阻塞，让主线程的循环来控制等待
+    // 调用者负责在适当时候调用 Shutdown()
 }
 
 void MDGateway::Shutdown() {

@@ -16,14 +16,16 @@ using OrderRespQueue = hft::shm::SPSCQueue<hft::ors::OrderResponseRaw, 4096>;
 static std::unique_ptr<grpc::Server> g_server;
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_shutdown_requested{false};
+static std::atomic<int> g_signal_received{0};
 
+// 信号处理函数 - 只设置标志，不调用非异步信号安全的函数
+// 注意：std::cout 和 gRPC Shutdown() 都不是异步信号安全的，在信号处理中调用会导致互斥锁递归错误
 void SignalHandler(int signal) {
-    std::cout << "\n[Main] Received signal " << signal << ", shutting down..." << std::endl;
-    g_running = false;
-    g_shutdown_requested = true;
-    if (g_server) {
-        g_server->Shutdown();
-    }
+    g_signal_received.store(signal);
+    g_running.store(false);
+    g_shutdown_requested.store(true);
+    // 不要在这里调用 std::cout 或 g_server->Shutdown()
+    // gRPC 服务器的 Wait() 会在 g_running 变为 false 后超时返回
 }
 
 void PrintBanner() {
@@ -279,8 +281,20 @@ int main(int argc, char** argv) {
 #endif
     std::cout << "╚════════════════════════════════════════════════════════════╝\n" << std::endl;
 
-    // 9. 等待关闭信号
-    g_server->Wait();
+    // 9. 使用轮询方式等待关闭信号，而不是阻塞式 Wait()
+    // 这样可以在信号到达后安全地在主线程中执行清理
+    while (g_running.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // 信号已接收，在主线程中安全关闭 gRPC 服务器
+    if (g_signal_received.load() != 0) {
+        std::cout << "\n[Main] Received signal " << g_signal_received.load() << ", shutting down..." << std::endl;
+    }
+
+    if (g_server) {
+        g_server->Shutdown();
+    }
 
     // 10. 清理
     std::cout << "[Main] Shutting down ORS Gateway..." << std::endl;

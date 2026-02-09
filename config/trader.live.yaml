@@ -36,6 +36,16 @@ strategies:
       min_correlation: 0.7              # 最小相关系数（实盘：要求高相关性）
       slippage_ticks: 2                 # 滑点（tick数）
       use_market_price: false           # 使用对手价（实盘建议false，使用限价单）
+      # 动态阈值参数 (C++: BEGIN_PLACE, LONG_PLACE, SHORT_PLACE)
+      begin_zscore: 1.5                 # 空仓入场阈值 (= entry_zscore)
+      long_zscore: 2.5                  # 满仓多头时做多阈值
+      short_zscore: 0.5                 # 满仓空头时做空阈值
+      # 主动追单参数 (C++: SendAggressiveOrder)
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
   # 策略2: 黄金配对套利 (au2604/au2606)
   - id: "live_au_spread"                # 策略唯一标识符（黄金）
@@ -60,6 +70,16 @@ strategies:
       min_correlation: 0.75             # 最小相关系数（黄金要求更高）
       slippage_ticks: 1                 # 滑点（tick数，黄金tick小）
       use_market_price: false           # 使用对手价
+      # 动态阈值参数 (C++: BEGIN_PLACE, LONG_PLACE, SHORT_PLACE)
+      begin_zscore: 2.8                 # 空仓入场阈值 (= entry_zscore)
+      long_zscore: 4.0                  # 满仓多头时做多阈值
+      short_zscore: 1.5                 # 满仓空头时做空阈值
+      # 主动追单参数 (C++: SendAggressiveOrder)
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 10.0       # 跳跃tick数（黄金tick较小）
+      aggressive_fail_threshold: 3.0    # 失败阈值
 
 # ═══════════════════════════════════════════════════════════
 # Instrument Specifications (品种规格配置)

@@ -11,14 +11,15 @@ using namespace hft::shm;
 // 全局指针用于信号处理
 MDGateway* g_gateway = nullptr;
 std::atomic<bool> g_running{true};
+std::atomic<int> g_signal_received{0};
 
-// 信号处理函数
+// 信号处理函数 - 只设置标志，不调用非异步信号安全的函数
+// 注意：std::cout 和 Shutdown() 都不是异步信号安全的，在信号处理中调用会导致互斥锁递归错误
 void SignalHandler(int signal) {
-    std::cout << "\n[Main] Received signal " << signal << std::endl;
+    g_signal_received.store(signal);
     g_running.store(false);
-    if (g_gateway) {
-        g_gateway->Shutdown();
-    }
+    // 不要在这里调用 std::cout 或 g_gateway->Shutdown()
+    // 这些操作会在主线程中执行
 }
 
 // 从共享内存读取并转换为Protobuf格式
@@ -147,8 +148,23 @@ int main(int argc, char* argv[]) {
             SharedMemoryReaderThread(gateway.get(), queue);
         });
 
-        // 运行Gateway（阻塞）
+        // 启动 Gateway（非阻塞）
         gateway->Run();
+
+        // 主循环：等待关闭信号
+        while (g_running.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // 信号处理后的清理 - 在主线程中安全执行
+        if (g_signal_received.load() != 0) {
+            std::cout << "\n[Main] Received signal " << g_signal_received.load() << std::endl;
+        }
+
+        // 在主线程中安全关闭 Gateway
+        if (g_gateway) {
+            g_gateway->Shutdown();
+        }
 
         // 等待读取线程结束
         if (reader_thread.joinable()) {
