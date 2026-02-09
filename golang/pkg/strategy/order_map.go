@@ -8,13 +8,14 @@ import (
 // PriceOrder represents an order at a specific price level
 // C++: 对应 m_bidMap/m_askMap 中存储的订单信息
 type PriceOrder struct {
-	Price     float64   // 挂单价格
-	OrderID   string    // 订单ID
-	Symbol    string    // 合约代码
-	Side      OrderSide // 买卖方向
-	Quantity  int64     // 委托数量
-	FilledQty int64     // 已成交数量
-	Level     int       // 挂单层级 (0=一档, 1=二档, ...)
+	Price     float64        // 挂单价格
+	OrderID   string         // 订单ID
+	Symbol    string         // 合约代码
+	Side      OrderSide      // 买卖方向
+	Quantity  int64          // 委托数量
+	FilledQty int64          // 已成交数量
+	Level     int            // 挂单层级 (0=一档, 1=二档, ...)
+	Category  SignalCategory // 订单类别 (C++: STANDARD/CROSS/MATCH)
 }
 
 // GetPendingQty returns the remaining unfilled quantity

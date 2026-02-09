@@ -45,6 +45,7 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 20.0       # 跳跃tick数
       aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
       # 多层挂单参数（C++: MAX_QUOTE_LEVEL）
       enable_multi_level: true          # 是否启用多层挂单（测试：开启）
       max_quote_level: 3                # 最大挂单层数
@@ -87,6 +88,7 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 10.0       # 跳跃tick数（黄金tick size较小）
       aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
 
   # 策略3: 白银近月配对套利 (ag2603/ag2603) - 演示多策略
   - id: "test_92203"                    # 策略唯一标识符（白银近月）
@@ -120,6 +122,7 @@ strategies:
       aggressive_max_retry: 4.0         # 最大追单次数
       aggressive_slop_ticks: 20.0       # 跳跃tick数
       aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
 
 # ═══════════════════════════════════════════════════════════
 # Trading Session Configuration (交易时段配置)

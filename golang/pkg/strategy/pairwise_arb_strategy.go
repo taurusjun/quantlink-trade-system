@@ -64,6 +64,12 @@ type PairwiseArbStrategy struct {
 	aggLastTime   time.Time // 上次追单时间
 	aggFailCount  int       // 连续失败次数
 
+	// C++: SUPPORTING_ORDERS - 限制追单数量
+	// 防止在一个方向上发送过多追单
+	supportingOrders int   // 最大追单数量（配置参数）
+	sellAggOrder     int   // 当前卖单追单计数（C++: sellAggOrder）
+	buyAggOrder      int   // 当前买单追单计数（C++: buyAggOrder）
+
 	// Spread analyzer (encapsulates spread calculation and statistics)
 	spreadAnalyzer    *spread.SpreadAnalyzer
 
@@ -281,9 +287,18 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	} else {
 		pas.aggressiveFailThreshold = 3 // 默认 3 次
 	}
+	// C++: SUPPORTING_ORDERS - 限制追单数量，防止单方向发送过多追单
+	// 关键参数！如果设置为 0 则不限制追单数量
+	if val, ok := config.Parameters["supporting_orders"].(float64); ok {
+		pas.supportingOrders = int(val)
+	} else {
+		pas.supportingOrders = 3 // 默认限制 3 个追单
+	}
 	// 初始化追单状态
 	pas.aggRepeat = 1
 	pas.aggDirection = 0
+	pas.sellAggOrder = 0
+	pas.buyAggOrder = 0
 
 	// 多层挂单参数（C++: MAX_QUOTE_LEVEL）
 	if val, ok := config.Parameters["enable_multi_level"].(bool); ok {
@@ -1045,26 +1060,33 @@ func (pas *PairwiseArbStrategy) calculateExposure() int64 {
 
 // sendAggressiveOrder 主动追单机制
 // 与 C++ SendAggressiveOrder() 完全一致
-// 参考: docs/cpp_reference/SendAggressiveOrder.cpp
+// 参考: tbsrc/Strategies/PairwiseArbStrategy.cpp:701-800
 //
 // C++ 逻辑:
-//   1. exposure = m_netpos_pass + m_netpos_agg (敞口计算)
-//   2. if (last_agg_side != side || now - last_agg_time > 500ms) 重置计数
-//   3. 价格递进:
+//   1. exposure = m_netpos_pass + m_netpos_agg + pending_netpos_agg (敞口计算)
+//   2. CRITICAL: sellAggOrder/buyAggOrder <= SUPPORTING_ORDERS (限制追单数量)
+//   3. if (last_agg_side != side || now - last_agg_time > 500ms) 发送新追单
+//   4. 价格递进:
 //      - m_agg_repeat < 3: bid/ask ± tickSize * m_agg_repeat
 //      - m_agg_repeat >= 3: bid/ask ± tickSize * SLOP
-//   4. m_agg_repeat > 3: HandleSquareoff() (触发策略停止)
+//   5. m_agg_repeat > 3: HandleSquareoff() (触发策略停止)
 func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	if !pas.aggressiveEnabled {
 		return
 	}
 
-	// 1. 计算敞口
+	// 1. 计算敞口（包括待成交订单）
+	// C++: exposure = m_firstStrat->m_netpos_pass + m_secondStrat->m_netpos_agg + pending_netpos_agg2
 	exposure := pas.calculateExposure()
-	if exposure == 0 {
-		// 无敞口，重置追单状态
+	pendingNetpos := pas.calculatePendingNetpos() // 新增：计算待成交订单净头寸
+	totalExposure := exposure + pendingNetpos
+
+	if totalExposure == 0 {
+		// 无敞口，重置追单状态和计数
 		pas.aggRepeat = 1
 		pas.aggDirection = 0
+		pas.sellAggOrder = 0
+		pas.buyAggOrder = 0
 		return
 	}
 
@@ -1077,12 +1099,12 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	var targetQty int64
 	var bid, ask float64
 
-	if exposure > 0 {
+	if totalExposure > 0 {
 		// 多头敞口：需要卖出
 		newDirection = -1
 		targetSide = OrderSideSell
 		targetSymbol = pas.symbol2
-		targetQty = exposure
+		targetQty = totalExposure
 		bid = pas.bid2
 		ask = pas.ask2
 	} else {
@@ -1090,21 +1112,47 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		newDirection = 1
 		targetSide = OrderSideBuy
 		targetSymbol = pas.symbol2
-		targetQty = -exposure
+		targetQty = -totalExposure
 		bid = pas.bid2
 		ask = pas.ask2
 	}
 
-	// 3. 流控检查：如果方向变化，重置计数；否则检查间隔
+	// 3. CRITICAL: 检查 SUPPORTING_ORDERS 限制
+	// C++: if (exposure > 0 && sellAggOrder <= SUPPORTING_ORDERS)
+	// C++: if (exposure < 0 && buyAggOrder <= SUPPORTING_ORDERS)
+	if pas.supportingOrders > 0 {
+		if targetSide == OrderSideSell && pas.sellAggOrder > pas.supportingOrders {
+			log.Printf("[PairwiseArb:%s] ⛔ Sell aggressive order limit reached: %d > %d",
+				pas.ID, pas.sellAggOrder, pas.supportingOrders)
+			return
+		}
+		if targetSide == OrderSideBuy && pas.buyAggOrder > pas.supportingOrders {
+			log.Printf("[PairwiseArb:%s] ⛔ Buy aggressive order limit reached: %d > %d",
+				pas.ID, pas.buyAggOrder, pas.supportingOrders)
+			return
+		}
+	}
+
+	// 4. 方向变化检查：如果方向变化，重置计数
 	if pas.aggDirection != newDirection {
 		pas.aggRepeat = 1
 		pas.aggDirection = newDirection
-	} else if time.Since(pas.aggLastTime) < pas.aggressiveInterval {
+		// 方向变化时也重置对应方向的追单计数
+		if newDirection == -1 {
+			pas.sellAggOrder = 0
+		} else {
+			pas.buyAggOrder = 0
+		}
+	}
+
+	// 5. 时间间隔检查
+	// C++: if (last_agg_side != side || now - last_agg_time > 500ms)
+	if time.Since(pas.aggLastTime) < pas.aggressiveInterval {
 		// 同方向追单，间隔不足
 		return
 	}
 
-	// 4. 检查追单次数限制
+	// 6. 检查追单次数限制
 	if pas.aggRepeat > pas.aggressiveMaxRetry {
 		// 超过最大追单次数
 		pas.aggFailCount++
@@ -1120,7 +1168,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		return
 	}
 
-	// 5. 计算追单价格
+	// 7. 计算追单价格
 	// C++: agg_price = m_agg_repeat < 3
 	//        ? bidPx[0] - tickSize * m_agg_repeat
 	//        : bidPx[0] - tickSize * SLOP
@@ -1144,7 +1192,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	}
 	orderPrice = RoundToTickSize(orderPrice, tickSize)
 
-	// 6. 发送追单信号
+	// 8. 发送追单信号
 	signal := &TradingSignal{
 		StrategyID: pas.ID,
 		Symbol:     targetSymbol,
@@ -1155,20 +1203,45 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		Confidence: 0.8,
 		Timestamp:  time.Now(),
 		Metadata: map[string]interface{}{
-			"type":         "aggressive",
-			"exposure":     exposure,
-			"retry":        pas.aggRepeat,
-			"price_adjust": priceAdjust,
+			"type":           "aggressive",
+			"exposure":       exposure,
+			"pending_netpos": pendingNetpos,
+			"total_exposure": totalExposure,
+			"retry":          pas.aggRepeat,
+			"price_adjust":   priceAdjust,
+			"sell_agg_order": pas.sellAggOrder,
+			"buy_agg_order":  pas.buyAggOrder,
 		},
 	}
 	pas.BaseStrategy.AddSignal(signal)
 
-	log.Printf("[PairwiseArb:%s] 🏃 Aggressive order #%d: %v %s %d @ %.2f (exposure=%d, adjust=%.2f)",
-		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, priceAdjust)
+	log.Printf("[PairwiseArb:%s] 🏃 Aggressive order #%d: %v %s %d @ %.2f (exposure=%d, pending=%d, sellAgg=%d, buyAgg=%d)",
+		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, pendingNetpos, pas.sellAggOrder, pas.buyAggOrder)
 
-	// 7. 更新追单状态
+	// 9. 更新追单状态
+	// C++: sellAggOrder++ / buyAggOrder++
+	if targetSide == OrderSideSell {
+		pas.sellAggOrder++
+	} else {
+		pas.buyAggOrder++
+	}
 	pas.aggLastTime = time.Now()
 	pas.aggRepeat++
+}
+
+// calculatePendingNetpos 计算待成交订单的净头寸
+// C++ 对应: CalcPendingNetposAgg()
+// 参考: tbsrc/Strategies/PairwiseArbStrategy.cpp:688-699
+//
+// 注意：当前实现简化为返回0，主要依赖 SUPPORTING_ORDERS 限制追单数量
+// 完整实现需要在订单发送时标记类别，并在订单映射中跟踪
+func (pas *PairwiseArbStrategy) calculatePendingNetpos() int64 {
+	// 简化实现：依赖 SUPPORTING_ORDERS 限制追单数量
+	// 完整实现需要：
+	// 1. 在发送追单时标记订单为 SignalCategoryAggressive
+	// 2. 在 updateOrderMaps 中正确识别追单类别
+	// 3. 遍历 leg2OrderMap 计算待成交的追单净头寸
+	return 0
 }
 
 // OnOrderUpdate handles order updates
@@ -1216,34 +1289,33 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 		// 成交后检查敞口，如果敞口为0则重置追单状态
 		exposure := pas.calculateExposure()
 		if exposure == 0 {
-			if pas.aggRepeat > 1 {
-				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (was retry #%d)",
-					pas.ID, pas.aggRepeat-1)
+			if pas.aggRepeat > 1 || pas.sellAggOrder > 0 || pas.buyAggOrder > 0 {
+				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (retry=%d, sellAgg=%d, buyAgg=%d)",
+					pas.ID, pas.aggRepeat-1, pas.sellAggOrder, pas.buyAggOrder)
 			}
 			pas.aggRepeat = 1
 			pas.aggDirection = 0
-			pas.aggFailCount = 0 // 成功清除敞口，重置失败计数
+			pas.aggFailCount = 0   // 成功清除敞口，重置失败计数
+			pas.sellAggOrder = 0   // 重置卖追单计数
+			pas.buyAggOrder = 0    // 重置买追单计数
 		}
 	}
 }
 
 // updateOrderMaps 根据订单状态更新订单映射
-// C++: 维护 m_bidMap/m_askMap 用于避免重复挂单
+// C++: 维护 m_bidMap/m_askMap 用于避免重复挂单和计算待成交净头寸
 func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
-	if !pas.enableMultiLevel {
-		return // 未启用多层挂单，不需要维护订单映射
-	}
-
 	symbol := update.Symbol
 	orderID := update.OrderId
 	var orderMap *OrderPriceMap
 
 	// 确定是哪个 leg 的订单
-	if symbol == pas.symbol1 {
+	switch symbol {
+	case pas.symbol1:
 		orderMap = pas.leg1OrderMap
-	} else if symbol == pas.symbol2 {
+	case pas.symbol2:
 		orderMap = pas.leg2OrderMap
-	} else {
+	default:
 		return // 不属于本策略的品种
 	}
 
@@ -1261,6 +1333,10 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 		level := 0
 		// 注意：实际实现中可能需要从订单的扩展字段获取 level
 
+		// 确定订单类别（C++: STANDARD/CROSS/MATCH）
+		// 默认为被动单，主动单需要在发送时标记
+		category := SignalCategoryPassive
+
 		order := &PriceOrder{
 			Price:     update.Price,
 			OrderID:   orderID,
@@ -1269,6 +1345,7 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 			Quantity:  int64(update.Quantity),
 			FilledQty: int64(update.FilledQty),
 			Level:     level,
+			Category:  category,
 		}
 		orderMap.AddOrder(order)
 		log.Printf("[PairwiseArb:%s] Added order to map: %s@%.2f, side=%v, level=%d",
