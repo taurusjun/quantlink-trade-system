@@ -313,15 +313,13 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 			}()
 
 			// 1. Update LastMarketData for WebSocket push
-			if accessor, ok := s.(BaseStrategyAccessor); ok {
-				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
-					baseStrat.MarketDataMu.Lock()
-					if baseStrat.LastMarketData == nil {
-						baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
-					}
-					baseStrat.LastMarketData[md.GetSymbol()] = md
-					baseStrat.MarketDataMu.Unlock()
+			if baseStrat := s.GetBaseStrategy(); baseStrat != nil {
+				baseStrat.MarketDataMu.Lock()
+				if baseStrat.LastMarketData == nil {
+					baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
 				}
+				baseStrat.LastMarketData[md.GetSymbol()] = md
+				baseStrat.MarketDataMu.Unlock()
 			}
 
 			// 2. Call market data callback
@@ -336,14 +334,12 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 			// 对应 tbsrc: !m_onFlat && m_Active check before SendOrder()
 			for _, signal := range signals {
 				// Check if strategy can send orders (aligned with tbsrc)
-				if accessor, ok := s.(BaseStrategyAccessor); ok {
-					baseStrat := accessor.GetBaseStrategy()
-					if baseStrat != nil && baseStrat.ControlState != nil {
-						if !baseStrat.CanSendOrder() {
-							log.Printf("[%s] Skipping order: strategy not in active state (%s)",
-								s.GetID(), baseStrat.ControlState.String())
-							continue
-						}
+				baseStrat := s.GetBaseStrategy()
+				if baseStrat != nil && baseStrat.ControlState != nil {
+					if !baseStrat.CanSendOrder() {
+						log.Printf("[%s] Skipping order: strategy not in active state (%s)",
+							s.GetID(), baseStrat.ControlState.String())
+						continue
 					}
 				}
 
@@ -392,15 +388,13 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 			}()
 
 			// Update LastMarketData for WebSocket push
-			if accessor, ok := s.(BaseStrategyAccessor); ok {
-				if baseStrat := accessor.GetBaseStrategy(); baseStrat != nil {
-					baseStrat.MarketDataMu.Lock()
-					if baseStrat.LastMarketData == nil {
-						baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
-					}
-					baseStrat.LastMarketData[md.GetSymbol()] = md
-					baseStrat.MarketDataMu.Unlock()
+			if baseStrat := s.GetBaseStrategy(); baseStrat != nil {
+				baseStrat.MarketDataMu.Lock()
+				if baseStrat.LastMarketData == nil {
+					baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
 				}
+				baseStrat.LastMarketData[md.GetSymbol()] = md
+				baseStrat.MarketDataMu.Unlock()
 			}
 
 			// Call market data callback
@@ -548,6 +542,71 @@ func (se *StrategyEngine) sendOrder(ctx context.Context, req *orspb.OrderRequest
 	}, nil
 }
 
+// cancelOrder sends a cancel request via ORS client
+// C++: ORSCallBack 中处理 CANCEL_ORDER_CONFIRM 和 CANCEL_ORDER_REJECT
+func (se *StrategyEngine) cancelOrder(ctx context.Context, req *orspb.CancelRequest) (*orspb.CancelResponse, error) {
+	// Send cancel via ORS client (gRPC)
+	if se.orsClient != nil {
+		return se.orsClient.CancelOrder(ctx, req)
+	}
+
+	// Fallback for testing/simulation
+	return &orspb.CancelResponse{
+		OrderId:   req.OrderId,
+		ErrorCode: orspb.ErrorCode_SUCCESS,
+	}, nil
+}
+
+// ProcessCancelRequests 处理所有策略的撤单请求
+// C++: 对应 ORSCallBack 中的撤单处理逻辑
+// 注意：撤单逻辑通过 BaseStrategy 处理，与 C++ ExecutionStrategy 架构一致
+func (se *StrategyEngine) ProcessCancelRequests() {
+	se.mu.RLock()
+	defer se.mu.RUnlock()
+
+	for _, strategy := range se.strategies {
+		// 直接通过 Strategy 接口获取 BaseStrategy
+		baseStrat := strategy.GetBaseStrategy()
+		if baseStrat == nil {
+			continue
+		}
+
+		// 获取待撤销订单
+		cancelRequests := baseStrat.GetPendingCancelOrders()
+		if len(cancelRequests) == 0 {
+			continue
+		}
+
+		for _, cancelReq := range cancelRequests {
+			// 发送撤单请求
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp, err := se.cancelOrder(ctx, &orspb.CancelRequest{
+				OrderId: cancelReq.OrderID,
+				Symbol:  cancelReq.Symbol,
+			})
+			cancel()
+
+			if err != nil {
+				log.Printf("[StrategyEngine] Failed to send cancel for orderID=%s: %v",
+					cancelReq.OrderID, err)
+				continue
+			}
+
+			// 标记撤单已发送
+			baseStrat.MarkCancelSent(cancelReq.OrderID)
+
+			// 处理撤单响应
+			if resp.ErrorCode != orspb.ErrorCode_SUCCESS {
+				// 撤单被拒绝
+				log.Printf("[StrategyEngine] Cancel rejected for orderID=%s: %s",
+					cancelReq.OrderID, resp.ErrorMsg)
+				// 调用 ProcessCancelReject
+				baseStrat.ProcessCancelReject(cancelReq.OrderID)
+			}
+		}
+	}
+}
+
 // timerLoop calls OnTimer for all strategies periodically
 // Also performs risk checks and state recovery (aligned with tbsrc CheckSquareoff)
 func (se *StrategyEngine) timerLoop() {
@@ -582,6 +641,10 @@ func (se *StrategyEngine) timerLoop() {
 			}
 			se.mu.RUnlock()
 
+			// 处理撤单请求
+			// C++: 在主循环中检查并发送撤单
+			se.ProcessCancelRequests()
+
 		case <-se.ctx.Done():
 			log.Println("[StrategyEngine] Timer loop stopped")
 			return
@@ -592,13 +655,8 @@ func (se *StrategyEngine) timerLoop() {
 // performStateCheck performs risk checks and state management for a strategy
 // Aligned with tbsrc's CheckSquareoff() logic
 func (se *StrategyEngine) performStateCheck(strategy Strategy) {
-	// Try to access BaseStrategy for state control
-	accessor, ok := strategy.(BaseStrategyAccessor)
-	if !ok {
-		return // Strategy doesn't expose BaseStrategy
-	}
-
-	baseStrat := accessor.GetBaseStrategy()
+	// 直接通过 Strategy 接口获取 BaseStrategy
+	baseStrat := strategy.GetBaseStrategy()
 	if baseStrat == nil || baseStrat.ControlState == nil {
 		return
 	}

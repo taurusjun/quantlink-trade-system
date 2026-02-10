@@ -25,20 +25,11 @@ func (se *StrategyEngine) GetOrCreateSharedIndicators(symbol string) *indicators
 	return se.sharedIndPool.GetOrCreate(symbol)
 }
 
-// BaseStrategyAccessor interface for strategies that expose BaseStrategy
-type BaseStrategyAccessor interface {
-	GetBaseStrategy() *BaseStrategy
-}
-
 // AttachSharedIndicators attaches shared indicators to a strategy
 // 将共享指标附加到策略（在AddStrategy时调用）
 func (se *StrategyEngine) AttachSharedIndicators(strategy Strategy, symbols []string) error {
-	// Try to get BaseStrategy through accessor interface
-	var baseStrat *BaseStrategy
-	if accessor, ok := strategy.(BaseStrategyAccessor); ok {
-		baseStrat = accessor.GetBaseStrategy()
-	}
-
+	// 直接通过 Strategy 接口获取 BaseStrategy
+	baseStrat := strategy.GetBaseStrategy()
 	if baseStrat == nil {
 		return fmt.Errorf("strategy %s does not expose BaseStrategy", strategy.GetID())
 	}

@@ -11,41 +11,45 @@ import (
 
 // MockStrategy for testing risk manager
 type MockStrategy struct {
-	id          string
-	isRunning   bool
-	pnl         strategy.PNL
-	position    strategy.Position
-	riskMetrics strategy.RiskMetrics
+	id           string
+	isRunning    bool
+	pnl          strategy.PNL
+	position     strategy.EstimatedPosition
+	riskMetrics  strategy.RiskMetrics
+	baseStrategy *strategy.BaseStrategy
 }
 
 func NewMockStrategy(id string) *MockStrategy {
 	return &MockStrategy{
-		id:          id,
-		isRunning:   false,
-		pnl:         strategy.PNL{},
-		position:    strategy.Position{},
-		riskMetrics: strategy.RiskMetrics{},
+		id:           id,
+		isRunning:    false,
+		pnl:          strategy.PNL{},
+		position:     strategy.EstimatedPosition{},
+		riskMetrics:  strategy.RiskMetrics{},
+		baseStrategy: strategy.NewBaseStrategy(id, "mock"),
 	}
 }
 
-func (m *MockStrategy) GetID() string                     { return m.id }
-func (m *MockStrategy) GetType() string                   { return "mock" }
-func (m *MockStrategy) IsRunning() bool                   { return m.isRunning }
+func (m *MockStrategy) GetID() string                                    { return m.id }
+func (m *MockStrategy) GetType() string                                  { return "mock" }
+func (m *MockStrategy) IsRunning() bool                                  { return m.isRunning }
 func (m *MockStrategy) Initialize(config *strategy.StrategyConfig) error { return nil }
-func (m *MockStrategy) Start() error                      { m.isRunning = true; return nil }
-func (m *MockStrategy) Stop() error                       { m.isRunning = false; return nil }
-func (m *MockStrategy) Reset()                            {}
-func (m *MockStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {}
-func (m *MockStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {}
-func (m *MockStrategy) OnTimer(now time.Time)            {}
-func (m *MockStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {}
-func (m *MockStrategy) GetPNL() *strategy.PNL             { return &m.pnl }
-func (m *MockStrategy) GetPosition() *strategy.Position   { return &m.position }
-func (m *MockStrategy) GetSignals() []*strategy.TradingSignal { return nil }
-func (m *MockStrategy) GetRiskMetrics() *strategy.RiskMetrics { return &m.riskMetrics }
-func (m *MockStrategy) GetStatus() *strategy.StrategyStatus { return &strategy.StrategyStatus{} }
+func (m *MockStrategy) Start() error                                     { m.isRunning = true; return nil }
+func (m *MockStrategy) Stop() error                                      { m.isRunning = false; return nil }
+func (m *MockStrategy) Reset()                                           {}
+func (m *MockStrategy) OnMarketData(md *mdpb.MarketDataUpdate)           {}
+func (m *MockStrategy) OnOrderUpdate(update *orspb.OrderUpdate)          {}
+func (m *MockStrategy) OnTimer(now time.Time)                            {}
+func (m *MockStrategy) OnAuctionData(md *mdpb.MarketDataUpdate)          {}
+func (m *MockStrategy) GetPNL() *strategy.PNL                            { return &m.pnl }
+func (m *MockStrategy) GetEstimatedPosition() *strategy.EstimatedPosition { return &m.position }
+func (m *MockStrategy) GetPosition() *strategy.EstimatedPosition         { return &m.position }
+func (m *MockStrategy) GetSignals() []*strategy.TradingSignal            { return nil }
+func (m *MockStrategy) GetRiskMetrics() *strategy.RiskMetrics            { return &m.riskMetrics }
+func (m *MockStrategy) GetStatus() *strategy.StrategyStatus              { return &strategy.StrategyStatus{} }
 func (m *MockStrategy) UpdateParameters(params map[string]interface{}) error { return nil }
-func (m *MockStrategy) GetCurrentParameters() map[string]interface{} { return nil }
+func (m *MockStrategy) GetCurrentParameters() map[string]interface{}     { return nil }
+func (m *MockStrategy) GetBaseStrategy() *strategy.BaseStrategy          { return m.baseStrategy }
 
 func TestRiskManager_Creation(t *testing.T) {
 	rm := NewRiskManager(nil)

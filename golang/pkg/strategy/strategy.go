@@ -12,12 +12,17 @@ import (
 )
 
 // Strategy is the interface that all trading strategies must implement
+// C++: 对应 ExecutionStrategy 基类的虚函数
 type Strategy interface {
 	// GetID returns the unique strategy ID
 	GetID() string
 
 	// GetType returns the strategy type name
 	GetType() string
+
+	// GetBaseStrategy returns the underlying BaseStrategy
+	// C++: 对应访问 ExecutionStrategy 基类成员
+	GetBaseStrategy() *BaseStrategy
 
 	// Initialize initializes the strategy with configuration
 	Initialize(config *StrategyConfig) error
@@ -50,6 +55,9 @@ type Strategy interface {
 
 	// GetEstimatedPosition returns current estimated position (NOT real CTP position!)
 	GetEstimatedPosition() *EstimatedPosition
+
+	// GetPosition returns current position (alias for GetEstimatedPosition for compatibility)
+	GetPosition() *EstimatedPosition
 
 	// GetPNL returns current P&L
 	GetPNL() *PNL
@@ -187,6 +195,11 @@ func (bs *BaseStrategy) IsRunning() bool {
 
 // GetEstimatedPosition returns current estimated position (NOT real CTP position!)
 func (bs *BaseStrategy) GetEstimatedPosition() *EstimatedPosition {
+	return bs.EstimatedPosition
+}
+
+// GetPosition returns current position (alias for GetEstimatedPosition)
+func (bs *BaseStrategy) GetPosition() *EstimatedPosition {
 	return bs.EstimatedPosition
 }
 
@@ -368,6 +381,16 @@ func (bs *BaseStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 	} else if update.Status == orspb.OrderStatus_REJECTED {
 		bs.Status.RejectCount++
 	}
+
+	// 清理已完成的订单（FILLED/CANCELED/REJECTED），避免在 UI 中一直显示
+	// C++: 订单完成后从 ordMap 中移除
+	if update.Status == orspb.OrderStatus_FILLED ||
+		update.Status == orspb.OrderStatus_CANCELED ||
+		update.Status == orspb.OrderStatus_REJECTED {
+		delete(bs.Orders, update.OrderId)
+		log.Printf("[BaseStrategy:%s] 🗑️ Removed completed order %s from Orders map (status=%v)",
+			bs.ID, update.OrderId, update.Status)
+	}
 }
 
 // UpdatePNL updates P&L based on current market price
@@ -490,6 +513,77 @@ func (bs *BaseStrategy) GetCurrentParameters() map[string]interface{} {
 // This should be called by concrete strategies in their constructors
 func (bs *BaseStrategy) SetConcreteStrategy(strategy interface{}) {
 	bs.concreteStrategy = strategy
+}
+
+// === 撤单管理方法 (C++: ExecutionStrategy::SendCancelOrder, ProcessCancelReject) ===
+
+// CancelRequest 撤单请求结构
+// C++: 对应 ExecutionStrategy 中的撤单请求
+type CancelRequest struct {
+	OrderID  string // 订单 ID
+	Symbol   string // 合约代码
+	Exchange string // 交易所
+}
+
+// GetPendingCancelOrders 获取待撤销的订单列表
+// C++: 遍历 m_ordMap 找到 m_cancel=true 的订单
+func (bs *BaseStrategy) GetPendingCancelOrders() []*CancelRequest {
+	requests := make([]*CancelRequest, 0)
+	for orderID, order := range bs.Orders {
+		// 查找状态为 ACCEPTED 或 SUBMITTED 且未完全成交的订单
+		// 这些是可以撤销的活跃订单
+		if order.Status == orspb.OrderStatus_ACCEPTED ||
+			order.Status == orspb.OrderStatus_SUBMITTED ||
+			order.Status == orspb.OrderStatus_PARTIALLY_FILLED {
+
+			// 检查是否需要撤单（通过 ControlState 判断）
+			if bs.ControlState != nil && (bs.ControlState.FlattenMode || bs.ControlState.ExitRequested) {
+				requests = append(requests, &CancelRequest{
+					OrderID:  orderID,
+					Symbol:   order.Symbol,
+					Exchange: order.Exchange.String(), // common.Exchange -> string
+				})
+			}
+		}
+	}
+	return requests
+}
+
+// MarkCancelSent 标记撤单请求已发送
+// C++: 设置 order->m_cancel = false（表示已发送，等待回报）
+func (bs *BaseStrategy) MarkCancelSent(orderID string) {
+	if order, exists := bs.Orders[orderID]; exists {
+		log.Printf("[BaseStrategy:%s] Cancel request sent for orderID=%s, symbol=%s",
+			bs.ID, orderID, order.Symbol)
+	}
+}
+
+// ProcessCancelReject 处理撤单拒绝
+// C++: ExecutionStrategy::ProcessCancelReject()
+func (bs *BaseStrategy) ProcessCancelReject(orderID string) {
+	if order, exists := bs.Orders[orderID]; exists {
+		log.Printf("[BaseStrategy:%s] Cancel rejected for orderID=%s, symbol=%s, status=%v",
+			bs.ID, orderID, order.Symbol, order.Status)
+		bs.Status.RejectCount++
+	}
+}
+
+// CancelAllActiveOrders 撤销所有活跃订单
+// C++: 在平仓时调用，撤销所有未成交订单
+func (bs *BaseStrategy) CancelAllActiveOrders() []*CancelRequest {
+	requests := make([]*CancelRequest, 0)
+	for orderID, order := range bs.Orders {
+		if order.Status == orspb.OrderStatus_ACCEPTED ||
+			order.Status == orspb.OrderStatus_SUBMITTED ||
+			order.Status == orspb.OrderStatus_PARTIALLY_FILLED {
+			requests = append(requests, &CancelRequest{
+				OrderID:  orderID,
+				Symbol:   order.Symbol,
+				Exchange: order.Exchange.String(), // common.Exchange -> string
+			})
+		}
+	}
+	return requests
 }
 
 // Helper functions

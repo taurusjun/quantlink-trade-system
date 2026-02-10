@@ -27,8 +27,9 @@ type PairwiseArbStrategy struct {
 	firstStrat  *ExtraStrategy // 第一条腿（原 leg1*）
 	secondStrat *ExtraStrategy // 第二条腿（原 leg2*）
 
-	// === 阈值配置（C++: m_thold_first） ===
-	tholdFirst *ThresholdSet // 阈值配置（用于动态阈值计算）
+	// === 阈值配置（C++: m_thold_first, m_thold_second） ===
+	tholdFirst  *ThresholdSet // 第一条腿阈值配置（用于动态阈值计算）
+	tholdSecond *ThresholdSet // 第二条腿阈值配置（C++: m_thold_second）
 
 	// Strategy parameters
 	symbol1           string  // First symbol (e.g., "ag2412")
@@ -113,6 +114,22 @@ type PairwiseArbStrategy struct {
 	// tValue 允许外部信号调整价差均值，使策略更容易入场或出场
 	tValue float64 // 外部调整值（正值提高均值，负值降低均值）
 
+	// === 风控字段 (C++: PairwiseArbStrategy.h) ===
+	maxLossLimit  float64 // m_maxloss_limit - 最大亏损限制
+	isValidMkdata bool    // is_valid_mkdata - 行情数据是否有效
+
+	// === 价差辅助字段 (C++: PairwiseArbStrategy.cpp) ===
+	currSpreadRatioPrev float64 // currSpreadRatio_prev - 前一价差比率
+	expectedRatio       float64 // expectedRatio - 期望比率
+	iu                  float64 // iu - 内部变量
+	count               float64 // count - 计数器
+
+	// === 追单辅助字段 ===
+	secondOrdIDStart uint32 // second_ordIDstart - 第二腿订单ID起始
+
+	// === 矩阵数据 (C++: mx_daily_init) ===
+	mxDailyInit map[string]map[string]float64 // 每日初始化矩阵
+
 	mu sync.RWMutex
 }
 
@@ -125,8 +142,9 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 	firstStrat := NewExtraStrategy(1, &Instrument{Symbol: "", TickSize: 1.0})
 	secondStrat := NewExtraStrategy(2, &Instrument{Symbol: "", TickSize: 1.0})
 
-	// 创建阈值配置（C++: m_thold_first）
+	// 创建阈值配置（C++: m_thold_first, m_thold_second）
 	tholdFirst := NewThresholdSet()
+	tholdSecond := NewThresholdSet()
 
 	pas := &PairwiseArbStrategy{
 		BaseStrategy:     NewBaseStrategy(id, "pairwise_arb"),
@@ -134,6 +152,7 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 		firstStrat:       firstStrat,
 		secondStrat:      secondStrat,
 		tholdFirst:       tholdFirst,
+		tholdSecond:      tholdSecond,
 		// 基本参数
 		lookbackPeriod:   100,
 		entryZScore:      2.0,
@@ -392,6 +411,11 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 
 	// 将阈值配置关联到 firstStrat（C++: m_firstStrat->m_thold = m_thold_first）
 	pas.firstStrat.Thold = pas.tholdFirst
+
+	// 将阈值配置关联到 secondStrat（C++: m_secondStrat->m_thold = m_thold_second）
+	// 注意：第二条腿可能有不同的阈值配置，这里默认复制第一条腿的配置
+	pas.tholdSecond = pas.tholdFirst.Clone()
+	pas.secondStrat.Thold = pas.tholdSecond
 
 	// 更新 Instrument tick size（可能在参数加载后才确定）
 	pas.firstStrat.Instru.TickSize = pas.tickSize1
@@ -1079,6 +1103,154 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 	}
 }
 
+// getAvgSpreadRatio 获取调整后的价差均值
+// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue
+// tValue 允许外部信号调整价差均值，使策略更容易入场或出场
+func (pas *PairwiseArbStrategy) getAvgSpreadRatio() float64 {
+	return pas.spreadAnalyzer.GetStats().Mean + pas.tValue
+}
+
+// === 价格计算方法（C++: GetBidPrice_first 等）===
+
+// GetBidPrice_first 获取第一条腿买单挂单价格
+// C++: PairwiseArbStrategy::GetBidPrice_first()
+// 实现隐性订单簿检测逻辑
+func (pas *PairwiseArbStrategy) GetBidPrice_first(level int) (price float64, ordType OrderHitType) {
+	if level >= len(pas.bidPrices1) || pas.bidPrices1[level] <= 0 {
+		return 0, OrderHitTypeStandard
+	}
+
+	price = pas.bidPrices1[level]
+	ordType = OrderHitTypeStandard
+
+	// 隐性订单簿检测
+	// C++: if (m_configParams->m_bUseInvisibleBook && level != 0 && price < bidPx[level-1] - tickSize)
+	if pas.enablePriceOptimize && level > 0 {
+		prevPrice := pas.bidPrices1[level-1]
+		tickSize := pas.tickSize1
+		if price < prevPrice-tickSize {
+			// 检测到价格跳跃，计算隐性价差
+			// C++: bidInv = bidPx[level] - secondStrat->bidPx[0] + tickSize
+			bidInv := price - pas.bid2 + tickSize
+			spreadMean := pas.getAvgSpreadRatio()
+
+			// C++: if (bidInv <= avgSpreadRatio - BEGIN_PLACE)
+			if bidInv <= spreadMean-pas.tholdFirst.BeginPlace {
+				// 检查该价位是否已有订单
+				if !pas.firstStrat.HasOrderAtPrice(price, TransactionTypeBuy) {
+					// C++: price = bidPx[level] + tickSize
+					price = price + tickSize
+					log.Printf("[PairwiseArb:%s] GetBidPrice_first: invisible book detected at level=%d, optimize %.2f -> %.2f",
+						pas.ID, level, pas.bidPrices1[level], price)
+				}
+			}
+		}
+	}
+
+	return price, ordType
+}
+
+// GetAskPrice_first 获取第一条腿卖单挂单价格
+// C++: PairwiseArbStrategy::GetAskPrice_first()
+func (pas *PairwiseArbStrategy) GetAskPrice_first(level int) (price float64, ordType OrderHitType) {
+	if level >= len(pas.askPrices1) || pas.askPrices1[level] <= 0 {
+		return 0, OrderHitTypeStandard
+	}
+
+	price = pas.askPrices1[level]
+	ordType = OrderHitTypeStandard
+
+	// 隐性订单簿检测
+	// C++: if (m_configParams->m_bUseInvisibleBook && level != 0 && price > askPx[level-1] + tickSize)
+	if pas.enablePriceOptimize && level > 0 {
+		prevPrice := pas.askPrices1[level-1]
+		tickSize := pas.tickSize1
+		if price > prevPrice+tickSize {
+			// 检测到价格跳跃，计算隐性价差
+			// C++: askInv = askPx[level] - secondStrat->askPx[0] - tickSize
+			askInv := price - pas.ask2 - tickSize
+			spreadMean := pas.getAvgSpreadRatio()
+
+			// C++: if (askInv >= avgSpreadRatio + BEGIN_PLACE)
+			if askInv >= spreadMean+pas.tholdFirst.BeginPlace {
+				// 检查该价位是否已有订单
+				if !pas.firstStrat.HasOrderAtPrice(price, TransactionTypeSell) {
+					// C++: price = askPx[level] - tickSize
+					price = price - tickSize
+					log.Printf("[PairwiseArb:%s] GetAskPrice_first: invisible book detected at level=%d, optimize %.2f -> %.2f",
+						pas.ID, level, pas.askPrices1[level], price)
+				}
+			}
+		}
+	}
+
+	return price, ordType
+}
+
+// GetBidPrice_second 获取第二条腿买单挂单价格
+// C++: PairwiseArbStrategy::GetBidPrice_second()
+func (pas *PairwiseArbStrategy) GetBidPrice_second(level int) (price float64, ordType OrderHitType) {
+	if level >= len(pas.bidPrices2) || pas.bidPrices2[level] <= 0 {
+		return 0, OrderHitTypeStandard
+	}
+
+	price = pas.bidPrices2[level]
+	ordType = OrderHitTypeStandard
+
+	// 隐性订单簿检测（与 first 类似，但参照 firstStrat 的价格）
+	if pas.enablePriceOptimize && level > 0 {
+		prevPrice := pas.bidPrices2[level-1]
+		tickSize := pas.tickSize2
+		if price < prevPrice-tickSize {
+			// 检测到价格跳跃
+			bidInv := pas.bid1 - price + tickSize
+			spreadMean := pas.getAvgSpreadRatio()
+
+			if bidInv <= spreadMean-pas.tholdFirst.BeginPlace {
+				if !pas.secondStrat.HasOrderAtPrice(price, TransactionTypeBuy) {
+					price = price + tickSize
+					log.Printf("[PairwiseArb:%s] GetBidPrice_second: invisible book detected at level=%d, optimize %.2f -> %.2f",
+						pas.ID, level, pas.bidPrices2[level], price)
+				}
+			}
+		}
+	}
+
+	return price, ordType
+}
+
+// GetAskPrice_second 获取第二条腿卖单挂单价格
+// C++: PairwiseArbStrategy::GetAskPrice_second()
+func (pas *PairwiseArbStrategy) GetAskPrice_second(level int) (price float64, ordType OrderHitType) {
+	if level >= len(pas.askPrices2) || pas.askPrices2[level] <= 0 {
+		return 0, OrderHitTypeStandard
+	}
+
+	price = pas.askPrices2[level]
+	ordType = OrderHitTypeStandard
+
+	// 隐性订单簿检测
+	if pas.enablePriceOptimize && level > 0 {
+		prevPrice := pas.askPrices2[level-1]
+		tickSize := pas.tickSize2
+		if price > prevPrice+tickSize {
+			// 检测到价格跳跃
+			askInv := pas.ask1 - price - tickSize
+			spreadMean := pas.getAvgSpreadRatio()
+
+			if askInv >= spreadMean+pas.tholdFirst.BeginPlace {
+				if !pas.secondStrat.HasOrderAtPrice(price, TransactionTypeSell) {
+					price = price - tickSize
+					log.Printf("[PairwiseArb:%s] GetAskPrice_second: invisible book detected at level=%d, optimize %.2f -> %.2f",
+						pas.ID, level, pas.askPrices2[level], price)
+				}
+			}
+		}
+	}
+
+	return price, ordType
+}
+
 // calculateExposure 计算当前敞口
 // C++ 对应: exposure = m_firstStrat->m_netpos_pass + m_secondStrat->m_netpos_agg
 // 敞口 = leg1Position + leg2Position（理想情况下应为 0）
@@ -1330,8 +1502,8 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	// 维护订单映射（多层挂单用）
 	pas.updateOrderMaps(update)
 
-	// Update leg-specific positions (similar to tbsrc: each leg has its own ExecutionStrategy)
-	// 参考 tbsrc ExecutionStrategy::TradeCallBack
+	// Update leg-specific positions (similar to tbsrc: each leg has its own ExtraStrategy)
+	// 参考 tbsrc ExtraStrategy::TradeCallBack
 	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
 		symbol := update.Symbol
 		qty := int64(update.FilledQty)
@@ -1428,8 +1600,8 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 }
 
 // updateLeg1Position updates leg1 position statistics using ExtraStrategy
-// 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
-// 参考: tbsrc/Strategies/ExecutionStrategy.cpp
+// 与 C++ ExtraStrategy::TradeCallBack() 完全一致
+// 参考: tbsrc/Strategies/ExtraStrategy.cpp
 //
 // 重构：使用 firstStrat.ProcessTrade() 处理持仓更新
 func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int64, price float64) {
@@ -1457,8 +1629,8 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 }
 
 // updateLeg2Position updates leg2 position statistics using ExtraStrategy
-// 与 C++ ExecutionStrategy::TradeCallBack() 完全一致
-// 参考: tbsrc/Strategies/ExecutionStrategy.cpp
+// 与 C++ ExtraStrategy::TradeCallBack() 完全一致
+// 参考: tbsrc/Strategies/ExtraStrategy.cpp
 //
 // 重构：使用 secondStrat.ProcessTrade() 处理持仓更新
 func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int64, price float64) {
@@ -1763,6 +1935,34 @@ func (pas *PairwiseArbStrategy) GetTValue() float64 {
 	return pas.tValue
 }
 
+// HandleSquareoff 处理平仓
+// C++: PairwiseArbStrategy::HandleSquareoff()
+func (pas *PairwiseArbStrategy) HandleSquareoff() {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	log.Printf("[PairwiseArb:%s] HandleSquareoff triggered", pas.ID)
+
+	// 两条腿都触发平仓
+	pas.firstStrat.HandleSquareoff()
+	pas.secondStrat.HandleSquareoff()
+
+	// 生成退出信号
+	pas.generateExitSignals(nil)
+}
+
+// HandleSquareON 开启平仓模式
+// C++: PairwiseArbStrategy::HandleSquareON()
+func (pas *PairwiseArbStrategy) HandleSquareON() {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	pas.firstStrat.OnFlat = true
+	pas.secondStrat.OnFlat = true
+
+	log.Printf("[PairwiseArb:%s] Square mode ON", pas.ID)
+}
+
 // Stop stops the strategy
 func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
@@ -1952,14 +2152,14 @@ func (pas *PairwiseArbStrategy) GetLegsInfo() []map[string]interface{} {
 // 配对策略有两个独立的品种，需要分别计算每一腿的盈亏
 // 使用对手价（bid/ask）计算，符合 tbsrc 逻辑
 // updatePairwisePNL calculates P&L for pairwise strategy
-// 参考 tbsrc PairwiseArbStrategy: 每条腿有独立的 ExecutionStrategy，因此有独立的平均价格
+// 参考 tbsrc PairwiseArbStrategy: 每条腿有独立的 ExtraStrategy，因此有独立的平均价格
 // arbi_unrealisedPNL = m_firstStrat->m_unrealisedPNL + m_secondStrat->m_unrealisedPNL
 // 重构：使用 firstStrat/secondStrat 的 BuyAvgPrice/SellAvgPrice
 func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 	var unrealizedPnL float64 = 0
 
 	// Leg1 浮动盈亏（使用对手价和 firstStrat 的平均价格）
-	// 参考 tbsrc ExecutionStrategy::CalculatePNL
+	// 参考 tbsrc ExtraStrategy::CalculatePNL
 	if pas.leg1Position != 0 {
 		var leg1PnL float64
 		var avgCost float64
@@ -1985,7 +2185,7 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 	}
 
 	// Leg2 浮动盈亏（使用对手价和 secondStrat 的平均价格）
-	// 参考 tbsrc ExecutionStrategy::CalculatePNL
+	// 参考 tbsrc ExtraStrategy::CalculatePNL
 	if pas.leg2Position != 0 {
 		var leg2PnL float64
 		var avgCost float64
@@ -2022,6 +2222,19 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 }
 
 // GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
+// C++: 对应 ExecutionStrategy 基类
 func (pas *PairwiseArbStrategy) GetBaseStrategy() *BaseStrategy {
 	return pas.BaseStrategy
+}
+
+// GetFirstLeg 返回第一条腿的 ExtraStrategy
+// C++: 对应 m_firstStrat
+func (pas *PairwiseArbStrategy) GetFirstLeg() *ExtraStrategy {
+	return pas.firstStrat
+}
+
+// GetSecondLeg 返回第二条腿的 ExtraStrategy
+// C++: 对应 m_secondStrat
+func (pas *PairwiseArbStrategy) GetSecondLeg() *ExtraStrategy {
+	return pas.secondStrat
 }

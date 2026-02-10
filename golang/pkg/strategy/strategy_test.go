@@ -32,17 +32,37 @@ func TestBaseStrategy_StartStop(t *testing.T) {
 	if !bs.IsRunning() {
 		t.Error("Strategy should be running initially (auto-activated)")
 	}
-
-	// Stop
-	bs.Deactivate()
-	if bs.IsRunning() {
-		t.Error("Strategy should not be running after deactivate")
+	if !bs.ControlState.IsActive() {
+		t.Error("Strategy should be active initially")
 	}
 
-	// Start
+	// Deactivate - strategy is still running but cannot trade
+	// 对应 tbsrc: m_Active = false，进程仍在运行
+	bs.Deactivate()
+	if !bs.IsRunning() {
+		// IsRunning() 检查进程状态，不是 Active 状态
+		t.Error("Strategy should still be running after deactivate (process is alive)")
+	}
+	if bs.ControlState.IsActive() {
+		t.Error("Strategy should not be active after deactivate")
+	}
+
+	// Activate - strategy can trade again
+	// 对应 tbsrc: m_Active = true
 	bs.Activate()
 	if !bs.IsRunning() {
 		t.Error("Strategy should be running after activate")
+	}
+	if !bs.ControlState.IsActive() {
+		t.Error("Strategy should be active after activate")
+	}
+
+	// Stop - strategy process stops
+	// 对应 tbsrc: 退出请求后，持仓平完后调用 CompleteExit()
+	bs.TriggerExit("test")
+	bs.CompleteExit() // 由于初始持仓为空，可以直接完成退出
+	if bs.IsRunning() {
+		t.Error("Strategy should not be running after complete exit")
 	}
 }
 

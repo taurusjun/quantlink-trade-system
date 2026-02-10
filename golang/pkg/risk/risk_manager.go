@@ -45,14 +45,33 @@ type RiskAlert struct {
 }
 
 // RiskManagerConfig represents risk manager configuration
+// 对应 C++: ThresholdSet 中的风控参数
 type RiskManagerConfig struct {
 	EnableGlobalLimits      bool
 	EnableStrategyLimits    bool
 	EnablePortfolioLimits   bool
 	AlertRetentionSeconds   int
 	MaxAlertQueueSize       int
-	EmergencyStopThreshold  int // Number of critical alerts to trigger emergency stop
+	EmergencyStopThreshold  int   // Number of critical alerts to trigger emergency stop
 	CheckIntervalMs         int64
+
+	// === 风控限制参数 (对应 C++ ThresholdSet) ===
+	// 策略级别
+	MaxPosition    int64   `yaml:"max_position"`    // C++: MAX_SIZE - 最大持仓
+	MaxOrders      int64   `yaml:"max_orders"`      // C++: MAX_ORDERS / m_maxOrderCount - 最大订单数
+	MaxTradedQty   float64 `yaml:"max_traded_qty"`  // C++: m_maxTradedQty - 最大成交量
+	StopLoss       float64 `yaml:"stop_loss"`       // C++: STOP_LOSS - 止损（触发暂停）
+	MaxLoss        float64 `yaml:"max_loss"`        // C++: MAX_LOSS - 最大亏损（触发退出）
+	UpnlLoss       float64 `yaml:"upnl_loss"`       // C++: UPNL_LOSS - 未实现盈亏限制
+	MaxExposure    float64 `yaml:"max_exposure"`    // 最大敞口
+
+	// 全局级别
+	GlobalMaxExposure  float64 `yaml:"global_max_exposure"`   // 全局最大敞口
+	GlobalMaxDrawdown  float64 `yaml:"global_max_drawdown"`   // 全局最大回撤
+	GlobalMaxDailyLoss float64 `yaml:"global_max_daily_loss"` // 全局每日最大亏损
+
+	// 止损恢复时间 (对应 C++: 15 mins 后恢复)
+	StopLossRecoverySeconds int64 `yaml:"stop_loss_recovery_seconds"` // C++: 900秒 (15分钟)
 }
 
 // RiskManager manages risk limits and alerts
@@ -85,6 +104,8 @@ type RiskManager struct {
 // NewRiskManager creates a new risk manager
 func NewRiskManager(config *RiskManagerConfig) *RiskManager {
 	if config == nil {
+		// 默认配置 - 与 C++ ThresholdSet 默认值对应
+		// C++ 默认值设置为极大值表示禁用，Go 这里设置合理的默认值
 		config = &RiskManagerConfig{
 			EnableGlobalLimits:     true,
 			EnableStrategyLimits:   true,
@@ -93,6 +114,23 @@ func NewRiskManager(config *RiskManagerConfig) *RiskManager {
 			MaxAlertQueueSize:      1000,
 			EmergencyStopThreshold: 3,
 			CheckIntervalMs:        100,
+
+			// 策略级别默认值
+			MaxPosition:    100,       // 默认最大持仓 100 手
+			MaxOrders:      1000,      // 默认最大订单数
+			MaxTradedQty:   10000,     // 默认最大成交量
+			StopLoss:       10000,     // 默认止损 1万元（触发暂停）
+			MaxLoss:        50000,     // 默认最大亏损 5万元（触发退出）
+			UpnlLoss:       20000,     // 默认未实现盈亏 2万元
+			MaxExposure:    1000000,   // 默认最大敞口 100万元
+
+			// 全局级别默认值
+			GlobalMaxExposure:  10000000, // 全局最大敞口 1000万元
+			GlobalMaxDrawdown:  100000,   // 全局最大回撤 10万元
+			GlobalMaxDailyLoss: 50000,    // 全局每日最大亏损 5万元
+
+			// 止损恢复时间
+			StopLossRecoverySeconds: 900, // C++: 15分钟 = 900秒
 		}
 	}
 
@@ -120,14 +158,15 @@ func (rm *RiskManager) Initialize() error {
 	return nil
 }
 
-// addDefaultLimits adds default risk limits
+// addDefaultLimits adds default risk limits from config
+// 对应 C++: ExecutionStrategy 中对 ThresholdSet 参数的使用
 func (rm *RiskManager) addDefaultLimits() {
-	// Global limits
+	// === Global limits (全局风控) ===
 	rm.limits["global_max_exposure"] = &RiskLimit{
 		Type:        RiskLimitExposure,
 		Level:       "global",
 		TargetID:    "*",
-		Value:       10000000.0, // 1000万
+		Value:       rm.config.GlobalMaxExposure,
 		Enabled:     true,
 		Description: "Global maximum exposure",
 	}
@@ -136,7 +175,7 @@ func (rm *RiskManager) addDefaultLimits() {
 		Type:        RiskLimitDrawdown,
 		Level:       "global",
 		TargetID:    "*",
-		Value:       50000000.0, // 5000万（测试：提高限制避免因持仓成本价为0误触发）
+		Value:       rm.config.GlobalMaxDrawdown,
 		Enabled:     true,
 		Description: "Global maximum drawdown",
 	}
@@ -145,28 +184,70 @@ func (rm *RiskManager) addDefaultLimits() {
 		Type:        RiskLimitDailyLoss,
 		Level:       "global",
 		TargetID:    "*",
-		Value:       50000000.0, // 5000万（测试：提高限制）
+		Value:       rm.config.GlobalMaxDailyLoss,
 		Enabled:     true,
 		Description: "Global maximum daily loss",
 	}
 
-	// Strategy default limits
+	// === Strategy default limits (策略级风控) ===
+	// C++: MAX_SIZE - 最大持仓限制
 	rm.limits["strategy_default_position"] = &RiskLimit{
 		Type:        RiskLimitPositionSize,
 		Level:       "strategy",
 		TargetID:    "*",
-		Value:       100,
+		Value:       float64(rm.config.MaxPosition),
 		Enabled:     true,
-		Description: "Default strategy position limit",
+		Description: "Default strategy position limit (C++: MAX_SIZE)",
 	}
 
+	// C++: Exposure - 敞口限制
 	rm.limits["strategy_default_exposure"] = &RiskLimit{
 		Type:        RiskLimitExposure,
 		Level:       "strategy",
 		TargetID:    "*",
-		Value:       1000000.0, // 100万
+		Value:       rm.config.MaxExposure,
 		Enabled:     true,
 		Description: "Default strategy exposure limit",
+	}
+
+	// C++: STOP_LOSS - 止损限制（触发平仓暂停）
+	rm.limits["strategy_default_stop_loss"] = &RiskLimit{
+		Type:        RiskLimitLoss,
+		Level:       "strategy",
+		TargetID:    "*",
+		Value:       rm.config.StopLoss,
+		Enabled:     true,
+		Description: "Default strategy stop loss (C++: STOP_LOSS, triggers pause)",
+	}
+
+	// C++: MAX_LOSS - 最大亏损限制（触发退出）
+	rm.limits["strategy_default_max_loss"] = &RiskLimit{
+		Type:        RiskLimitLoss,
+		Level:       "strategy",
+		TargetID:    "*",
+		Value:       rm.config.MaxLoss,
+		Enabled:     true,
+		Description: "Default strategy max loss (C++: MAX_LOSS, triggers exit)",
+	}
+
+	// C++: UPNL_LOSS - 未实现盈亏限制
+	rm.limits["strategy_default_upnl_loss"] = &RiskLimit{
+		Type:        RiskLimitLoss,
+		Level:       "strategy",
+		TargetID:    "*",
+		Value:       rm.config.UpnlLoss,
+		Enabled:     true,
+		Description: "Default strategy unrealized PnL loss (C++: UPNL_LOSS)",
+	}
+
+	// C++: MAX_ORDERS / m_maxOrderCount - 最大订单数
+	rm.limits["strategy_default_max_orders"] = &RiskLimit{
+		Type:        RiskLimitOrderRate,
+		Level:       "strategy",
+		TargetID:    "*",
+		Value:       float64(rm.config.MaxOrders),
+		Enabled:     true,
+		Description: "Default strategy max orders (C++: MAX_ORDERS)",
 	}
 }
 
@@ -252,18 +333,52 @@ func (rm *RiskManager) CheckStrategy(s strategy.Strategy) []RiskAlert {
 		}
 	}
 
-	// Check drawdown (测试：提高阈值到5000万，避免因持仓成本价为0误触发)
-	if pnl.TotalPnL < 0 && absFloat(pnl.TotalPnL) > 50000000 {
-		alerts = append(alerts, RiskAlert{
-			Timestamp:    time.Now(),
-			Level:        "critical",
-			Type:         RiskLimitLoss,
-			TargetID:     s.GetID(),
-			Message:      fmt.Sprintf("Loss %.2f exceeds threshold", pnl.TotalPnL),
-			CurrentValue: absFloat(pnl.TotalPnL),
-			LimitValue:   50000000,
-			Action:       "stop",
-		})
+	// Check STOP_LOSS - 止损限制（触发暂停，对应 C++: m_netPNL < STOP_LOSS * -1）
+	if limit, ok := rm.limits["strategy_default_stop_loss"]; ok && limit.Enabled {
+		if pnl.TotalPnL < 0 && absFloat(pnl.TotalPnL) > limit.Value {
+			alerts = append(alerts, RiskAlert{
+				Timestamp:    time.Now(),
+				Level:        "critical",
+				Type:         RiskLimitLoss,
+				TargetID:     s.GetID(),
+				Message:      fmt.Sprintf("Stop loss triggered: PnL %.2f exceeds limit %.2f (C++: STOP_LOSS)", pnl.TotalPnL, limit.Value),
+				CurrentValue: absFloat(pnl.TotalPnL),
+				LimitValue:   limit.Value,
+				Action:       "stop", // 触发暂停，可恢复
+			})
+		}
+	}
+
+	// Check MAX_LOSS - 最大亏损限制（触发退出，对应 C++: m_netPNL < MAX_LOSS * -1）
+	if limit, ok := rm.limits["strategy_default_max_loss"]; ok && limit.Enabled {
+		if pnl.TotalPnL < 0 && absFloat(pnl.TotalPnL) > limit.Value {
+			alerts = append(alerts, RiskAlert{
+				Timestamp:    time.Now(),
+				Level:        "critical",
+				Type:         RiskLimitLoss,
+				TargetID:     s.GetID(),
+				Message:      fmt.Sprintf("Max loss triggered: PnL %.2f exceeds limit %.2f (C++: MAX_LOSS)", pnl.TotalPnL, limit.Value),
+				CurrentValue: absFloat(pnl.TotalPnL),
+				LimitValue:   limit.Value,
+				Action:       "emergency_stop", // 触发退出，不可恢复
+			})
+		}
+	}
+
+	// Check UPNL_LOSS - 未实现盈亏限制（对应 C++: m_unrealisedPNL < UPNL_LOSS * -1）
+	if limit, ok := rm.limits["strategy_default_upnl_loss"]; ok && limit.Enabled {
+		if pnl.UnrealizedPnL < 0 && absFloat(pnl.UnrealizedPnL) > limit.Value {
+			alerts = append(alerts, RiskAlert{
+				Timestamp:    time.Now(),
+				Level:        "warning",
+				Type:         RiskLimitLoss,
+				TargetID:     s.GetID(),
+				Message:      fmt.Sprintf("Unrealized PnL loss: %.2f exceeds limit %.2f (C++: UPNL_LOSS)", pnl.UnrealizedPnL, limit.Value),
+				CurrentValue: absFloat(pnl.UnrealizedPnL),
+				LimitValue:   limit.Value,
+				Action:       "throttle", // 触发警告
+			})
+		}
 	}
 
 	return alerts

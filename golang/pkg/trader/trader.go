@@ -1033,16 +1033,14 @@ func (t *Trader) initializeMultiStrategy() error {
 
 // setInitialActivationState sets initial activation state based on config
 func (t *Trader) setInitialActivationState(strat strategy.Strategy) {
-	if accessor, ok := strat.(strategy.BaseStrategyAccessor); ok {
-		baseStrat := accessor.GetBaseStrategy()
-		if baseStrat != nil {
-			if t.Config.Session.AutoActivate {
-				baseStrat.ControlState.Activate()
-				log.Printf("[Trader] Strategy %s: Activated (auto_activate=true)", strat.GetID())
-			} else {
-				baseStrat.ControlState.Deactivate()
-				log.Printf("[Trader] Strategy %s: NOT activated (auto_activate=false)", strat.GetID())
-			}
+	baseStrat := strat.GetBaseStrategy()
+	if baseStrat != nil {
+		if t.Config.Session.AutoActivate {
+			baseStrat.ControlState.Activate()
+			log.Printf("[Trader] Strategy %s: Activated (auto_activate=true)", strat.GetID())
+		} else {
+			baseStrat.ControlState.Deactivate()
+			log.Printf("[Trader] Strategy %s: NOT activated (auto_activate=false)", strat.GetID())
 		}
 	}
 }
@@ -1273,13 +1271,13 @@ func (t *Trader) handleControlSignals() {
 	}
 }
 
-// getBaseStrategy is a helper to get the BaseStrategy through type assertion
+// getBaseStrategy is a helper to get the BaseStrategy
 func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
-	if accessor, ok := t.Strategy.(strategy.BaseStrategyAccessor); ok {
-		return accessor.GetBaseStrategy()
+	if t.Strategy == nil {
+		log.Printf("[Trader] Error: Strategy is nil")
+		return nil
 	}
-	log.Printf("[Trader] Error: Strategy does not implement BaseStrategyAccessor")
-	return nil
+	return t.Strategy.GetBaseStrategy()
 }
 
 // GetStrategyManager returns the strategy manager (for API access)
