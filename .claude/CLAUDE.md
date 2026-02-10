@@ -200,6 +200,16 @@ md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] �
 - 使用 `// C++:` 前缀标注原始 C++ 代码
 - 注释中引用原代码时使用格式: `// 参考: tbsrc/Strategies/xxx.cpp:行号`
 
+**规则 4: 架构差异必须提醒用户**
+- 当 C++ 和 Go 的架构存在差异时（如继承 vs 组合、类结构不同等），**必须先提醒用户**
+- 不得自行决定架构方案，必须向用户说明：
+  - C++ 原代码的架构是什么
+  - Go 代码当前的架构是什么
+  - 两者的差异在哪里
+  - 可选的解决方案有哪些
+- 等待用户确认后再实施
+- **示例**：C++ 中 `PairwiseArbStrategy` 继承自 `ExecutionStrategy`，但 Go 使用组合，这种差异需要提醒用户
+
 ### 代码注释格式
 
 ```go
