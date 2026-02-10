@@ -74,6 +74,25 @@ func (t *Trader) Initialize() error {
 
 	// 1. Create and initialize Risk Manager
 	log.Println("[Trader] Creating Risk Manager...")
+	// 从配置文件读取风控参数，如果未设置则使用大默认值（相当于禁用）
+	defaultLargeValue := 1e10 // 100亿，相当于禁用
+	stopLoss := t.Config.Risk.StopLoss
+	if stopLoss <= 0 {
+		stopLoss = defaultLargeValue
+	}
+	maxLoss := t.Config.Risk.MaxLoss
+	if maxLoss <= 0 {
+		maxLoss = defaultLargeValue
+	}
+	maxDrawdown := t.Config.Risk.MaxDrawdown
+	if maxDrawdown <= 0 {
+		maxDrawdown = defaultLargeValue
+	}
+	dailyLossLimit := t.Config.Risk.DailyLossLimit
+	if dailyLossLimit <= 0 {
+		dailyLossLimit = defaultLargeValue
+	}
+
 	riskConfig := &risk.RiskManagerConfig{
 		EnableGlobalLimits:     true,
 		EnableStrategyLimits:   true,
@@ -82,7 +101,22 @@ func (t *Trader) Initialize() error {
 		MaxAlertQueueSize:      1000,
 		EmergencyStopThreshold: 100, // 提高阈值，避免因持仓成本价为0导致误触发紧急停止
 		CheckIntervalMs:        t.Config.Risk.CheckIntervalMs,
+
+		// 策略级别风控参数
+		MaxPosition: 10000,             // 最大持仓数量
+		MaxExposure: defaultLargeValue, // 敞口限制使用大值
+		StopLoss:    stopLoss,
+		MaxLoss:     maxLoss,
+		UpnlLoss:    defaultLargeValue, // 未实现盈亏使用大值
+		MaxOrders:   10000,             // 最大订单数
+
+		// 全局级别风控参数
+		GlobalMaxExposure:  defaultLargeValue,
+		GlobalMaxDrawdown:  maxDrawdown,
+		GlobalMaxDailyLoss: dailyLossLimit,
 	}
+	log.Printf("[Trader] Risk config: StopLoss=%.0f, MaxLoss=%.0f, MaxDrawdown=%.0f",
+		stopLoss, maxLoss, maxDrawdown)
 	t.RiskManager = risk.NewRiskManager(riskConfig)
 	if err := t.RiskManager.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize risk manager: %w", err)

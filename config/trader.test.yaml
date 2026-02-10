@@ -152,6 +152,7 @@ risk:
 engine:
   ors_gateway_addr: "localhost:50052"   # 订单路由服务地址
   nats_addr: "nats://localhost:4222"    # NATS 消息队列地址
+  counter_bridge_addr: "localhost:8080"  # Counter Bridge HTTP地址（持仓查询）
   order_queue_size: 100                 # 订单队列大小
   timer_interval: 5s                    # 定时器间隔
   max_concurrent_orders: 10             # 最大并发订单数
