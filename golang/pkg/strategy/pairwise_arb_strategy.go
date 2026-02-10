@@ -459,6 +459,24 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	pas.firstStrat.Instru.TickSize = pas.tickSize1
 	pas.secondStrat.Instru.TickSize = pas.tickSize2
 
+	// === 加载共享内存配置（C++: TVAR_KEY, TCACHE_KEY） ===
+	// 从配置中读取共享内存键值
+	if val, ok := config.Parameters["tvar_key"].(float64); ok {
+		pas.tholdFirst.TVarKey = int(val)
+		pas.ExecutionStrategy.Thold.TVarKey = int(val)
+	}
+	if val, ok := config.Parameters["tcache_key"].(float64); ok {
+		pas.tholdFirst.TCacheKey = int(val)
+		pas.ExecutionStrategy.Thold.TCacheKey = int(val)
+	}
+
+	// 初始化共享内存（C++: ExecutionStrategy.cpp:99-113）
+	// if (tvarKey > 0) { m_tvar = make_shared<hftlib::tvar<double>>(); m_tvar->init(tvarKey, 0666); }
+	// if (tcacheKey > 0) { m_tcache = make_shared<hftlib::tcache<double>>(); m_tcache->init(tcacheKey); }
+	if err := pas.ExecutionStrategy.InitSharedMemory(); err != nil {
+		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to init shared memory: %v", pas.ID, err)
+	}
+
 	log.Printf("[PairwiseArbStrategy:%s] ExtraStrategy initialized: firstStrat(symbol=%s), secondStrat(symbol=%s)",
 		pas.ID, pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol)
 
@@ -472,6 +490,20 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	if !pas.running {
 		return
+	}
+
+	// 从共享内存加载 tValue（C++: PairwiseArbStrategy.cpp:482-485）
+	// if (m_tvar) {
+	//     tValue = m_tvar->load();
+	//     TBLOG << "get tvar:" << fixed << tValue << endl;
+	// }
+	if pas.ExecutionStrategy != nil && pas.ExecutionStrategy.TVar != nil {
+		newTValue := pas.ExecutionStrategy.LoadTValue()
+		if newTValue != pas.tValue {
+			log.Printf("[PairwiseArbStrategy:%s] get tvar: %.6f (was %.6f)",
+				pas.ID, newTValue, pas.tValue)
+			pas.tValue = newTValue
+		}
 	}
 
 	// Update indicators
@@ -1693,6 +1725,18 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 	pas.leg1Position = int64(pas.firstStrat.NetPos)
 	pas.leg1YtdPosition = int64(pas.firstStrat.NetPosPassYtd)
 
+	// 向共享内存写入 Leg1 持仓
+	// C++: PairwiseArbStrategy.cpp SendTCacheLeg1Pos()
+	// if (m_tcache) {
+	//     m_tcache->store("leg1_pos", m_firstStrat->m_netpos_pass);
+	// }
+	if pas.ExecutionStrategy != nil && pas.ExecutionStrategy.TCache != nil {
+		key := fmt.Sprintf("%s_leg1_pos", pas.ID)
+		if err := pas.ExecutionStrategy.SendTCacheLeg1Pos(key, float64(pas.firstStrat.NetPosPass)); err != nil {
+			log.Printf("[PairwiseArb:%s] Warning: Failed to send TCache leg1 pos: %v", pas.ID, err)
+		}
+	}
+
 	// 日志输出
 	todayNet := pas.firstStrat.NetPos - pas.firstStrat.NetPosPassYtd
 	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%.0f@%.2f, Sell=%.0f@%.2f) [ytd=%d, 2day=%d]",
@@ -1721,6 +1765,15 @@ func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int
 	// 同步兼容字段
 	pas.leg2Position = int64(pas.secondStrat.NetPos)
 	pas.leg2YtdPosition = int64(pas.secondStrat.NetPosPassYtd)
+
+	// 向共享内存写入 Leg2 持仓
+	// C++: 类似 SendTCacheLeg1Pos，但是用于 leg2
+	if pas.ExecutionStrategy != nil && pas.ExecutionStrategy.TCache != nil {
+		key := fmt.Sprintf("%s_leg2_pos", pas.ID)
+		if err := pas.ExecutionStrategy.SendTCacheLeg1Pos(key, float64(pas.secondStrat.NetPosPass)); err != nil {
+			log.Printf("[PairwiseArb:%s] Warning: Failed to send TCache leg2 pos: %v", pas.ID, err)
+		}
+	}
 
 	// 日志输出
 	todayNet := pas.secondStrat.NetPos - pas.secondStrat.NetPosPassYtd
@@ -2111,6 +2164,12 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	if pas.ControlState != nil {
 		pas.ControlState.Active = false
 	}
+
+	// 关闭共享内存（C++: 析构函数中调用 shmdt）
+	if pas.ExecutionStrategy != nil {
+		pas.ExecutionStrategy.CloseSharedMemory()
+	}
+
 	log.Printf("[%s] Strategy deactivated", pas.ID)
 	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.ID)
 	return nil

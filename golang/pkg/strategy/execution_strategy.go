@@ -8,6 +8,7 @@ import (
 	"time"
 
 	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
+	"github.com/yourusername/quantlink-trade-system/pkg/shm"
 )
 
 // Instrument represents a trading instrument
@@ -279,6 +280,11 @@ type ExecutionStrategy struct {
 
 	// === 产品标识 (C++: ExecutionStrategy.h:306) ===
 	Product string // m_product - 产品标识
+
+	// === 共享内存变量 (C++: ExecutionStrategy.h:308-311) ===
+	// 用于外部程序（如 Python 模型）与策略间的数据共享
+	TVar   *shm.TVar   // m_tvar - 用于读取外部 tValue 调整（价差均值）
+	TCache *shm.TCache // m_tcache - 用于向外部共享持仓数据（SendTCacheLeg1Pos）
 }
 
 // NewExecutionStrategy 创建新的 ExecutionStrategy
@@ -1240,4 +1246,94 @@ func (es *ExecutionStrategy) Reset() {
 	es.GrossPNL = 0
 	es.MaxPNL = 0
 	es.Drawdown = 0
+}
+
+// ============================================================================
+// 共享内存方法
+// ============================================================================
+
+// InitSharedMemory 初始化共享内存变量
+// C++: ExecutionStrategy.cpp:99-113
+//
+//	int tvarKey = simConfig->m_tholdSet.TVAR_KEY;
+//	if (tvarKey > 0) {
+//	    m_tvar = make_shared<hftlib::tvar<double>>();
+//	    m_tvar->init(tvarKey, 0666);
+//	}
+//	int tcacheKey = simConfig->m_tholdSet.TCACHE_KEY;
+//	if (tcacheKey > 0) {
+//	    m_tcache = make_shared<hftlib::tcache<double>>();
+//	    m_tcache->init(tcacheKey);
+//	}
+func (es *ExecutionStrategy) InitSharedMemory() error {
+	if es.Thold == nil {
+		return nil
+	}
+
+	// 初始化 TVar（用于读取外部 tValue）
+	if es.Thold.TVarKey > 0 {
+		tvar, err := shm.NewTVar(es.Thold.TVarKey)
+		if err != nil {
+			log.Printf("[ExecutionStrategy:%d] Warning: Failed to init TVar(key=%d): %v",
+				es.StrategyID, es.Thold.TVarKey, err)
+		} else {
+			es.TVar = tvar
+			log.Printf("[ExecutionStrategy:%d] TVar initialized with key=%d",
+				es.StrategyID, es.Thold.TVarKey)
+		}
+	}
+
+	// 初始化 TCache（用于向外部共享持仓）
+	if es.Thold.TCacheKey > 0 {
+		tcache, err := shm.NewTCache(es.Thold.TCacheKey, 100)
+		if err != nil {
+			log.Printf("[ExecutionStrategy:%d] Warning: Failed to init TCache(key=%d): %v",
+				es.StrategyID, es.Thold.TCacheKey, err)
+		} else {
+			es.TCache = tcache
+			log.Printf("[ExecutionStrategy:%d] TCache initialized with key=%d",
+				es.StrategyID, es.Thold.TCacheKey)
+		}
+	}
+
+	return nil
+}
+
+// LoadTValue 从共享内存读取 tValue
+// C++: PairwiseArbStrategy.cpp:482-485
+//
+//	if (m_tvar) {
+//	    tValue = m_tvar->load();
+//	    TBLOG << "get tvar:" << fixed << tValue << endl;
+//	}
+func (es *ExecutionStrategy) LoadTValue() float64 {
+	if es.TVar == nil {
+		return 0
+	}
+	return es.TVar.Load()
+}
+
+// SendTCacheLeg1Pos 向共享内存写入 Leg1 持仓
+// C++: PairwiseArbStrategy.cpp:SendTCacheLeg1Pos()
+//
+//	if (m_tcache) {
+//	    m_tcache->store("leg1_pos", m_firstStrat->m_netpos_pass);
+//	}
+func (es *ExecutionStrategy) SendTCacheLeg1Pos(key string, value float64) error {
+	if es.TCache == nil {
+		return nil
+	}
+	return es.TCache.Store(key, value)
+}
+
+// CloseSharedMemory 关闭共享内存
+func (es *ExecutionStrategy) CloseSharedMemory() {
+	if es.TVar != nil {
+		es.TVar.Close()
+		es.TVar = nil
+	}
+	if es.TCache != nil {
+		es.TCache.Close()
+		es.TCache = nil
+	}
 }

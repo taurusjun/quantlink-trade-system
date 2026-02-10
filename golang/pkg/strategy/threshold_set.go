@@ -70,6 +70,11 @@ type ThresholdSet struct {
 	ClosePNL        bool // CLOSE_PNL - 基于PNL平仓
 	CheckPNL        bool // CHECK_PNL - 检查PNL
 	NewsFlat        bool // NEWS_FLAT - 新闻时平仓
+
+	// === 共享内存配置 (Shared Memory Configuration) ===
+	// C++: ExecutionStrategy.cpp:99-113
+	TVarKey   int // TVAR_KEY - tValue 共享内存键 (用于外部调整价差均值)
+	TCacheKey int // TCACHE_KEY - tcache 共享内存键 (用于向外部共享持仓)
 }
 
 // NewThresholdSet creates a new ThresholdSet with default values
@@ -142,6 +147,10 @@ func NewThresholdSet() *ThresholdSet {
 		ClosePNL:        true,
 		CheckPNL:        true,
 		NewsFlat:        false,
+
+		// 共享内存默认值（0 表示不启用）
+		TVarKey:   0,
+		TCacheKey: 0,
 	}
 }
 
@@ -332,6 +341,14 @@ func (ts *ThresholdSet) LoadFromMap(params map[string]interface{}) {
 	}
 	if val, ok := params["news_flat"].(bool); ok {
 		ts.NewsFlat = val
+	}
+
+	// 共享内存配置
+	if val, ok := params["tvar_key"].(float64); ok {
+		ts.TVarKey = int(val)
+	}
+	if val, ok := params["tcache_key"].(float64); ok {
+		ts.TCacheKey = int(val)
 	}
 }
 
