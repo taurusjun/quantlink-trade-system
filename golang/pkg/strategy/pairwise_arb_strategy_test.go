@@ -63,7 +63,7 @@ func TestPairwiseArbStrategy_Initialize(t *testing.T) {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
-	if pas.config == nil {
+	if pas.Config == nil {
 		t.Error("Config should not be nil after initialization")
 	}
 

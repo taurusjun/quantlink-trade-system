@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
 	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	orspb "github.com/yourusername/quantlink-trade-system/pkg/proto/ors"
 	"github.com/yourusername/quantlink-trade-system/pkg/strategy/spread"
@@ -18,13 +17,15 @@ import (
 // It identifies and trades mean-reverting spread between two correlated instruments
 //
 // C++: class PairwiseArbStrategy : public ExecutionStrategy
-// Go:  type PairwiseArbStrategy struct { *ExecutionStrategy }
+// Go:  type PairwiseArbStrategy struct { *ExecutionStrategy, *StrategyDataContext }
 //
 // 架构完全与 C++ 一致：
 // - 继承 ExecutionStrategy（Go 使用嵌入）
 // - m_firstStrat, m_secondStrat 是 ExtraStrategy* 指针
+// - StrategyDataContext 提供 Go 特有的策略管理字段（与其他策略保持一致）
 type PairwiseArbStrategy struct {
-	*ExecutionStrategy // C++: public ExecutionStrategy
+	*ExecutionStrategy   // C++: public ExecutionStrategy
+	*StrategyDataContext // Go 特有字段（指标、配置、状态等）- 与其他策略保持一致
 
 	// === 腿策略对象（C++: m_firstStrat, m_secondStrat） ===
 	// 使用 ExtraStrategy 封装每条腿的持仓、订单和阈值管理
@@ -134,20 +135,12 @@ type PairwiseArbStrategy struct {
 	// === 矩阵数据 (C++: mx_daily_init) ===
 	mxDailyInit map[string]map[string]float64 // 每日初始化矩阵
 
-	// === Strategy 接口所需字段（Go 特有，用于实现 Strategy 接口）===
-	id                string                                    // 策略 ID（字符串形式）
-	strategyType      string                                    // 策略类型
-	config            *StrategyConfig                           // 配置
-	pendingSignals    []*TradingSignal                          // 待处理信号
-	orders            map[string]*orspb.OrderUpdate             // 订单映射
-	running           bool                                      // 运行状态
-	estimatedPosition *EstimatedPosition                        // 估计持仓（用于 UI）
-	pnl               *PNL                                      // 盈亏统计
-	riskMetrics       *RiskMetrics                              // 风险指标
-	status            *StrategyStatus                           // 策略状态
-	controlState      *StrategyControlState                     // 控制状态（激活/暂停等）
-	privateIndicators *indicators.IndicatorLibrary              // 私有指标库
-	lastMarketData    map[string]*mdpb.MarketDataUpdate         // 最新行情数据（用于 WebSocket）
+	// === PairwiseArb 特有的额外字段 ===
+	// 注意：基础字段已通过 StrategyDataContext 提供
+	estimatedPosition *EstimatedPosition // 估计持仓（用于 UI）- 配对策略的特殊持仓
+	pnl               *PNL               // 盈亏统计
+	riskMetrics       *RiskMetrics       // 风险指标
+	running           bool               // 运行状态（需要单独维护，因为配对策略有特殊逻辑）
 
 	mu sync.RWMutex
 }
@@ -162,6 +155,11 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 	strategyID := int32(hashStringToInt(id))
 	baseExecStrategy := NewExecutionStrategy(strategyID, &Instrument{Symbol: "", TickSize: 1.0})
 
+	// 创建 StrategyDataContext（Go 特有，与其他策略保持一致）
+	// 不自动激活，需要手动调用 Start()
+	dataContext := NewStrategyDataContext(id, "pairwise_arb")
+	dataContext.ControlState = NewStrategyControlState(false) // 默认不激活
+
 	// 创建 ExtraStrategy 实例（C++: m_firstStrat, m_secondStrat）
 	// 注意：Instrument 将在 Initialize 中设置正确的值
 	firstStrat := NewExtraStrategy(1, &Instrument{Symbol: "", TickSize: 1.0})
@@ -172,25 +170,18 @@ func NewPairwiseArbStrategy(id string) *PairwiseArbStrategy {
 	tholdSecond := NewThresholdSet()
 
 	pas := &PairwiseArbStrategy{
-		ExecutionStrategy: baseExecStrategy,
+		ExecutionStrategy:   baseExecStrategy,
+		StrategyDataContext: dataContext,
 		// ExtraStrategy 实例
 		firstStrat:  firstStrat,
 		secondStrat: secondStrat,
 		tholdFirst:  tholdFirst,
 		tholdSecond: tholdSecond,
-		// === Strategy 接口所需字段 ===
-		id:                id,
-		strategyType:      "pairwise_arb",
-		config:            nil,
-		pendingSignals:    make([]*TradingSignal, 0),
-		orders:            make(map[string]*orspb.OrderUpdate),
+		// === PairwiseArb 特有字段 ===
 		running:           false,
 		estimatedPosition: &EstimatedPosition{},
 		pnl:               &PNL{},
 		riskMetrics:       &RiskMetrics{},
-		status:            &StrategyStatus{StrategyID: id},
-		controlState:      NewStrategyControlState(false),
-		privateIndicators: indicators.NewIndicatorLibrary(),
 		// 基本参数
 		lookbackPeriod:   100,
 		entryZScore:      2.0,
@@ -246,7 +237,7 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	pas.config = config
+	pas.Config = config
 
 	// Validate we have exactly 2 symbols
 	if len(config.Symbols) != 2 {
@@ -428,22 +419,22 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	}
 
 	log.Printf("[PairwiseArbStrategy:%s] Initialized %s/%s, entry_z=%.2f, exit_z=%.2f, lookback=%d, min_corr=%.2f, slippage=%d ticks",
-		pas.id, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod, pas.minCorrelation, pas.slippageTicks)
+		pas.ID, pas.symbol1, pas.symbol2, pas.entryZScore, pas.exitZScore, pas.lookbackPeriod, pas.minCorrelation, pas.slippageTicks)
 	if pas.useDynamicThreshold {
 		log.Printf("[PairwiseArbStrategy:%s] Dynamic threshold enabled: begin=%.2f, long=%.2f, short=%.2f",
-			pas.id, pas.beginZScore, pas.longZScore, pas.shortZScore)
+			pas.ID, pas.beginZScore, pas.longZScore, pas.shortZScore)
 	}
 	if pas.aggressiveEnabled {
 		log.Printf("[PairwiseArbStrategy:%s] Aggressive order enabled: interval=%v, max_retry=%d, slop_ticks=%d",
-			pas.id, pas.aggressiveInterval, pas.aggressiveMaxRetry, pas.aggressiveSlopTicks)
+			pas.ID, pas.aggressiveInterval, pas.aggressiveMaxRetry, pas.aggressiveSlopTicks)
 	}
 	if pas.enableMultiLevel {
 		log.Printf("[PairwiseArbStrategy:%s] Multi-level quoting enabled: max_level=%d, sizes=%v",
-			pas.id, pas.maxQuoteLevel, pas.quoteLevelSizes)
+			pas.ID, pas.maxQuoteLevel, pas.quoteLevelSizes)
 	}
 	if pas.enablePriceOptimize {
 		log.Printf("[PairwiseArbStrategy:%s] Price optimize enabled: gap=%d ticks, tick_size1=%.2f, tick_size2=%.2f",
-			pas.id, pas.priceOptimizeGap, pas.tickSize1, pas.tickSize2)
+			pas.ID, pas.priceOptimizeGap, pas.tickSize1, pas.tickSize2)
 	}
 
 	// === 配置 ThresholdSet（C++: m_thold_first） ===
@@ -469,7 +460,7 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	pas.secondStrat.Instru.TickSize = pas.tickSize2
 
 	log.Printf("[PairwiseArbStrategy:%s] ExtraStrategy initialized: firstStrat(symbol=%s), secondStrat(symbol=%s)",
-		pas.id, pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol)
+		pas.ID, pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol)
 
 	return nil
 }
@@ -484,7 +475,7 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Update indicators
-	pas.privateIndicators.UpdateAll(md)
+	pas.PrivateIndicators.UpdateAll(md)
 
 	// Track prices for both symbols
 	if len(md.BidPrice) == 0 || len(md.AskPrice) == 0 {
@@ -567,7 +558,7 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 		pas.spreadAnalyzer.IsReady(pas.lookbackPeriod)
 
 	// Update control state with current conditions
-	pas.controlState.UpdateConditions(conditionsMet, spreadStats.ZScore, indicators)
+	pas.ControlState.UpdateConditions(conditionsMet, spreadStats.ZScore, indicators)
 
 	// Check if we should trade
 	now := time.Now()
@@ -576,11 +567,11 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	if time.Since(pas.lastTradeTime) > 5*time.Second {
 		if pas.useDynamicThreshold {
 			log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (bid>=%.2f, ask>=%.2f), corr=%.3f, pos=%d, exposure=%d",
-				pas.id, spreadStats.ZScore, pas.entryZScoreBid, pas.entryZScoreAsk,
+				pas.ID, spreadStats.ZScore, pas.entryZScoreBid, pas.entryZScoreAsk,
 				spreadStats.Correlation, pas.leg1Position, exposure)
 		} else {
 			log.Printf("[PairwiseArb:%s] Stats: zscore=%.2f (need ±%.2f), corr=%.3f (need %.3f), std=%.4f, ready=%v, condMet=%v",
-				pas.id, spreadStats.ZScore, pas.entryZScore, spreadStats.Correlation, pas.minCorrelation,
+				pas.ID, spreadStats.ZScore, pas.entryZScore, spreadStats.Correlation, pas.minCorrelation,
 				spreadStats.Std, pas.spreadAnalyzer.IsReady(pas.lookbackPeriod), conditionsMet)
 		}
 	}
@@ -705,7 +696,7 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	// Generate signal for leg 1
 	// 注意：不设置 OpenClose，Plugin 层会自动根据持仓判断
 	signal1 := &TradingSignal{
-		StrategyID: pas.id,
+		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
 		// OpenClose: 不设置，让 Plugin 自动判断
@@ -732,7 +723,7 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	// Generate signal for leg 2
 	// 注意：不设置 OpenClose，Plugin 层会自动根据持仓判断
 	signal2 := &TradingSignal{
-		StrategyID: pas.id,
+		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
 		// OpenClose: 不设置，让 Plugin 自动判断
@@ -753,7 +744,7 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 	pas.AddSignal(signal2)
 
 	log.Printf("[PairwiseArbStrategy:%s] Entering %s spread: z=%.2f, leg1=%v %d, leg2=%v %d",
-		pas.id, direction, spreadStats.ZScore, signal1Side, qty, signal2Side, hedgeQty)
+		pas.ID, direction, spreadStats.ZScore, signal1Side, qty, signal2Side, hedgeQty)
 
 	// 注意：不在这里直接修改 leg1Position/leg2Position
 	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
@@ -784,7 +775,7 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	// 注意：不设置 OpenClose，Plugin 层会自动判断
 	// 退出信号时，Plugin 会根据持仓自动设置为 CLOSE
 	signal1 := &TradingSignal{
-		StrategyID: pas.id,
+		StrategyID: pas.ID,
 		Symbol:     pas.symbol1,
 		Side:       signal1Side,
 		// OpenClose: 不设置，让 Plugin 自动判断（会是 CLOSE）
@@ -815,7 +806,7 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 
 	// 注意：不设置 OpenClose，Plugin 层会自动判断
 	signal2 := &TradingSignal{
-		StrategyID: pas.id,
+		StrategyID: pas.ID,
 		Symbol:     pas.symbol2,
 		Side:       signal2Side,
 		// OpenClose: 不设置，让 Plugin 自动判断（会是 CLOSE）
@@ -833,7 +824,7 @@ func (pas *PairwiseArbStrategy) generateExitSignals(md *mdpb.MarketDataUpdate) {
 	pas.AddSignal(signal2)
 
 	log.Printf("[PairwiseArbStrategy:%s] Exiting spread: z=%.2f, leg1=%v %d, leg2=%v %d",
-		pas.id, zScore, signal1Side, qty1, signal2Side, qty2)
+		pas.ID, zScore, signal1Side, qty1, signal2Side, qty2)
 
 	// 注意：不在这里直接重置持仓
 	// 持仓应该从订单成交回报中计算（OnOrderUpdate）
@@ -954,7 +945,7 @@ func (pas *PairwiseArbStrategy) generateLevelSignal(direction string, level int,
 
 	// Generate signal for leg 1 (被动单)
 	signal1 := &TradingSignal{
-		StrategyID:  pas.id,
+		StrategyID:  pas.ID,
 		Symbol:      pas.symbol1,
 		Side:        signal1Side,
 		Price:       price,
@@ -998,7 +989,7 @@ func (pas *PairwiseArbStrategy) generateLevelSignal(direction string, level int,
 
 	// Generate signal for leg 2 (被动单)
 	signal2 := &TradingSignal{
-		StrategyID:  pas.id,
+		StrategyID:  pas.ID,
 		Symbol:      pas.symbol2,
 		Side:        signal2Side,
 		Price:       price2,
@@ -1023,7 +1014,7 @@ func (pas *PairwiseArbStrategy) generateLevelSignal(direction string, level int,
 	pas.AddSignal(signal2)
 
 	log.Printf("[PairwiseArbStrategy:%s] Level %d %s spread: z=%.2f, leg1=%v@%.2f %d, leg2=%v@%.2f %d",
-		pas.id, level, direction, stats.ZScore, signal1Side, price, qty, signal2Side, price2, hedgeQty)
+		pas.ID, level, direction, stats.ZScore, signal1Side, price, qty, signal2Side, price2, hedgeQty)
 }
 
 // optimizeOrderPrice 优化挂单价格
@@ -1088,11 +1079,11 @@ func (pas *PairwiseArbStrategy) optimizeOrderPrice(side OrderSide, level int, ba
 		// 卖单优化价格不能低于前一档价格
 		if side == OrderSideBuy && optimizedPrice < prevPrice {
 			log.Printf("[PairwiseArbStrategy:%s] Price optimize: level=%d, gap=%.0f ticks, %.2f -> %.2f",
-				pas.id, level, gap, basePrice, optimizedPrice)
+				pas.ID, level, gap, basePrice, optimizedPrice)
 			return optimizedPrice
 		} else if side == OrderSideSell && optimizedPrice > prevPrice {
 			log.Printf("[PairwiseArbStrategy:%s] Price optimize: level=%d, gap=%.0f ticks, %.2f -> %.2f",
-				pas.id, level, gap, basePrice, optimizedPrice)
+				pas.ID, level, gap, basePrice, optimizedPrice)
 			return optimizedPrice
 		}
 	}
@@ -1206,7 +1197,7 @@ func (pas *PairwiseArbStrategy) GetBidPrice_first(level int) (price float64, ord
 					// C++: price = bidPx[level] + tickSize
 					price = price + tickSize
 					log.Printf("[PairwiseArb:%s] GetBidPrice_first: invisible book detected at level=%d, quantAhead=%.0f, optimize %.2f -> %.2f",
-						pas.id, level, orderStats.QuantAhead, pas.bidPrices1[level], price)
+						pas.ID, level, orderStats.QuantAhead, pas.bidPrices1[level], price)
 				}
 			}
 		}
@@ -1261,7 +1252,7 @@ func (pas *PairwiseArbStrategy) GetAskPrice_first(level int) (price float64, ord
 					// C++: price = askPx[level] - tickSize
 					price = price - tickSize
 					log.Printf("[PairwiseArb:%s] GetAskPrice_first: invisible book detected at level=%d, quantAhead=%.0f, optimize %.2f -> %.2f",
-						pas.id, level, orderStats.QuantAhead, pas.askPrices1[level], price)
+						pas.ID, level, orderStats.QuantAhead, pas.askPrices1[level], price)
 				}
 			}
 		}
@@ -1293,7 +1284,7 @@ func (pas *PairwiseArbStrategy) GetBidPrice_second(level int) (price float64, or
 				if !pas.secondStrat.HasOrderAtPrice(price, TransactionTypeBuy) {
 					price = price + tickSize
 					log.Printf("[PairwiseArb:%s] GetBidPrice_second: invisible book detected at level=%d, optimize %.2f -> %.2f",
-						pas.id, level, pas.bidPrices2[level], price)
+						pas.ID, level, pas.bidPrices2[level], price)
 				}
 			}
 		}
@@ -1325,7 +1316,7 @@ func (pas *PairwiseArbStrategy) GetAskPrice_second(level int) (price float64, or
 				if !pas.secondStrat.HasOrderAtPrice(price, TransactionTypeSell) {
 					price = price - tickSize
 					log.Printf("[PairwiseArb:%s] GetAskPrice_second: invisible book detected at level=%d, optimize %.2f -> %.2f",
-						pas.id, level, pas.askPrices2[level], price)
+						pas.ID, level, pas.askPrices2[level], price)
 				}
 			}
 		}
@@ -1411,12 +1402,12 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	if supportingOrders > 0 {
 		if targetSide == OrderSideSell && sellAggOrder > supportingOrders {
 			log.Printf("[PairwiseArb:%s] ⛔ Sell aggressive order limit reached: %d > %d",
-				pas.id, sellAggOrder, supportingOrders)
+				pas.ID, sellAggOrder, supportingOrders)
 			return
 		}
 		if targetSide == OrderSideBuy && buyAggOrder > supportingOrders {
 			log.Printf("[PairwiseArb:%s] ⛔ Buy aggressive order limit reached: %d > %d",
-				pas.id, buyAggOrder, supportingOrders)
+				pas.ID, buyAggOrder, supportingOrders)
 			return
 		}
 	}
@@ -1447,13 +1438,13 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 		// 超过最大追单次数
 		pas.aggFailCount++
 		log.Printf("[PairwiseArb:%s] ⚠️  Aggressive order exceeded max retry (%d), fail count: %d",
-			pas.id, pas.aggressiveMaxRetry, pas.aggFailCount)
+			pas.ID, pas.aggressiveMaxRetry, pas.aggFailCount)
 
 		if pas.aggFailCount >= pas.aggressiveFailThreshold {
 			log.Printf("[PairwiseArb:%s] 🚨 Aggressive order fail threshold reached, exiting strategy!",
-				pas.id)
+				pas.ID)
 			// 触发策略退出
-			pas.controlState.RunState = StrategyRunStateExiting
+			pas.ControlState.RunState = StrategyRunStateExiting
 		}
 		return
 	}
@@ -1485,7 +1476,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	// 8. 发送追单信号
 	// C++: SendAskOrder2/SendBidOrder2 with CROSS type
 	signal := &TradingSignal{
-		StrategyID: pas.id,
+		StrategyID: pas.ID,
 		Symbol:     targetSymbol,
 		Side:       targetSide,
 		Price:      orderPrice,
@@ -1508,7 +1499,7 @@ func (pas *PairwiseArbStrategy) sendAggressiveOrder() {
 	pas.AddSignal(signal)
 
 	log.Printf("[PairwiseArb:%s] 🏃 Aggressive order #%d: %v %s %d @ %.2f (exposure=%d, pending=%d, sellAgg=%d, buyAgg=%d)",
-		pas.id, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, pendingNetpos, sellAggOrder, buyAggOrder)
+		pas.ID, pas.aggRepeat, targetSide, targetSymbol, targetQty, orderPrice, exposure, pendingNetpos, sellAggOrder, buyAggOrder)
 
 	// 9. 更新追单状态
 	// C++: sellAggOrder++ / buyAggOrder++（使用 secondStrat）
@@ -1561,7 +1552,7 @@ func (pas *PairwiseArbStrategy) calculatePendingNetpos() int64 {
 func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	// CRITICAL: 检查订单是否属于本策略
 	// 修复 Bug: 防止策略接收到其他策略的订单回调
-	if update.StrategyId != pas.id {
+	if update.StrategyId != pas.ID {
 		// 不是本策略的订单，直接忽略
 		return
 	}
@@ -1570,17 +1561,17 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	defer pas.mu.Unlock()
 
 	log.Printf("[PairwiseArb:%s] 🚨 OnOrderUpdate ENTRY: OrderID=%s, Status=%v, Symbol=%s, Side=%v, FilledQty=%d",
-		pas.id, update.OrderId, update.Status, update.Symbol, update.Side, update.FilledQty)
+		pas.ID, update.OrderId, update.Status, update.Symbol, update.Side, update.FilledQty)
 
 	if !pas.running {
-		log.Printf("[PairwiseArb:%s] ⚠️  Strategy not running, ignoring update", pas.id)
+		log.Printf("[PairwiseArb:%s] ⚠️  Strategy not running, ignoring update", pas.ID)
 		return
 	}
 
 	// Update base strategy position (for overall PNL tracking)
-	log.Printf("[PairwiseArb:%s] 🚨 BEFORE UpdatePosition call, EstimatedPosition ptr=%p", pas.id, pas.estimatedPosition)
+	log.Printf("[PairwiseArb:%s] 🚨 BEFORE UpdatePosition call, EstimatedPosition ptr=%p", pas.ID, pas.estimatedPosition)
 	pas.UpdatePosition(update)
-	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.id, pas.estimatedPosition)
+	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.ID, pas.estimatedPosition)
 
 	// 维护订单映射（多层挂单用）
 	pas.updateOrderMaps(update)
@@ -1606,7 +1597,7 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 			buyAggOrder := int(pas.secondStrat.BuyAggOrder)
 			if pas.aggRepeat > 1 || sellAggOrder > 0 || buyAggOrder > 0 {
 				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (retry=%d, sellAgg=%d, buyAgg=%d)",
-					pas.id, pas.aggRepeat-1, sellAggOrder, buyAggOrder)
+					pas.ID, pas.aggRepeat-1, sellAggOrder, buyAggOrder)
 			}
 			pas.aggRepeat = 1
 			pas.aggDirection = 0
@@ -1670,14 +1661,14 @@ func (pas *PairwiseArbStrategy) updateOrderMaps(update *orspb.OrderUpdate) {
 		}
 		orderMap.AddOrder(order)
 		log.Printf("[PairwiseArb:%s] Added order to map: %s@%.2f, side=%v, level=%d",
-			pas.id, orderID, update.Price, side, level)
+			pas.ID, orderID, update.Price, side, level)
 
 	case orspb.OrderStatus_FILLED, orspb.OrderStatus_CANCELED, orspb.OrderStatus_REJECTED:
 		// 订单完成或取消，从映射中移除
 		removed := orderMap.RemoveOrder(orderID)
 		if removed != nil {
 			log.Printf("[PairwiseArb:%s] Removed order from map: %s@%.2f, status=%v",
-				pas.id, orderID, removed.Price, update.Status)
+				pas.ID, orderID, removed.Price, update.Status)
 		}
 	}
 }
@@ -1705,7 +1696,7 @@ func (pas *PairwiseArbStrategy) updateLeg1Position(side orspb.OrderSide, qty int
 	// 日志输出
 	todayNet := pas.firstStrat.NetPos - pas.firstStrat.NetPosPassYtd
 	log.Printf("[PairwiseArb:%s] Leg1(%s) 持仓更新: NetPos=%d (Buy=%.0f@%.2f, Sell=%.0f@%.2f) [ytd=%d, 2day=%d]",
-		pas.id, pas.symbol1, pas.firstStrat.NetPos,
+		pas.ID, pas.symbol1, pas.firstStrat.NetPos,
 		pas.firstStrat.BuyQty, pas.firstStrat.BuyAvgPrice,
 		pas.firstStrat.SellQty, pas.firstStrat.SellAvgPrice,
 		pas.firstStrat.NetPosPassYtd, todayNet)
@@ -1734,7 +1725,7 @@ func (pas *PairwiseArbStrategy) updateLeg2Position(side orspb.OrderSide, qty int
 	// 日志输出
 	todayNet := pas.secondStrat.NetPos - pas.secondStrat.NetPosPassYtd
 	log.Printf("[PairwiseArb:%s] Leg2(%s) 持仓更新: NetPos=%d (Buy=%.0f@%.2f, Sell=%.0f@%.2f) [ytd=%d, 2day=%d]",
-		pas.id, pas.symbol2, pas.secondStrat.NetPos,
+		pas.ID, pas.symbol2, pas.secondStrat.NetPos,
 		pas.secondStrat.BuyQty, pas.secondStrat.BuyAvgPrice,
 		pas.secondStrat.SellQty, pas.secondStrat.SellAvgPrice,
 		pas.secondStrat.NetPosPassYtd, todayNet)
@@ -1754,7 +1745,7 @@ func (pas *PairwiseArbStrategy) OnTimer(now time.Time) {
 	stats := pas.spreadAnalyzer.GetStats()
 	if now.Unix()%30 == 0 && stats.Std > 0 {
 		log.Printf("[PairwiseArbStrategy:%s] Spread=%.2f (mean=%.2f, std=%.2f), Z=%.2f, Pos=[%d,%d]",
-			pas.id, stats.CurrentSpread, stats.Mean, stats.Std,
+			pas.ID, stats.CurrentSpread, stats.Mean, stats.Std,
 			stats.ZScore, pas.leg1Position, pas.leg2Position)
 	}
 }
@@ -1765,20 +1756,20 @@ func (pas *PairwiseArbStrategy) Start() error {
 	defer pas.mu.Unlock()
 
 	// 尝试从持久化文件恢复持仓
-	if snapshot, err := LoadPositionSnapshot(pas.id); err == nil && snapshot != nil {
+	if snapshot, err := LoadPositionSnapshot(pas.ID); err == nil && snapshot != nil {
 		log.Printf("[PairwiseArbStrategy:%s] Restoring position from snapshot (saved at %s)",
-			pas.id, snapshot.Timestamp.Format("2006-01-02 15:04:05"))
+			pas.ID, snapshot.Timestamp.Format("2006-01-02 15:04:05"))
 
 		// 恢复leg持仓
 		if qty, exists := snapshot.SymbolsPos[pas.symbol1]; exists {
 			pas.leg1Position = qty
 			log.Printf("[PairwiseArbStrategy:%s] Restored leg1 position: %s = %d",
-				pas.id, pas.symbol1, qty)
+				pas.ID, pas.symbol1, qty)
 		}
 		if qty, exists := snapshot.SymbolsPos[pas.symbol2]; exists {
 			pas.leg2Position = qty
 			log.Printf("[PairwiseArbStrategy:%s] Restored leg2 position: %s = %d",
-				pas.id, pas.symbol2, qty)
+				pas.ID, pas.symbol2, qty)
 		}
 
 		// 恢复昨仓净值（C++: m_netpos_pass_ytd）
@@ -1794,7 +1785,7 @@ func (pas *PairwiseArbStrategy) Start() error {
 		leg1TodayNet := pas.leg1Position - pas.leg1YtdPosition
 		leg2TodayNet := pas.leg2Position - pas.leg2YtdPosition
 		log.Printf("[PairwiseArbStrategy:%s] Restored ytd positions: leg1=[ytd=%d, 2day=%d], leg2=[ytd=%d, 2day=%d]",
-			pas.id, pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
+			pas.ID, pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
 
 		// 恢复BaseStrategy持仓（符合新的持仓模型）
 		pas.estimatedPosition.NetQty = snapshot.TotalNetQty
@@ -1810,19 +1801,19 @@ func (pas *PairwiseArbStrategy) Start() error {
 		pas.pnl.RealizedPnL = snapshot.RealizedPnL
 
 		log.Printf("[PairwiseArbStrategy:%s] Position restored: Long=%d, Short=%d, Net=%d",
-			pas.id, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty)
+			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty)
 	} else if err != nil {
-		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to load position snapshot: %v", pas.id, err)
+		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to load position snapshot: %v", pas.ID, err)
 	}
 
 	// 设置运行状态为 Active (直接设置，避免死锁)
-	pas.controlState.RunState = StrategyRunStateActive
+	pas.ControlState.RunState = StrategyRunStateActive
 	pas.running = true
-	if pas.controlState != nil {
-		pas.controlState.Active = true
+	if pas.ControlState != nil {
+		pas.ControlState.Active = true
 	}
-	log.Printf("[%s] Strategy activated", pas.id)
-	log.Printf("[PairwiseArbStrategy:%s] Started", pas.id)
+	log.Printf("[%s] Strategy activated", pas.ID)
+	log.Printf("[PairwiseArbStrategy:%s] Started", pas.ID)
 	return nil
 }
 
@@ -1831,7 +1822,7 @@ func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) e
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArbStrategy:%s] Applying new parameters...", pas.id)
+	log.Printf("[PairwiseArbStrategy:%s] Applying new parameters...", pas.ID)
 
 	// 保存旧参数（用于日志）
 	oldEntryZ := pas.entryZScore
@@ -1921,7 +1912,7 @@ func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) e
 		oldTValue := pas.tValue
 		pas.tValue = val
 		log.Printf("[PairwiseArbStrategy:%s] tValue updated via ApplyParameters: %.4f -> %.4f",
-			pas.id, oldTValue, val)
+			pas.ID, oldTValue, val)
 		updated = true
 	}
 
@@ -1946,22 +1937,22 @@ func (pas *PairwiseArbStrategy) ApplyParameters(params map[string]interface{}) e
 	}
 
 	// 输出变更日志
-	log.Printf("[PairwiseArbStrategy:%s] ✓ Parameters updated:", pas.id)
+	log.Printf("[PairwiseArbStrategy:%s] ✓ Parameters updated:", pas.ID)
 	if oldEntryZ != pas.entryZScore {
 		log.Printf("[PairwiseArbStrategy:%s]   entry_zscore: %.2f -> %.2f",
-			pas.id, oldEntryZ, pas.entryZScore)
+			pas.ID, oldEntryZ, pas.entryZScore)
 	}
 	if oldExitZ != pas.exitZScore {
 		log.Printf("[PairwiseArbStrategy:%s]   exit_zscore: %.2f -> %.2f",
-			pas.id, oldExitZ, pas.exitZScore)
+			pas.ID, oldExitZ, pas.exitZScore)
 	}
 	if oldOrderSize != pas.orderSize {
 		log.Printf("[PairwiseArbStrategy:%s]   order_size: %d -> %d",
-			pas.id, oldOrderSize, pas.orderSize)
+			pas.ID, oldOrderSize, pas.orderSize)
 	}
 	if oldMaxPos != pas.maxPositionSize {
 		log.Printf("[PairwiseArbStrategy:%s]   max_position_size: %d -> %d",
-			pas.id, oldMaxPos, pas.maxPositionSize)
+			pas.ID, oldMaxPos, pas.maxPositionSize)
 	}
 
 	return nil
@@ -2012,7 +2003,7 @@ func (pas *PairwiseArbStrategy) SetTValue(value float64) {
 
 	oldValue := pas.tValue
 	pas.tValue = value
-	log.Printf("[PairwiseArbStrategy:%s] tValue updated: %.4f -> %.4f", pas.id, oldValue, value)
+	log.Printf("[PairwiseArbStrategy:%s] tValue updated: %.4f -> %.4f", pas.ID, oldValue, value)
 }
 
 // GetTValue 获取当前 tValue 值
@@ -2028,7 +2019,7 @@ func (pas *PairwiseArbStrategy) HandleSquareoff() {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArb:%s] HandleSquareoff triggered", pas.id)
+	log.Printf("[PairwiseArb:%s] HandleSquareoff triggered", pas.ID)
 
 	// 两条腿都触发平仓
 	pas.firstStrat.HandleSquareoff()
@@ -2069,11 +2060,11 @@ func (pas *PairwiseArbStrategy) HandleSquareON() {
 	pas.secondStrat.OnFlat = false
 
 	// 重置控制状态中的平仓模式
-	if pas.controlState != nil {
-		pas.controlState.FlattenMode = false
+	if pas.ControlState != nil {
+		pas.ControlState.FlattenMode = false
 	}
 
-	log.Printf("[PairwiseArb:%s] HandleSquareON: Squareoff mode OFF, trading enabled", pas.id)
+	log.Printf("[PairwiseArb:%s] HandleSquareON: Squareoff mode OFF, trading enabled", pas.ID)
 }
 
 // Stop stops the strategy
@@ -2083,7 +2074,7 @@ func (pas *PairwiseArbStrategy) Stop() error {
 
 	// 保存当前持仓到文件（包括昨/今仓区分）
 	snapshot := PositionSnapshot{
-		StrategyID:    pas.id,
+		StrategyID:    pas.ID,
 		Timestamp:     time.Now(),
 		TotalLongQty:  pas.estimatedPosition.LongQty,
 		TotalShortQty: pas.estimatedPosition.ShortQty,
@@ -2104,24 +2095,24 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	}
 
 	if err := SavePositionSnapshot(snapshot); err != nil {
-		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to save position snapshot: %v", pas.id, err)
+		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to save position snapshot: %v", pas.ID, err)
 		// 不阻断停止流程
 	} else {
 		leg1TodayNet := pas.leg1Position - pas.leg1YtdPosition
 		leg2TodayNet := pas.leg2Position - pas.leg2YtdPosition
 		log.Printf("[PairwiseArbStrategy:%s] Position snapshot saved: Long=%d, Short=%d, Net=%d [leg1: ytd=%d, 2day=%d] [leg2: ytd=%d, 2day=%d]",
-			pas.id, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty,
+			pas.ID, snapshot.TotalLongQty, snapshot.TotalShortQty, snapshot.TotalNetQty,
 			pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
 	}
 
-	pas.controlState.RunState = StrategyRunStateStopped
+	pas.ControlState.RunState = StrategyRunStateStopped
 	// 直接设置，避免死锁
 	pas.running = false
-	if pas.controlState != nil {
-		pas.controlState.Active = false
+	if pas.ControlState != nil {
+		pas.ControlState.Active = false
 	}
-	log.Printf("[%s] Strategy deactivated", pas.id)
-	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.id)
+	log.Printf("[%s] Strategy deactivated", pas.ID)
+	log.Printf("[PairwiseArbStrategy:%s] Stopped", pas.ID)
 	return nil
 }
 
@@ -2131,7 +2122,7 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArbStrategy:%s] Initializing positions from external source (CTP)", pas.id)
+	log.Printf("[PairwiseArbStrategy:%s] Initializing positions from external source (CTP)", pas.ID)
 
 	// 初始化 leg1 持仓 (firstStrat)
 	if qty, exists := positions[pas.symbol1]; exists {
@@ -2147,10 +2138,10 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 				pas.firstStrat.SellQty = float64(-qty)
 			}
 			log.Printf("[PairwiseArbStrategy:%s] Initialized firstStrat position: %s NetPosPass=%d",
-				pas.id, pas.symbol1, pas.firstStrat.NetPosPass)
+				pas.ID, pas.symbol1, pas.firstStrat.NetPosPass)
 		}
 		log.Printf("[PairwiseArbStrategy:%s] Initialized leg1 position: %s = %d",
-			pas.id, pas.symbol1, qty)
+			pas.ID, pas.symbol1, qty)
 	}
 
 	// 初始化 leg2 持仓 (secondStrat)
@@ -2167,10 +2158,10 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 				pas.secondStrat.SellQty = float64(-qty)
 			}
 			log.Printf("[PairwiseArbStrategy:%s] Initialized secondStrat position: %s NetPosPass=%d",
-				pas.id, pas.symbol2, pas.secondStrat.NetPosPass)
+				pas.ID, pas.symbol2, pas.secondStrat.NetPosPass)
 		}
 		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2 position: %s = %d",
-			pas.id, pas.symbol2, qty)
+			pas.ID, pas.symbol2, qty)
 	}
 
 	// 更新BaseStrategy的Position（简化处理）
@@ -2184,7 +2175,7 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 	}
 
 	log.Printf("[PairwiseArbStrategy:%s] Positions initialized: leg1=%d, leg2=%d, net=%d",
-		pas.id, pas.leg1Position, pas.leg2Position, pas.estimatedPosition.NetQty)
+		pas.ID, pas.leg1Position, pas.leg2Position, pas.estimatedPosition.NetQty)
 
 	return nil
 }
@@ -2299,7 +2290,7 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 		unrealizedPnL += leg1PnL
 
 		log.Printf("[PairwiseArb:%s] 📊 Leg1(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
-			pas.id, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice)
+			pas.ID, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice)
 	}
 
 	// Leg2 浮动盈亏（使用对手价和 secondStrat 的平均价格）
@@ -2323,7 +2314,7 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 		unrealizedPnL += leg2PnL
 
 		log.Printf("[PairwiseArb:%s] 📊 Leg2(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
-			pas.id, pas.symbol2, leg2PnL, pas.leg2Position, avgCost, counterPrice)
+			pas.ID, pas.symbol2, leg2PnL, pas.leg2Position, avgCost, counterPrice)
 	}
 
 	// 更新 BaseStrategy 的 PNL
@@ -2335,7 +2326,7 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 
 	if pas.leg1Position != 0 || pas.leg2Position != 0 {
 		log.Printf("[PairwiseArb:%s] 💰 Total P&L: Realized=%.2f, Unrealized=%.2f, Total=%.2f",
-			pas.id, pas.pnl.RealizedPnL, pas.pnl.UnrealizedPnL, pas.pnl.TotalPnL)
+			pas.ID, pas.pnl.RealizedPnL, pas.pnl.UnrealizedPnL, pas.pnl.TotalPnL)
 	}
 }
 
@@ -2358,12 +2349,12 @@ func (pas *PairwiseArbStrategy) GetSecondLeg() *ExtraStrategy {
 
 // GetID returns the strategy ID
 func (pas *PairwiseArbStrategy) GetID() string {
-	return pas.id
+	return pas.ID
 }
 
 // GetType returns the strategy type
 func (pas *PairwiseArbStrategy) GetType() string {
-	return pas.strategyType
+	return pas.Type
 }
 
 // GetBaseStrategy returns nil (PairwiseArbStrategy 不再使用 BaseStrategy)
@@ -2383,8 +2374,8 @@ func (pas *PairwiseArbStrategy) IsRunning() bool {
 func (pas *PairwiseArbStrategy) GetSignals() []*TradingSignal {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
-	signals := pas.pendingSignals
-	pas.pendingSignals = make([]*TradingSignal, 0)
+	signals := pas.PendingSignals
+	pas.PendingSignals = make([]*TradingSignal, 0)
 	return signals
 }
 
@@ -2393,9 +2384,9 @@ func (pas *PairwiseArbStrategy) GetSignals() []*TradingSignal {
 // because it's typically called from within OnMarketData which holds the lock
 func (pas *PairwiseArbStrategy) AddSignal(signal *TradingSignal) {
 	// 不获取锁 - 调用者已持有锁
-	pas.pendingSignals = append(pas.pendingSignals, signal)
-	pas.status.SignalCount++
-	pas.status.LastSignalTime = time.Now()
+	pas.PendingSignals = append(pas.PendingSignals, signal)
+	pas.Status.SignalCount++
+	pas.Status.LastSignalTime = time.Now()
 }
 
 // GetEstimatedPosition returns current estimated position
@@ -2422,23 +2413,23 @@ func (pas *PairwiseArbStrategy) GetRiskMetrics() *RiskMetrics {
 func (pas *PairwiseArbStrategy) GetStatus() *StrategyStatus {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
-	pas.status.IsRunning = pas.running
-	pas.status.EstimatedPosition = pas.estimatedPosition
-	pas.status.PNL = pas.pnl
-	pas.status.RiskMetrics = pas.riskMetrics
-	return pas.status
+	pas.Status.IsRunning = pas.running
+	pas.Status.EstimatedPosition = pas.estimatedPosition
+	pas.Status.PNL = pas.pnl
+	pas.Status.RiskMetrics = pas.riskMetrics
+	return pas.Status
 }
 
 // Reset resets the strategy to initial state
 func (pas *PairwiseArbStrategy) Reset() {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
-	pas.pendingSignals = make([]*TradingSignal, 0)
-	pas.orders = make(map[string]*orspb.OrderUpdate)
+	pas.PendingSignals = make([]*TradingSignal, 0)
+	pas.Orders = make(map[string]*orspb.OrderUpdate)
 	pas.estimatedPosition = &EstimatedPosition{}
 	pas.pnl = &PNL{}
 	pas.riskMetrics = &RiskMetrics{}
-	pas.status = &StrategyStatus{StrategyID: pas.id}
+	pas.Status = &StrategyStatus{StrategyID: pas.ID}
 }
 
 // Activate activates the strategy
@@ -2446,10 +2437,10 @@ func (pas *PairwiseArbStrategy) Activate() {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 	pas.running = true
-	if pas.controlState != nil {
-		pas.controlState.Activate()
+	if pas.ControlState != nil {
+		pas.ControlState.Activate()
 	}
-	log.Printf("[%s] Strategy activated", pas.id)
+	log.Printf("[%s] Strategy activated", pas.ID)
 }
 
 // Deactivate deactivates the strategy
@@ -2457,10 +2448,10 @@ func (pas *PairwiseArbStrategy) Deactivate() {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 	pas.running = false
-	if pas.controlState != nil {
-		pas.controlState.Deactivate()
+	if pas.ControlState != nil {
+		pas.ControlState.Deactivate()
 	}
-	log.Printf("[%s] Strategy deactivated", pas.id)
+	log.Printf("[%s] Strategy deactivated", pas.ID)
 }
 
 // updateRiskMetrics updates risk metrics
@@ -2479,11 +2470,11 @@ func (pas *PairwiseArbStrategy) updateRiskMetrics(currentPrice float64) {
 // 符合中国期货市场规则：净持仓模型
 func (pas *PairwiseArbStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 	// Store order update
-	pas.orders[update.OrderId] = update
+	pas.Orders[update.OrderId] = update
 
 	// Update position only for filled orders
 	if update.Status == orspb.OrderStatus_FILLED {
-		pas.status.FillCount++
+		pas.Status.FillCount++
 
 		qty := update.FilledQty
 		price := update.AvgPrice
@@ -2561,21 +2552,21 @@ func (pas *PairwiseArbStrategy) UpdateParameters(params map[string]interface{}) 
 // OnAuctionData handles auction data (集合竞价行情)
 func (pas *PairwiseArbStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {
 	// 配对套利策略在集合竞价期间不操作
-	log.Printf("[PairwiseArbStrategy:%s] Ignoring auction data for %s", pas.id, md.Symbol)
+	log.Printf("[PairwiseArbStrategy:%s] Ignoring auction data for %s", pas.ID, md.Symbol)
 }
 
 // GetConfig returns the strategy configuration
 func (pas *PairwiseArbStrategy) GetConfig() *StrategyConfig {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
-	return pas.config
+	return pas.Config
 }
 
 // GetControlState returns the strategy control state
 func (pas *PairwiseArbStrategy) GetControlState() *StrategyControlState {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
-	return pas.controlState
+	return pas.ControlState
 }
 
 // SendOrder generates and sends orders based on current state
@@ -2598,11 +2589,11 @@ func (pas *PairwiseArbStrategy) CheckSquareoff() {
 	defer pas.mu.Unlock()
 
 	// 检查止损
-	if pas.pnl != nil && pas.config != nil {
-		maxLoss := pas.config.Parameters["max_loss"]
+	if pas.pnl != nil && pas.Config != nil {
+		maxLoss := pas.Config.Parameters["max_loss"]
 		if maxLoss != nil {
 			if ml, ok := maxLoss.(float64); ok && pas.pnl.TotalPnL < -ml {
-				pas.controlState.FlattenMode = true
+				pas.ControlState.FlattenMode = true
 			}
 		}
 	}
@@ -2621,36 +2612,36 @@ func (pas *PairwiseArbStrategy) SetThresholds() {
 func (pas *PairwiseArbStrategy) CanSendOrder() bool {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
-	return pas.running && pas.controlState != nil && pas.controlState.IsActive() && !pas.controlState.FlattenMode
+	return pas.running && pas.ControlState != nil && pas.ControlState.IsActive() && !pas.ControlState.FlattenMode
 }
 
 // SetLastMarketData stores the last market data for a symbol
 func (pas *PairwiseArbStrategy) SetLastMarketData(symbol string, md *mdpb.MarketDataUpdate) {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
-	if pas.lastMarketData == nil {
-		pas.lastMarketData = make(map[string]*mdpb.MarketDataUpdate)
+	if pas.LastMarketData == nil {
+		pas.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
 	}
-	pas.lastMarketData[symbol] = md
+	pas.LastMarketData[symbol] = md
 }
 
 // GetLastMarketData returns the last market data for a symbol
 func (pas *PairwiseArbStrategy) GetLastMarketData(symbol string) *mdpb.MarketDataUpdate {
 	pas.mu.RLock()
 	defer pas.mu.RUnlock()
-	if pas.lastMarketData == nil {
+	if pas.LastMarketData == nil {
 		return nil
 	}
-	return pas.lastMarketData[symbol]
+	return pas.LastMarketData[symbol]
 }
 
 // TriggerFlatten triggers position flattening
 func (pas *PairwiseArbStrategy) TriggerFlatten(reason FlattenReason, aggressive bool) {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
-	if pas.controlState != nil {
-		pas.controlState.FlattenMode = true
-		pas.controlState.FlattenReason = reason
+	if pas.ControlState != nil {
+		pas.ControlState.FlattenMode = true
+		pas.ControlState.FlattenReason = reason
 	}
 }
 
@@ -2660,7 +2651,7 @@ func (pas *PairwiseArbStrategy) GetPendingCancels() []*orspb.OrderUpdate {
 	defer pas.mu.RUnlock()
 	// 返回所有撤单中的订单
 	var cancels []*orspb.OrderUpdate
-	for _, order := range pas.orders {
+	for _, order := range pas.Orders {
 		if order.Status == orspb.OrderStatus_CANCELING {
 			cancels = append(cancels, order)
 		}
