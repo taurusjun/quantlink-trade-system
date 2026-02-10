@@ -17,6 +17,11 @@ strategy:
   max_exposure: 300000.0
 
   parameters:
+    # === C++ 策略标识（用于 daily_init 文件） ===
+    # C++: m_strategyID，决定 daily_init 文件名
+    # 例如 strategy_id: 92201 对应 data/daily_init.92201
+    strategy_id: 94201
+
     # Pairwise Arbitrage Strategy Parameters
     lookback_period: 100                # 回看周期
     entry_zscore: 2.0                   # 入场 Z-score 阈值

@@ -25,6 +25,8 @@ strategies:
     max_position_size: 100
     max_exposure: 1000000.0
     parameters:
+      # C++: m_strategyID，用于 daily_init 文件名 (data/daily_init.92201)
+      strategy_id: 92201
       spread_type: "difference"
       lookback_period: 100.0
       entry_zscore: 0.5

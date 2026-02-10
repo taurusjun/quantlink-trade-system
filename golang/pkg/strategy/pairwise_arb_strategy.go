@@ -117,7 +117,8 @@ type PairwiseArbStrategy struct {
 
 	// 外部 tValue 调整参数（C++: avgSpreadRatio = avgSpreadRatio_ori + tValue）
 	// tValue 允许外部信号调整价差均值，使策略更容易入场或出场
-	tValue float64 // 外部调整值（正值提高均值，负值降低均值）
+	avgSpreadRatio_ori float64 // C++: avgSpreadRatio_ori - 原始价差均值（从 daily_init 加载）
+	tValue             float64 // 外部调整值（正值提高均值，负值降低均值）
 
 	// === 风控字段 (C++: PairwiseArbStrategy.h) ===
 	maxLossLimit  float64 // m_maxloss_limit - 最大亏损限制
@@ -246,6 +247,15 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 
 	pas.symbol1 = config.Symbols[0]
 	pas.symbol2 = config.Symbols[1]
+
+	// === 加载 StrategyID（C++: m_strategyID） ===
+	// C++: m_strategyID 从配置文件读取，用于 daily_init 文件名
+	// 例如：daily_init.92201 中的 92201 就是 m_strategyID
+	if val, ok := config.Parameters["strategy_id"].(float64); ok {
+		pas.ExecutionStrategy.StrategyID = int32(val)
+		log.Printf("[PairwiseArbStrategy:%s] Loaded strategy_id from config: %d", pas.ID, pas.ExecutionStrategy.StrategyID)
+	}
+	// 如果配置中没有 strategy_id，保持构造函数中的哈希值
 
 	// 初始化 ExtraStrategy 的 Instrument 信息（C++: m_firstStrat->m_instru, m_secondStrat->m_instru）
 	pas.firstStrat.Instru = &Instrument{
@@ -475,6 +485,57 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	// if (tcacheKey > 0) { m_tcache = make_shared<hftlib::tcache<double>>(); m_tcache->init(tcacheKey); }
 	if err := pas.ExecutionStrategy.InitSharedMemory(); err != nil {
 		log.Printf("[PairwiseArbStrategy:%s] Warning: Failed to init shared memory: %v", pas.ID, err)
+	}
+
+	// === 加载 daily_init 文件（C++: PairwiseArbStrategy.cpp:18-62） ===
+	// C++: auto mx_daily_init2 = LoadMatrix2(std::string("../data/daily_init.") + std::to_string(m_strategyID));
+	// 使用 ExecutionStrategy.StrategyID 作为文件标识
+	dailyInitPath := GetDailyInitPath(pas.ExecutionStrategy.StrategyID)
+	mx_daily_init2, err := LoadMatrix2(dailyInitPath)
+	if err != nil {
+		log.Printf("[PairwiseArbStrategy:%s] LoadMatrix2: %v (will use default values)", pas.ID, err)
+		// C++ 行为：找不到文件会 exit(-1)，这里我们继续但使用默认值
+	} else {
+		// C++: if (mx_daily_init2.find(m_strategyID) == mx_daily_init2.end()) { ... exit(-1); }
+		row, exists := mx_daily_init2[pas.ExecutionStrategy.StrategyID]
+		if !exists {
+			log.Printf("[PairwiseArbStrategy:%s] daily_init ERROR! Missing m_strategyID %d",
+				pas.ID, pas.ExecutionStrategy.StrategyID)
+		} else {
+			// C++: avgSpreadRatio_ori = std::stod(row["avgPx"]);
+			// C++: avgSpreadRatio = avgSpreadRatio_ori;
+			pas.avgSpreadRatio_ori = row.AvgPx
+			pas.spreadAnalyzer.SetSpreadMean(pas.avgSpreadRatio_ori)
+			log.Printf("[PairwiseArbStrategy:%s] Restored avgSpreadRatio_ori=%.6f from daily_init",
+				pas.ID, pas.avgSpreadRatio_ori)
+
+			// C++: int netpos_ytd1 = std::stoi(row["ytd1"]);     // 昨仓
+			// C++: int netpos_2day1 = std::stoi(row["2day"]);    // 今仓（通常为 0）
+			// C++: m_firstStrat->m_netpos_pass_ytd = netpos_ytd1;
+			// C++: m_firstStrat->m_netpos = netpos_ytd1 + netpos_2day1;
+			// C++: m_firstStrat->m_netpos_pass = netpos_ytd1 + netpos_2day1;
+			netpos_ytd1 := row.Ytd1
+			netpos_2day1 := row.TwoDay
+			pas.firstStrat.NetPosPassYtd = netpos_ytd1
+			pas.firstStrat.NetPos = netpos_ytd1 + netpos_2day1
+			pas.firstStrat.NetPosPass = netpos_ytd1 + netpos_2day1
+			// 更新兼容字段
+			pas.leg1Position = int64(pas.firstStrat.NetPos)
+			pas.leg1YtdPosition = int64(pas.firstStrat.NetPosPassYtd)
+
+			// C++: int netpos_agg2 = std::stoi(row["ytd2"]);
+			// C++: m_secondStrat->m_netpos = netpos_agg2;
+			// C++: m_secondStrat->m_netpos_agg = netpos_agg2;
+			netpos_agg2 := row.Ytd2
+			pas.secondStrat.NetPos = netpos_agg2
+			pas.secondStrat.NetPosAgg = netpos_agg2
+			// 更新兼容字段
+			pas.leg2Position = int64(pas.secondStrat.NetPos)
+
+			log.Printf("[PairwiseArbStrategy:%s] Restored positions from daily_init: "+
+				"firstStrat[netpos=%d, ytd=%d, 2day=%d], secondStrat[netpos_agg=%d]",
+				pas.ID, pas.firstStrat.NetPos, netpos_ytd1, netpos_2day1, netpos_agg2)
+		}
 	}
 
 	log.Printf("[PairwiseArbStrategy:%s] ExtraStrategy initialized: firstStrat(symbol=%s), secondStrat(symbol=%s)",
@@ -2125,7 +2186,30 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	// 保存当前持仓到文件（包括昨/今仓区分）
+	// === 保存 daily_init 文件（C++: PairwiseArbStrategy::SaveMatrix2） ===
+	// C++: SaveMatrix2(std::string("../data/daily_init.") + std::to_string(m_strategyID));
+	// 在 HandleSquareoff() 末尾调用，保存当前状态供下次启动恢复
+	dailyInitPath := GetDailyInitPath(pas.ExecutionStrategy.StrategyID)
+	err := SaveMatrix2(
+		dailyInitPath,
+		pas.ExecutionStrategy.StrategyID,
+		pas.avgSpreadRatio_ori,                           // avgSpreadRatio_ori
+		pas.firstStrat.Instru.Symbol,                     // m_origbaseName1
+		pas.secondStrat.Instru.Symbol,                    // m_origbaseName2
+		pas.firstStrat.NetPosPass,                        // m_netpos_pass (ytd1)
+		pas.secondStrat.NetPosAgg,                        // m_netpos_agg (ytd2)
+	)
+	if err != nil {
+		log.Printf("[PairwiseArbStrategy:%s] Warning: SaveMatrix2 failed: %v", pas.ID, err)
+	} else {
+		log.Printf("[PairwiseArbStrategy:%s] SaveMatrix2 saved: avgSpreadRatio_ori=%.6f, "+
+			"origBaseName1=%s, origBaseName2=%s, netpos_pass=%d, netpos_agg=%d",
+			pas.ID, pas.avgSpreadRatio_ori,
+			pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol,
+			pas.firstStrat.NetPosPass, pas.secondStrat.NetPosAgg)
+	}
+
+	// 保存当前持仓到文件（包括昨/今仓区分）- JSON 格式（Go 特有）
 	snapshot := PositionSnapshot{
 		StrategyID:    pas.ID,
 		Timestamp:     time.Now(),

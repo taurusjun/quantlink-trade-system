@@ -231,6 +231,14 @@ func (sa *SpreadAnalyzer) GetSpreadMean() float64 {
 	return sa.spreadMean
 }
 
+// SetSpreadMean 设置 spread 均值（用于从 daily_init 恢复）
+// C++: avgSpreadRatio_ori = std::stod(row["avgPx"]);
+func (sa *SpreadAnalyzer) SetSpreadMean(mean float64) {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	sa.spreadMean = mean
+}
+
 // GetSpreadStd 获取 spread 标准差
 func (sa *SpreadAnalyzer) GetSpreadStd() float64 {
 	sa.mu.RLock()
