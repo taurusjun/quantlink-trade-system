@@ -14,40 +14,54 @@ import (
 
 // HedgingStrategy implements a delta-neutral hedging strategy
 // It maintains a hedge position to offset risk from a primary position
+//
+// C++: class HedgingStrategy : public ExecutionStrategy
+// Go:  type HedgingStrategy struct { *ExecutionStrategy, *StrategyDataContext }
 type HedgingStrategy struct {
-	*BaseStrategy
+	*ExecutionStrategy   // C++: public ExecutionStrategy（C++ 字段）
+	*StrategyDataContext // Go 特有字段（指标、配置、状态等）
 
 	// Strategy parameters
-	primarySymbol     string  // Primary symbol to hedge (e.g., "ag2412")
-	hedgeSymbol       string  // Hedge symbol (e.g., "ag2501")
-	hedgeRatio        float64 // Hedge ratio (default: 1.0)
-	rebalanceThreshold float64 // Rebalance when delta exceeds threshold (default: 0.1)
-	orderSize         int64   // Size per rebalancing order (default: 10)
-	maxPositionSize   int64   // Maximum position size (default: 100)
-	minSpread         float64 // Minimum spread to hedge (default: 1.0)
-	dynamicHedgeRatio bool    // Calculate hedge ratio dynamically (default: true)
-	correlationPeriod int     // Period for correlation calculation (default: 100)
+	primarySymbol        string  // Primary symbol to hedge (e.g., "ag2412")
+	hedgeSymbol          string  // Hedge symbol (e.g., "ag2501")
+	hedgeRatio           float64 // Hedge ratio (default: 1.0)
+	rebalanceThreshold   float64 // Rebalance when delta exceeds threshold (default: 0.1)
+	orderSize            int64   // Size per rebalancing order (default: 10)
+	maxPositionSize      int64   // Maximum position size (default: 100)
+	minSpread            float64 // Minimum spread to hedge (default: 1.0)
+	dynamicHedgeRatio    bool    // Calculate hedge ratio dynamically (default: true)
+	correlationPeriod    int     // Period for correlation calculation (default: 100)
 
 	// State
-	primaryPrice      float64
-	hedgePrice        float64
-	targetDelta       float64
-	currentDelta      float64
-	lastRebalanceTime time.Time
+	primaryPrice         float64
+	hedgePrice           float64
+	targetDelta          float64
+	currentDelta         float64
+	lastRebalanceTime    time.Time
 	minRebalanceInterval time.Duration
 
 	// Price history for correlation
-	primaryHistory    []float64
-	hedgeHistory      []float64
-	maxHistoryLen     int
+	primaryHistory []float64
+	hedgeHistory   []float64
+	maxHistoryLen  int
+
+	// 持仓和PNL（这些字段用于策略内部计算）
+	estimatedPosition *EstimatedPosition
+	pnl               *PNL
+	riskMetrics       *RiskMetrics
 
 	mu sync.RWMutex
 }
 
 // NewHedgingStrategy creates a new hedging strategy
+// C++: HedgingStrategy::HedgingStrategy(CommonClient*, SimConfig*)
 func NewHedgingStrategy(id string) *HedgingStrategy {
+	strategyID := int32(hashStringToInt(id))
+	baseExecStrategy := NewExecutionStrategy(strategyID, &Instrument{Symbol: "", TickSize: 1.0})
+
 	hs := &HedgingStrategy{
-		BaseStrategy:         NewBaseStrategy(id, "hedging"),
+		ExecutionStrategy:    baseExecStrategy,
+		StrategyDataContext:  NewStrategyDataContext(id, "hedging"),
 		hedgeRatio:           1.0,
 		rebalanceThreshold:   0.1,
 		orderSize:            10,
@@ -60,6 +74,9 @@ func NewHedgingStrategy(id string) *HedgingStrategy {
 		maxHistoryLen:        200,
 		primaryHistory:       make([]float64, 0, 200),
 		hedgeHistory:         make([]float64, 0, 200),
+		estimatedPosition:    &EstimatedPosition{},
+		pnl:                  &PNL{},
+		riskMetrics:          &RiskMetrics{},
 	}
 
 	return hs
@@ -159,8 +176,8 @@ func (hs *HedgingStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	// Update PNL (简化：假设使用 midPrice 作为 bid/ask)
 	avgPrice := (hs.primaryPrice + hs.hedgePrice) / 2.0
 	if avgPrice > 0 {
-		hs.BaseStrategy.UpdatePNL(avgPrice, avgPrice) // 简化处理，使用相同价格
-		hs.BaseStrategy.UpdateRiskMetrics(avgPrice)
+		hs.updatePNL(avgPrice, avgPrice) // 简化处理，使用相同价格
+		hs.updateRiskMetrics(avgPrice)
 	}
 
 	// Check if we should rebalance
@@ -241,7 +258,7 @@ func (hs *HedgingStrategy) calculateDelta() {
 	// Delta = primary_position + hedge_ratio * hedge_position
 	// For delta-neutral: Delta = 0
 	// We track positions separately but for simplicity, use net position
-	primaryDelta := float64(hs.EstimatedPosition.NetQty)
+	primaryDelta := float64(hs.estimatedPosition.NetQty)
 	hedgeDelta := 0.0 // Would need separate tracking per symbol
 	hs.currentDelta = primaryDelta + hs.hedgeRatio*hedgeDelta
 }
@@ -259,7 +276,7 @@ func (hs *HedgingStrategy) rebalance(md *mdpb.MarketDataUpdate) {
 	}
 
 	// Check position limits
-	if math.Abs(float64(hs.EstimatedPosition.NetQty+hedgeQty)) > float64(hs.maxPositionSize) {
+	if math.Abs(float64(hs.estimatedPosition.NetQty+hedgeQty)) > float64(hs.maxPositionSize) {
 		return
 	}
 
@@ -303,7 +320,7 @@ func (hs *HedgingStrategy) rebalance(md *mdpb.MarketDataUpdate) {
 		},
 	}
 
-	hs.BaseStrategy.AddSignal(signal)
+	hs.AddSignal(signal)
 	log.Printf("[HedgingStrategy:%s] Rebalancing: delta=%.2f, target=%.2f, hedge_qty=%d, ratio=%.2f",
 		hs.ID, hs.currentDelta, hs.targetDelta, signal.Quantity, hs.hedgeRatio)
 }
@@ -323,7 +340,7 @@ func (hs *HedgingStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	}
 
 	// Update position based on order status
-	hs.UpdatePosition(update)
+	hs.updatePosition(update)
 }
 
 // OnTimer handles timer events
@@ -339,7 +356,7 @@ func (hs *HedgingStrategy) OnTimer(now time.Time) {
 	// Log hedge status
 	if now.Unix()%30 == 0 {
 		log.Printf("[HedgingStrategy:%s] Delta=%.2f (target=%.2f), HedgeRatio=%.2f, Position=%d",
-			hs.ID, hs.currentDelta, hs.targetDelta, hs.hedgeRatio, hs.EstimatedPosition.NetQty)
+			hs.ID, hs.currentDelta, hs.targetDelta, hs.hedgeRatio, hs.estimatedPosition.NetQty)
 	}
 }
 
@@ -382,7 +399,243 @@ func (hs *HedgingStrategy) GetHedgeStatus() map[string]interface{} {
 	}
 }
 
-// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
-func (hs *HedgingStrategy) GetBaseStrategy() *BaseStrategy {
-	return hs.BaseStrategy
+// === C++ 虚函数对应 ===
+
+// Reset resets the strategy to initial state
+func (hs *HedgingStrategy) Reset() {
+	hs.ExecutionStrategy.Reset()
+	hs.estimatedPosition = &EstimatedPosition{}
+	hs.pnl = &PNL{}
+	hs.riskMetrics = &RiskMetrics{}
+}
+
+// SendOrder generates and sends orders based on current state
+func (hs *HedgingStrategy) SendOrder() {
+	// HedgingStrategy generates signals in rebalance() called from OnMarketData
+}
+
+// OnTradeUpdate is called after a trade is processed
+func (hs *HedgingStrategy) OnTradeUpdate() {
+	// Default: no action
+}
+
+// CheckSquareoff checks if position needs to be squared off
+func (hs *HedgingStrategy) CheckSquareoff() {
+	// Check risk limits
+}
+
+// HandleSquareON handles square off initiation
+func (hs *HedgingStrategy) HandleSquareON() {
+	hs.ControlState.FlattenMode = true
+}
+
+// HandleSquareoff executes the square off logic
+func (hs *HedgingStrategy) HandleSquareoff() {
+	hs.ExecutionStrategy.HandleSquareoff()
+}
+
+// SetThresholds sets dynamic thresholds based on position
+func (hs *HedgingStrategy) SetThresholds() {
+	// Hedging strategy uses fixed thresholds
+}
+
+// OnAuctionData handles auction period market data
+func (hs *HedgingStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {
+	// Hedging strategy ignores auction data
+}
+
+// === Engine/Manager 需要的方法 ===
+
+// GetControlState returns the strategy control state
+func (hs *HedgingStrategy) GetControlState() *StrategyControlState {
+	return hs.ControlState
+}
+
+// GetConfig returns the strategy configuration
+func (hs *HedgingStrategy) GetConfig() *StrategyConfig {
+	return hs.Config
+}
+
+// CanSendOrder returns true if strategy can send orders
+func (hs *HedgingStrategy) CanSendOrder() bool {
+	return hs.IsRunning() && hs.ControlState.IsActivated() && !hs.ControlState.FlattenMode
+}
+
+// GetEstimatedPosition returns current estimated position
+func (hs *HedgingStrategy) GetEstimatedPosition() *EstimatedPosition {
+	return hs.estimatedPosition
+}
+
+// GetPosition returns current position (alias)
+func (hs *HedgingStrategy) GetPosition() *EstimatedPosition {
+	return hs.estimatedPosition
+}
+
+// GetPNL returns current P&L
+func (hs *HedgingStrategy) GetPNL() *PNL {
+	return hs.pnl
+}
+
+// GetRiskMetrics returns risk metrics
+func (hs *HedgingStrategy) GetRiskMetrics() *RiskMetrics {
+	return hs.riskMetrics
+}
+
+// GetStatus returns strategy status
+func (hs *HedgingStrategy) GetStatus() *StrategyStatus {
+	hs.Status.IsRunning = hs.ControlState.IsActivated() && hs.ControlState.RunState != StrategyRunStateStopped
+	hs.Status.EstimatedPosition = hs.estimatedPosition
+	hs.Status.PNL = hs.pnl
+	hs.Status.RiskMetrics = hs.riskMetrics
+	return hs.Status
+}
+
+// TriggerFlatten triggers position flattening
+func (hs *HedgingStrategy) TriggerFlatten(reason FlattenReason, aggressive bool) {
+	hs.ControlState.FlattenMode = true
+}
+
+// GetPendingCancels returns orders pending cancellation
+func (hs *HedgingStrategy) GetPendingCancels() []*orspb.OrderUpdate {
+	return nil // HedgingStrategy doesn't track pending cancels
+}
+
+// UpdateParameters updates strategy parameters
+func (hs *HedgingStrategy) UpdateParameters(params map[string]interface{}) error {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+
+	if v, ok := params["hedge_ratio"].(float64); ok {
+		hs.hedgeRatio = v
+	}
+	if v, ok := params["rebalance_threshold"].(float64); ok {
+		hs.rebalanceThreshold = v
+	}
+	if v, ok := params["order_size"].(float64); ok {
+		hs.orderSize = int64(v)
+	}
+	if v, ok := params["max_position_size"].(float64); ok {
+		hs.maxPositionSize = int64(v)
+	}
+	return nil
+}
+
+// GetCurrentParameters returns current strategy parameters
+func (hs *HedgingStrategy) GetCurrentParameters() map[string]interface{} {
+	hs.mu.RLock()
+	defer hs.mu.RUnlock()
+	return map[string]interface{}{
+		"hedge_ratio":         hs.hedgeRatio,
+		"rebalance_threshold": hs.rebalanceThreshold,
+		"order_size":          hs.orderSize,
+		"max_position_size":   hs.maxPositionSize,
+		"target_delta":        hs.targetDelta,
+		"dynamic_hedge_ratio": hs.dynamicHedgeRatio,
+	}
+}
+
+// === 内部辅助方法 ===
+
+// updatePNL updates P&L based on current market price
+func (hs *HedgingStrategy) updatePNL(bidPrice, askPrice float64) {
+	var unrealizedPnL float64 = 0
+
+	if hs.estimatedPosition.NetQty > 0 {
+		unrealizedPnL = float64(hs.estimatedPosition.NetQty) * (bidPrice - hs.estimatedPosition.BuyAvgPrice)
+	} else if hs.estimatedPosition.NetQty < 0 {
+		unrealizedPnL = float64(-hs.estimatedPosition.NetQty) * (hs.estimatedPosition.SellAvgPrice - askPrice)
+	}
+
+	hs.pnl.UnrealizedPnL = unrealizedPnL
+	hs.pnl.TotalPnL = hs.pnl.RealizedPnL + hs.pnl.UnrealizedPnL
+	hs.pnl.NetPnL = hs.pnl.TotalPnL - hs.pnl.TradingFees
+	hs.pnl.Timestamp = time.Now()
+}
+
+// updateRiskMetrics updates risk metrics
+func (hs *HedgingStrategy) updateRiskMetrics(currentPrice float64) {
+	hs.riskMetrics.PositionSize = abs(hs.estimatedPosition.NetQty)
+	hs.riskMetrics.MaxPositionSize = hs.maxPositionSize
+	hs.riskMetrics.ExposureValue = float64(hs.riskMetrics.PositionSize) * currentPrice
+	hs.riskMetrics.Timestamp = time.Now()
+}
+
+// updatePosition updates position based on order update
+func (hs *HedgingStrategy) updatePosition(update *orspb.OrderUpdate) {
+	hs.Orders[update.OrderId] = update
+
+	if update.Status != orspb.OrderStatus_FILLED {
+		return
+	}
+
+	qty := update.FilledQty
+	price := update.AvgPrice
+
+	if update.Side == orspb.OrderSide_BUY {
+		hs.estimatedPosition.BuyTotalQty += qty
+		hs.estimatedPosition.BuyTotalValue += float64(qty) * price
+
+		if hs.estimatedPosition.NetQty < 0 {
+			closedQty := qty
+			if closedQty > hs.estimatedPosition.SellQty {
+				closedQty = hs.estimatedPosition.SellQty
+			}
+			realizedPnL := (hs.estimatedPosition.SellAvgPrice - price) * float64(closedQty)
+			hs.pnl.RealizedPnL += realizedPnL
+			hs.estimatedPosition.SellQty -= closedQty
+			hs.estimatedPosition.NetQty += closedQty
+			qty -= closedQty
+			if hs.estimatedPosition.SellQty == 0 {
+				hs.estimatedPosition.SellAvgPrice = 0
+			}
+		}
+
+		if qty > 0 {
+			totalCost := hs.estimatedPosition.BuyAvgPrice * float64(hs.estimatedPosition.BuyQty)
+			totalCost += price * float64(qty)
+			hs.estimatedPosition.BuyQty += qty
+			hs.estimatedPosition.NetQty += qty
+			if hs.estimatedPosition.BuyQty > 0 {
+				hs.estimatedPosition.BuyAvgPrice = totalCost / float64(hs.estimatedPosition.BuyQty)
+			}
+		}
+	} else {
+		hs.estimatedPosition.SellTotalQty += qty
+		hs.estimatedPosition.SellTotalValue += float64(qty) * price
+
+		if hs.estimatedPosition.NetQty > 0 {
+			closedQty := qty
+			if closedQty > hs.estimatedPosition.BuyQty {
+				closedQty = hs.estimatedPosition.BuyQty
+			}
+			realizedPnL := (price - hs.estimatedPosition.BuyAvgPrice) * float64(closedQty)
+			hs.pnl.RealizedPnL += realizedPnL
+			hs.estimatedPosition.BuyQty -= closedQty
+			hs.estimatedPosition.NetQty -= closedQty
+			qty -= closedQty
+			if hs.estimatedPosition.BuyQty == 0 {
+				hs.estimatedPosition.BuyAvgPrice = 0
+			}
+		}
+
+		if qty > 0 {
+			totalCost := hs.estimatedPosition.SellAvgPrice * float64(hs.estimatedPosition.SellQty)
+			totalCost += price * float64(qty)
+			hs.estimatedPosition.SellQty += qty
+			hs.estimatedPosition.NetQty -= qty
+			if hs.estimatedPosition.SellQty > 0 {
+				hs.estimatedPosition.SellAvgPrice = totalCost / float64(hs.estimatedPosition.SellQty)
+			}
+		}
+	}
+
+	hs.estimatedPosition.UpdateCompatibilityFields()
+	hs.estimatedPosition.LastUpdate = time.Now()
+
+	// Remove completed orders
+	if update.Status == orspb.OrderStatus_FILLED ||
+		update.Status == orspb.OrderStatus_CANCELED ||
+		update.Status == orspb.OrderStatus_REJECTED {
+		delete(hs.Orders, update.OrderId)
+	}
 }

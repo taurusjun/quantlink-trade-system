@@ -60,7 +60,7 @@ func TestAggressiveStrategy_Initialize(t *testing.T) {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
-	if as.Config == nil {
+	if as.GetConfig() == nil {
 		t.Error("Config should not be nil after initialization")
 	}
 
@@ -200,8 +200,8 @@ func TestAggressiveStrategy_StopLoss(t *testing.T) {
 	as.Start()
 
 	// Set up a long position
-	as.EstimatedPosition.NetQty = 10
-	as.EstimatedPosition.LongQty = 10
+	as.estimatedPosition.NetQty = 10
+	as.estimatedPosition.LongQty = 10
 	as.entryPrice = 100.0
 
 	// Price drops below stop loss (2%)
@@ -268,8 +268,8 @@ func TestAggressiveStrategy_TakeProfit(t *testing.T) {
 	as.Start()
 
 	// Set up a long position
-	as.EstimatedPosition.NetQty = 10
-	as.EstimatedPosition.LongQty = 10
+	as.estimatedPosition.NetQty = 10
+	as.estimatedPosition.LongQty = 10
 	as.entryPrice = 100.0
 
 	// Price rises above take profit (5%)
@@ -362,8 +362,8 @@ func TestAggressiveStrategy_PositionLimits(t *testing.T) {
 	as.Start()
 
 	// Set position near limit
-	as.EstimatedPosition.NetQty = 45
-	as.EstimatedPosition.LongQty = 45
+	as.estimatedPosition.NetQty = 45
+	as.estimatedPosition.LongQty = 45
 
 	// Feed bullish market data
 	md := &mdpb.MarketDataUpdate{
@@ -389,7 +389,7 @@ func TestAggressiveStrategy_PositionLimits(t *testing.T) {
 		lastSignal := signals[len(signals)-1]
 		if lastSignal.Side == OrderSideBuy {
 			// Should not exceed max position
-			if as.EstimatedPosition.NetQty+lastSignal.Quantity > as.maxPositionSize {
+			if as.estimatedPosition.NetQty+lastSignal.Quantity > as.maxPositionSize {
 				t.Error("Signal should respect maximum position limit")
 			}
 		}
@@ -401,6 +401,7 @@ func TestAggressiveStrategy_PositionLimits(t *testing.T) {
 func TestAggressiveStrategy_StartStop(t *testing.T) {
 	as := NewAggressiveStrategy("aggressive_1")
 
+	// Strategy should be running initially (auto-activated)
 	if !as.IsRunning() {
 		t.Error("Strategy should be running initially (auto-activated)")
 	}

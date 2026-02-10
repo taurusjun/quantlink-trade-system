@@ -12,8 +12,12 @@ import (
 
 // PassiveStrategy implements a passive market making strategy
 // Places orders on both sides of the book to capture bid-ask spread
+//
+// C++: class PassiveStrategy : public ExecutionStrategy
+// Go:  type PassiveStrategy struct { *ExecutionStrategy, *StrategyDataContext }
 type PassiveStrategy struct {
-	*BaseStrategy
+	*ExecutionStrategy   // C++: public ExecutionStrategy（C++ 字段）
+	*StrategyDataContext // Go 特有字段（指标、配置、状态等）
 
 	// Strategy parameters
 	spreadMultiplier  float64 // Multiplier for spread placement
@@ -25,18 +29,28 @@ type PassiveStrategy struct {
 	useOrderImbalance bool    // Use order imbalance for skewing
 
 	// Runtime state
-	lastOrderTime     time.Time
+	lastOrderTime      time.Time
 	currentMarketState *MarketState
-	bidOrderID        string
-	askOrderID        string
+	bidOrderID         string
+	askOrderID         string
+
+	// 持仓和PNL（这些字段用于策略内部计算）
+	estimatedPosition *EstimatedPosition
+	pnl               *PNL
+	riskMetrics       *RiskMetrics
 
 	mu sync.RWMutex
 }
 
 // NewPassiveStrategy creates a new passive strategy
+// C++: PassiveStrategy::PassiveStrategy(CommonClient*, SimConfig*)
 func NewPassiveStrategy(id string) *PassiveStrategy {
+	strategyID := int32(hashStringToInt(id))
+	baseExecStrategy := NewExecutionStrategy(strategyID, &Instrument{Symbol: "", TickSize: 1.0})
+
 	ps := &PassiveStrategy{
-		BaseStrategy: NewBaseStrategy(id, "passive"),
+		ExecutionStrategy:   baseExecStrategy,
+		StrategyDataContext: NewStrategyDataContext(id, "passive"),
 		// Default parameters
 		spreadMultiplier:  0.5,
 		orderSize:         10,
@@ -45,10 +59,13 @@ func NewPassiveStrategy(id string) *PassiveStrategy {
 		minSpread:         1.0,
 		orderRefreshMs:    1000,
 		useOrderImbalance: true,
+		estimatedPosition: &EstimatedPosition{},
+		pnl:               &PNL{},
+		riskMetrics:       &RiskMetrics{},
 	}
 
 	// 设置具体策略实例，用于参数热加载
-	ps.BaseStrategy.SetConcreteStrategy(ps)
+	ps.StrategyDataContext.SetConcreteStrategy(ps)
 
 	return ps
 }
@@ -135,8 +152,8 @@ func (ps *PassiveStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	ps.currentMarketState = FromMarketDataUpdate(md)
 
 	// Update P&L and risk metrics (使用 bid/ask)
-	ps.UpdatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
-	ps.UpdateRiskMetrics(ps.currentMarketState.MidPrice)
+	ps.updatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
+	ps.updateRiskMetrics(ps.currentMarketState.MidPrice)
 
 	// Check if we need to refresh orders
 	now := time.Now()
@@ -158,7 +175,7 @@ func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	}
 
 	// Update position
-	ps.UpdatePosition(update)
+	ps.updatePosition(update)
 
 	// Track our orders
 	if update.OrderId == ps.bidOrderID {
@@ -174,8 +191,8 @@ func (ps *PassiveStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 
 	// Update P&L if we have market state
 	if ps.currentMarketState != nil {
-		ps.UpdatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
-		ps.UpdateRiskMetrics(ps.currentMarketState.MidPrice)
+		ps.updatePNL(ps.currentMarketState.BidPrice, ps.currentMarketState.AskPrice)
+		ps.updateRiskMetrics(ps.currentMarketState.MidPrice)
 	}
 }
 
@@ -189,9 +206,127 @@ func (ps *PassiveStrategy) OnTimer(now time.Time) {
 	// Could implement order timeout, position rebalancing, etc.
 }
 
-// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
-func (ps *PassiveStrategy) GetBaseStrategy() *BaseStrategy {
-	return ps.BaseStrategy
+// === C++ 虚函数对应 ===
+
+// Reset resets the strategy to initial state
+func (ps *PassiveStrategy) Reset() {
+	ps.ExecutionStrategy.Reset()
+	ps.estimatedPosition = &EstimatedPosition{}
+	ps.pnl = &PNL{}
+	ps.riskMetrics = &RiskMetrics{}
+	ps.PendingSignals = make([]*TradingSignal, 0) // Clear signals from StrategyDataContext
+}
+
+// SendOrder generates and sends orders based on current state
+func (ps *PassiveStrategy) SendOrder() {
+	ps.generateSignals()
+}
+
+// OnTradeUpdate is called after a trade is processed
+func (ps *PassiveStrategy) OnTradeUpdate() {
+	// Default: no action
+}
+
+// CheckSquareoff checks if position needs to be squared off
+func (ps *PassiveStrategy) CheckSquareoff() {
+	// Check risk limits
+	ps.checkRiskLimits()
+}
+
+// HandleSquareON handles square off initiation
+func (ps *PassiveStrategy) HandleSquareON() {
+	ps.ControlState.FlattenMode = true
+}
+
+// HandleSquareoff executes the square off logic
+func (ps *PassiveStrategy) HandleSquareoff() {
+	ps.ExecutionStrategy.HandleSquareoff()
+}
+
+// SetThresholds sets dynamic thresholds based on position
+func (ps *PassiveStrategy) SetThresholds() {
+	// Passive strategy uses fixed thresholds
+}
+
+// OnAuctionData handles auction period market data
+func (ps *PassiveStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {
+	// Passive strategy ignores auction data
+}
+
+// === Engine/Manager 需要的方法 ===
+
+// GetControlState returns the strategy control state
+func (ps *PassiveStrategy) GetControlState() *StrategyControlState {
+	return ps.ControlState
+}
+
+// GetConfig returns the strategy configuration
+func (ps *PassiveStrategy) GetConfig() *StrategyConfig {
+	return ps.Config
+}
+
+// CanSendOrder returns true if strategy can send orders
+func (ps *PassiveStrategy) CanSendOrder() bool {
+	return ps.IsRunning() && ps.ControlState.IsActivated() && !ps.ControlState.FlattenMode
+}
+
+// GetEstimatedPosition returns current estimated position
+func (ps *PassiveStrategy) GetEstimatedPosition() *EstimatedPosition {
+	return ps.estimatedPosition
+}
+
+// GetPosition returns current position (alias)
+func (ps *PassiveStrategy) GetPosition() *EstimatedPosition {
+	return ps.estimatedPosition
+}
+
+// GetPNL returns current P&L
+func (ps *PassiveStrategy) GetPNL() *PNL {
+	return ps.pnl
+}
+
+// GetRiskMetrics returns risk metrics
+func (ps *PassiveStrategy) GetRiskMetrics() *RiskMetrics {
+	return ps.riskMetrics
+}
+
+// GetStatus returns strategy status
+func (ps *PassiveStrategy) GetStatus() *StrategyStatus {
+	ps.Status.IsRunning = ps.ControlState.IsActivated() && ps.ControlState.RunState != StrategyRunStateStopped
+	ps.Status.EstimatedPosition = ps.estimatedPosition
+	ps.Status.PNL = ps.pnl
+	ps.Status.RiskMetrics = ps.riskMetrics
+	return ps.Status
+}
+
+// TriggerFlatten triggers position flattening
+func (ps *PassiveStrategy) TriggerFlatten(reason FlattenReason, aggressive bool) {
+	ps.ControlState.FlattenMode = true
+}
+
+// GetPendingCancels returns orders pending cancellation
+func (ps *PassiveStrategy) GetPendingCancels() []*orspb.OrderUpdate {
+	// BaseStrategy.GetPendingCancelOrders returns []*CancelRequest
+	// Convert to []*orspb.OrderUpdate
+	return nil // PassiveStrategy doesn't track pending cancels this way
+}
+
+// UpdateParameters updates strategy parameters
+func (ps *PassiveStrategy) UpdateParameters(params map[string]interface{}) error {
+	return ps.ApplyParameters(params)
+}
+
+// GetCurrentParameters returns current strategy parameters
+func (ps *PassiveStrategy) GetCurrentParameters() map[string]interface{} {
+	return map[string]interface{}{
+		"spread_multiplier":   ps.spreadMultiplier,
+		"order_size":          ps.orderSize,
+		"max_inventory":       ps.maxInventory,
+		"inventory_skew":      ps.inventorySkew,
+		"min_spread":          ps.minSpread,
+		"order_refresh_ms":    ps.orderRefreshMs,
+		"use_order_imbalance": ps.useOrderImbalance,
+	}
 }
 
 // generateSignals generates trading signals based on current market state
@@ -228,7 +363,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	// Calculate inventory skew
 	// If we're long, we want to sell more aggressively (tighten ask, widen bid)
 	// If we're short, we want to buy more aggressively (tighten bid, widen ask)
-	inventoryRatio := float64(ps.EstimatedPosition.NetQty) / float64(ps.maxInventory)
+	inventoryRatio := float64(ps.estimatedPosition.NetQty) / float64(ps.maxInventory)
 	inventorySkewAmount := inventoryRatio * ps.inventorySkew
 
 	// Calculate bid/ask offsets
@@ -254,9 +389,9 @@ func (ps *PassiveStrategy) generateSignals() {
 	midPrice := ps.currentMarketState.MidPrice
 
 	// Check risk limits before generating signals
-	if !ps.CheckRiskLimits() {
+	if !ps.checkRiskLimits() {
 		// Risk limits exceeded, only generate closing signals
-		if ps.EstimatedPosition.IsLong() {
+		if ps.estimatedPosition.IsLong() {
 			// Close long position with sell order
 			ps.AddSignal(&TradingSignal{
 				StrategyID:  ps.ID,
@@ -264,14 +399,14 @@ func (ps *PassiveStrategy) generateSignals() {
 				Exchange:    ps.currentMarketState.Exchange,
 				Side:        OrderSideSell,
 				Price:       midPrice - askOffset,
-				Quantity:    abs(ps.EstimatedPosition.NetQty),
+				Quantity:    abs(ps.estimatedPosition.NetQty),
 				OrderType:   OrderTypeLimit,
 				TimeInForce: TimeInForceGTC,
 				Signal:      -0.8,
 				Confidence:  0.9,
 				Timestamp:   time.Now(),
 			})
-		} else if ps.EstimatedPosition.IsShort() {
+		} else if ps.estimatedPosition.IsShort() {
 			// Close short position with buy order
 			ps.AddSignal(&TradingSignal{
 				StrategyID:  ps.ID,
@@ -279,7 +414,7 @@ func (ps *PassiveStrategy) generateSignals() {
 				Exchange:    ps.currentMarketState.Exchange,
 				Side:        OrderSideBuy,
 				Price:       midPrice + bidOffset,
-				Quantity:    abs(ps.EstimatedPosition.NetQty),
+				Quantity:    abs(ps.estimatedPosition.NetQty),
 				OrderType:   OrderTypeLimit,
 				TimeInForce: TimeInForceGTC,
 				Signal:      0.8,
@@ -291,7 +426,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	}
 
 	// Generate bid signal (only if not at max short)
-	if ps.EstimatedPosition.NetQty > -ps.maxInventory {
+	if ps.estimatedPosition.NetQty > -ps.maxInventory {
 		bidPrice := midPrice - bidOffset
 		ps.AddSignal(&TradingSignal{
 			StrategyID:  ps.ID,
@@ -314,7 +449,7 @@ func (ps *PassiveStrategy) generateSignals() {
 	}
 
 	// Generate ask signal (only if not at max long)
-	if ps.EstimatedPosition.NetQty < ps.maxInventory {
+	if ps.estimatedPosition.NetQty < ps.maxInventory {
 		askPrice := midPrice + askOffset
 		ps.AddSignal(&TradingSignal{
 			StrategyID:  ps.ID,
@@ -481,18 +616,117 @@ func (ps *PassiveStrategy) ApplyParameters(params map[string]interface{}) error 
 	return nil
 }
 
-// GetCurrentParameters 获取当前参数（用于API查询）
-func (ps *PassiveStrategy) GetCurrentParameters() map[string]interface{} {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
+// === 内部辅助方法 ===
 
-	return map[string]interface{}{
-		"spread_multiplier":   ps.spreadMultiplier,
-		"order_size":          ps.orderSize,
-		"max_inventory":       ps.maxInventory,
-		"inventory_skew":      ps.inventorySkew,
-		"min_spread":          ps.minSpread,
-		"order_refresh_ms":    ps.orderRefreshMs,
-		"use_order_imbalance": ps.useOrderImbalance,
+// updatePNL updates P&L based on current market price
+func (ps *PassiveStrategy) updatePNL(bidPrice, askPrice float64) {
+	var unrealizedPnL float64 = 0
+
+	if ps.estimatedPosition.NetQty > 0 {
+		unrealizedPnL = float64(ps.estimatedPosition.NetQty) * (bidPrice - ps.estimatedPosition.BuyAvgPrice)
+	} else if ps.estimatedPosition.NetQty < 0 {
+		unrealizedPnL = float64(-ps.estimatedPosition.NetQty) * (ps.estimatedPosition.SellAvgPrice - askPrice)
 	}
+
+	ps.pnl.UnrealizedPnL = unrealizedPnL
+	ps.pnl.TotalPnL = ps.pnl.RealizedPnL + ps.pnl.UnrealizedPnL
+	ps.pnl.NetPnL = ps.pnl.TotalPnL - ps.pnl.TradingFees
+	ps.pnl.Timestamp = time.Now()
+}
+
+// updateRiskMetrics updates risk metrics
+func (ps *PassiveStrategy) updateRiskMetrics(currentPrice float64) {
+	ps.riskMetrics.PositionSize = abs(ps.estimatedPosition.NetQty)
+	ps.riskMetrics.MaxPositionSize = ps.maxInventory
+	ps.riskMetrics.ExposureValue = float64(ps.riskMetrics.PositionSize) * currentPrice
+	ps.riskMetrics.Timestamp = time.Now()
+}
+
+// updatePosition updates position based on order update
+func (ps *PassiveStrategy) updatePosition(update *orspb.OrderUpdate) {
+	ps.Orders[update.OrderId] = update
+
+	if update.Status != orspb.OrderStatus_FILLED {
+		return
+	}
+
+	qty := update.FilledQty
+	price := update.AvgPrice
+
+	if update.Side == orspb.OrderSide_BUY {
+		ps.estimatedPosition.BuyTotalQty += qty
+		ps.estimatedPosition.BuyTotalValue += float64(qty) * price
+
+		if ps.estimatedPosition.NetQty < 0 {
+			closedQty := qty
+			if closedQty > ps.estimatedPosition.SellQty {
+				closedQty = ps.estimatedPosition.SellQty
+			}
+			realizedPnL := (ps.estimatedPosition.SellAvgPrice - price) * float64(closedQty)
+			ps.pnl.RealizedPnL += realizedPnL
+			ps.estimatedPosition.SellQty -= closedQty
+			ps.estimatedPosition.NetQty += closedQty
+			qty -= closedQty
+			if ps.estimatedPosition.SellQty == 0 {
+				ps.estimatedPosition.SellAvgPrice = 0
+			}
+		}
+
+		if qty > 0 {
+			totalCost := ps.estimatedPosition.BuyAvgPrice * float64(ps.estimatedPosition.BuyQty)
+			totalCost += price * float64(qty)
+			ps.estimatedPosition.BuyQty += qty
+			ps.estimatedPosition.NetQty += qty
+			if ps.estimatedPosition.BuyQty > 0 {
+				ps.estimatedPosition.BuyAvgPrice = totalCost / float64(ps.estimatedPosition.BuyQty)
+			}
+		}
+	} else {
+		ps.estimatedPosition.SellTotalQty += qty
+		ps.estimatedPosition.SellTotalValue += float64(qty) * price
+
+		if ps.estimatedPosition.NetQty > 0 {
+			closedQty := qty
+			if closedQty > ps.estimatedPosition.BuyQty {
+				closedQty = ps.estimatedPosition.BuyQty
+			}
+			realizedPnL := (price - ps.estimatedPosition.BuyAvgPrice) * float64(closedQty)
+			ps.pnl.RealizedPnL += realizedPnL
+			ps.estimatedPosition.BuyQty -= closedQty
+			ps.estimatedPosition.NetQty -= closedQty
+			qty -= closedQty
+			if ps.estimatedPosition.BuyQty == 0 {
+				ps.estimatedPosition.BuyAvgPrice = 0
+			}
+		}
+
+		if qty > 0 {
+			totalCost := ps.estimatedPosition.SellAvgPrice * float64(ps.estimatedPosition.SellQty)
+			totalCost += price * float64(qty)
+			ps.estimatedPosition.SellQty += qty
+			ps.estimatedPosition.NetQty -= qty
+			if ps.estimatedPosition.SellQty > 0 {
+				ps.estimatedPosition.SellAvgPrice = totalCost / float64(ps.estimatedPosition.SellQty)
+			}
+		}
+	}
+
+	ps.estimatedPosition.UpdateCompatibilityFields()
+	ps.estimatedPosition.LastUpdate = time.Now()
+
+	// Remove completed orders
+	if update.Status == orspb.OrderStatus_FILLED ||
+		update.Status == orspb.OrderStatus_CANCELED ||
+		update.Status == orspb.OrderStatus_REJECTED {
+		delete(ps.Orders, update.OrderId)
+	}
+}
+
+// checkRiskLimits checks if risk limits are within bounds
+func (ps *PassiveStrategy) checkRiskLimits() bool {
+	// Check position limit
+	if abs(ps.estimatedPosition.NetQty) >= ps.maxInventory {
+		return false
+	}
+	return true
 }

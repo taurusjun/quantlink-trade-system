@@ -1,7 +1,6 @@
 package strategy
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/yourusername/quantlink-trade-system/pkg/indicators"
@@ -25,20 +24,28 @@ func (se *StrategyEngine) GetOrCreateSharedIndicators(symbol string) *indicators
 	return se.sharedIndPool.GetOrCreate(symbol)
 }
 
+// SharedIndicatorAware is an optional interface for strategies that use shared indicators
+type SharedIndicatorAware interface {
+	SetSharedIndicators(lib *indicators.IndicatorLibrary)
+}
+
 // AttachSharedIndicators attaches shared indicators to a strategy
 // 将共享指标附加到策略（在AddStrategy时调用）
 func (se *StrategyEngine) AttachSharedIndicators(strategy Strategy, symbols []string) error {
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrat := strategy.GetBaseStrategy()
-	if baseStrat == nil {
-		return fmt.Errorf("strategy %s does not expose BaseStrategy", strategy.GetID())
+	// Check if strategy supports shared indicators
+	sharedAware, ok := strategy.(SharedIndicatorAware)
+	if !ok {
+		// Strategy doesn't need shared indicators, skip
+		log.Printf("[StrategyEngine] Strategy %s does not implement SharedIndicatorAware, skipping shared indicators",
+			strategy.GetID())
+		return nil
 	}
 
 	// For now, attach the first symbol's shared indicators
 	// In practice, multi-symbol strategies need more complex handling
 	if len(symbols) > 0 {
 		sharedLib := se.GetOrCreateSharedIndicators(symbols[0])
-		baseStrat.SetSharedIndicators(sharedLib)
+		sharedAware.SetSharedIndicators(sharedLib)
 		log.Printf("[StrategyEngine] Attached shared indicators for %s to strategy %s",
 			symbols[0], strategy.GetID())
 	}

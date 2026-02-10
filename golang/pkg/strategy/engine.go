@@ -313,14 +313,7 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 			}()
 
 			// 1. Update LastMarketData for WebSocket push
-			if baseStrat := s.GetBaseStrategy(); baseStrat != nil {
-				baseStrat.MarketDataMu.Lock()
-				if baseStrat.LastMarketData == nil {
-					baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
-				}
-				baseStrat.LastMarketData[md.GetSymbol()] = md
-				baseStrat.MarketDataMu.Unlock()
-			}
+			s.SetLastMarketData(md.GetSymbol(), md)
 
 			// 2. Call market data callback
 			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous
@@ -334,13 +327,11 @@ func (se *StrategyEngine) dispatchMarketDataSync(md *mdpb.MarketDataUpdate) {
 			// 对应 tbsrc: !m_onFlat && m_Active check before SendOrder()
 			for _, signal := range signals {
 				// Check if strategy can send orders (aligned with tbsrc)
-				baseStrat := s.GetBaseStrategy()
-				if baseStrat != nil && baseStrat.ControlState != nil {
-					if !baseStrat.CanSendOrder() {
-						log.Printf("[%s] Skipping order: strategy not in active state (%s)",
-							s.GetID(), baseStrat.ControlState.String())
-						continue
-					}
+				if !s.CanSendOrder() {
+					ctrlState := s.GetControlState()
+					log.Printf("[%s] Skipping order: strategy not in active state (%s)",
+						s.GetID(), ctrlState.String())
+					continue
 				}
 
 				se.sendOrderSync(signal)
@@ -388,14 +379,7 @@ func (se *StrategyEngine) dispatchMarketDataAsync(md *mdpb.MarketDataUpdate) {
 			}()
 
 			// Update LastMarketData for WebSocket push
-			if baseStrat := s.GetBaseStrategy(); baseStrat != nil {
-				baseStrat.MarketDataMu.Lock()
-				if baseStrat.LastMarketData == nil {
-					baseStrat.LastMarketData = make(map[string]*mdpb.MarketDataUpdate)
-				}
-				baseStrat.LastMarketData[md.GetSymbol()] = md
-				baseStrat.MarketDataMu.Unlock()
-			}
+			s.SetLastMarketData(md.GetSymbol(), md)
 
 			// Call market data callback
 			// TODO: Add FeedType to MarketDataUpdate protobuf to distinguish auction vs continuous
@@ -558,50 +542,38 @@ func (se *StrategyEngine) cancelOrder(ctx context.Context, req *orspb.CancelRequ
 }
 
 // ProcessCancelRequests 处理所有策略的撤单请求
+// ProcessCancelRequests processes pending cancel requests for all strategies
 // C++: 对应 ORSCallBack 中的撤单处理逻辑
-// 注意：撤单逻辑通过 BaseStrategy 处理，与 C++ ExecutionStrategy 架构一致
 func (se *StrategyEngine) ProcessCancelRequests() {
 	se.mu.RLock()
 	defer se.mu.RUnlock()
 
 	for _, strategy := range se.strategies {
-		// 直接通过 Strategy 接口获取 BaseStrategy
-		baseStrat := strategy.GetBaseStrategy()
-		if baseStrat == nil {
-			continue
-		}
-
 		// 获取待撤销订单
-		cancelRequests := baseStrat.GetPendingCancelOrders()
-		if len(cancelRequests) == 0 {
+		pendingCancels := strategy.GetPendingCancels()
+		if len(pendingCancels) == 0 {
 			continue
 		}
 
-		for _, cancelReq := range cancelRequests {
+		for _, order := range pendingCancels {
 			// 发送撤单请求
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			resp, err := se.cancelOrder(ctx, &orspb.CancelRequest{
-				OrderId: cancelReq.OrderID,
-				Symbol:  cancelReq.Symbol,
+				OrderId: order.OrderId,
+				Symbol:  order.Symbol,
 			})
 			cancel()
 
 			if err != nil {
 				log.Printf("[StrategyEngine] Failed to send cancel for orderID=%s: %v",
-					cancelReq.OrderID, err)
+					order.OrderId, err)
 				continue
 			}
 
-			// 标记撤单已发送
-			baseStrat.MarkCancelSent(cancelReq.OrderID)
-
 			// 处理撤单响应
 			if resp.ErrorCode != orspb.ErrorCode_SUCCESS {
-				// 撤单被拒绝
 				log.Printf("[StrategyEngine] Cancel rejected for orderID=%s: %s",
-					cancelReq.OrderID, resp.ErrorMsg)
-				// 调用 ProcessCancelReject
-				baseStrat.ProcessCancelReject(cancelReq.OrderID)
+					order.OrderId, resp.ErrorMsg)
 			}
 		}
 	}
@@ -655,30 +627,19 @@ func (se *StrategyEngine) timerLoop() {
 // performStateCheck performs risk checks and state management for a strategy
 // Aligned with tbsrc's CheckSquareoff() logic
 func (se *StrategyEngine) performStateCheck(strategy Strategy) {
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrat := strategy.GetBaseStrategy()
-	if baseStrat == nil || baseStrat.ControlState == nil {
+	ctrlState := strategy.GetControlState()
+	if ctrlState == nil {
 		return
 	}
 
-	// Check and handle risk limits
-	// This will trigger flatten/exit if limits are exceeded
-	baseStrat.CheckAndHandleRiskLimits()
+	// Check squareoff conditions
+	// C++: virtual void CheckSquareoff()
+	strategy.CheckSquareoff()
 
 	// Handle flatten process if in flatten mode
-	if baseStrat.ControlState.FlattenMode || baseStrat.ControlState.ExitRequested {
-		// Get current price for flatten orders
-		// TODO: Use actual market price from latest market data
-		currentPrice := 0.0
-		if baseStrat.EstimatedPosition.AvgLongPrice > 0 {
-			currentPrice = baseStrat.EstimatedPosition.AvgLongPrice
-		} else if baseStrat.EstimatedPosition.AvgShortPrice > 0 {
-			currentPrice = baseStrat.EstimatedPosition.AvgShortPrice
-		}
-
-		if currentPrice > 0 {
-			baseStrat.HandleFlatten(currentPrice)
-		}
+	if ctrlState.FlattenMode || ctrlState.ExitRequested {
+		// C++: HandleSquareoff()
+		strategy.HandleSquareoff()
 	}
 }
 

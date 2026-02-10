@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	mdpb "github.com/yourusername/quantlink-trade-system/pkg/proto/md"
 	"github.com/yourusername/quantlink-trade-system/pkg/strategy"
 )
 
@@ -114,6 +115,34 @@ func NewWebSocketHub(trader *Trader) *WebSocketHub {
 		unregister: make(chan *websocket.Conn),
 		stopCh:     make(chan struct{}),
 	}
+}
+
+// convertMarketData converts proto market data to MarketDataDetail
+func (h *WebSocketHub) convertMarketData(symbol string, md *mdpb.MarketDataUpdate) *MarketDataDetail {
+	if md == nil {
+		return nil
+	}
+	detail := &MarketDataDetail{
+		Symbol:     symbol,
+		Exchange:   md.Exchange,
+		LastPrice:  md.LastPrice,
+		Volume:     int64(md.TotalVolume),
+		Turnover:   md.Turnover,
+		UpdateTime: time.Unix(0, int64(md.Timestamp)).Format("15:04:05"),
+	}
+	if len(md.BidPrice) > 0 {
+		detail.BidPrice = md.BidPrice[0]
+	}
+	if len(md.AskPrice) > 0 {
+		detail.AskPrice = md.AskPrice[0]
+	}
+	if len(md.BidQty) > 0 {
+		detail.BidVolume = int64(md.BidQty[0])
+	}
+	if len(md.AskQty) > 0 {
+		detail.AskVolume = int64(md.AskQty[0])
+	}
+	return detail
 }
 
 // Start starts the WebSocket hub
@@ -283,6 +312,7 @@ func (h *WebSocketHub) collectDashboardData() *DashboardWSUpdate {
 }
 
 // collectOverviewData collects dashboard overview data
+// 使用 Strategy 接口方法，不依赖 BaseStrategy
 func (h *WebSocketHub) collectOverviewData() *DashboardOverview {
 	overview := &DashboardOverview{
 		MultiStrategy: h.trader.IsMultiStrategy(),
@@ -302,26 +332,49 @@ func (h *WebSocketHub) collectOverviewData() *DashboardOverview {
 		// Calculate totals from strategies
 		var totalRealized, totalUnrealized float64
 
-		// Collect individual strategy status
+		// Collect individual strategy status (使用 Strategy 接口方法)
 		mgr.ForEach(func(id string, strat strategy.Strategy) {
-			base := strat.GetBaseStrategy()
-			if base != nil {
-				totalRealized += base.PNL.RealizedPnL
-				totalUnrealized += base.PNL.UnrealizedPnL
+			pnl := strat.GetPNL()
+			controlState := strat.GetControlState()
+			config := strat.GetConfig()
 
-				overview.Strategies = append(overview.Strategies, StrategyOverviewItem{
-					ID:            id,
-					Type:          strat.GetType(),
-					Running:       base.IsRunning(),
-					Active:        base.ControlState.IsActive(),
-					ConditionsMet: base.ControlState.ConditionsMet,
-					Eligible:      base.ControlState.Eligible,
-					RealizedPnL:   base.PNL.RealizedPnL,
-					UnrealizedPnL: base.PNL.UnrealizedPnL,
-					Allocation:    base.Config.Allocation,
-					Symbols:       base.Config.Symbols,
-				})
+			if pnl != nil {
+				totalRealized += pnl.RealizedPnL
+				totalUnrealized += pnl.UnrealizedPnL
 			}
+
+			var symbols []string
+			var allocation float64
+			if config != nil {
+				symbols = config.Symbols
+				allocation = config.Allocation
+			}
+
+			var conditionsMet, eligible, active bool
+			if controlState != nil {
+				conditionsMet = controlState.ConditionsMet
+				eligible = controlState.Eligible
+				active = controlState.IsActive()
+			}
+
+			var realizedPnL, unrealizedPnL float64
+			if pnl != nil {
+				realizedPnL = pnl.RealizedPnL
+				unrealizedPnL = pnl.UnrealizedPnL
+			}
+
+			overview.Strategies = append(overview.Strategies, StrategyOverviewItem{
+				ID:            id,
+				Type:          strat.GetType(),
+				Running:       strat.IsRunning(),
+				Active:        active,
+				ConditionsMet: conditionsMet,
+				Eligible:      eligible,
+				RealizedPnL:   realizedPnL,
+				UnrealizedPnL: unrealizedPnL,
+				Allocation:    allocation,
+				Symbols:       symbols,
+			})
 		})
 
 		overview.TotalRealizedPnL = totalRealized
@@ -333,62 +386,65 @@ func (h *WebSocketHub) collectOverviewData() *DashboardOverview {
 }
 
 // collectStrategyData collects strategy data including thresholds
+// 使用 Strategy 接口和 StrategyDataProvider 接口
 func (h *WebSocketHub) collectStrategyData(id string, strat strategy.Strategy) *StrategyRealtimeData {
-	base := strat.GetBaseStrategy()
-	if base == nil {
-		return nil
+	pnl := strat.GetPNL()
+	controlState := strat.GetControlState()
+	config := strat.GetConfig()
+
+	var symbols []string
+	var allocation float64
+	if config != nil {
+		symbols = config.Symbols
+		allocation = config.Allocation
+	}
+
+	var conditionsMet, eligible, active bool
+	if controlState != nil {
+		conditionsMet = controlState.ConditionsMet
+		eligible = controlState.Eligible
+		active = controlState.IsActive()
+	}
+
+	var realizedPnL, unrealizedPnL float64
+	if pnl != nil {
+		realizedPnL = pnl.RealizedPnL
+		unrealizedPnL = pnl.UnrealizedPnL
 	}
 
 	data := &StrategyRealtimeData{
 		ID:            id,
 		Type:          strat.GetType(),
-		Running:       base.IsRunning(),
-		Active:        base.ControlState.IsActive(),
-		Symbols:       base.Config.Symbols,
+		Running:       strat.IsRunning(),
+		Active:        active,
+		Symbols:       symbols,
 		Indicators:    make(map[string]float64),
 		Thresholds:    make(map[string]float64),
-		ConditionsMet: base.ControlState.ConditionsMet,
-		Eligible:      base.ControlState.Eligible,
-		RealizedPnL:   base.PNL.RealizedPnL,
-		UnrealizedPnL: base.PNL.UnrealizedPnL,
-		Allocation:    base.Config.Allocation,
+		ConditionsMet: conditionsMet,
+		Eligible:      eligible,
+		RealizedPnL:   realizedPnL,
+		UnrealizedPnL: unrealizedPnL,
+		Allocation:    allocation,
 	}
 
-	// Collect indicator values from multiple sources
-	// 1. SharedIndicators (共享指标池)
-	if base.SharedIndicators != nil {
-		for key, value := range base.SharedIndicators.GetAllValues() {
-			data.Indicators[key] = value
-		}
+	// 使用 StrategyDataProvider 接口获取指标和阈值
+	if provider, ok := strat.(strategy.StrategyDataProvider); ok {
+		data.Indicators = provider.GetIndicatorValues()
+		data.Thresholds = provider.GetThresholds()
 	}
-	// 2. PrivateIndicators (私有指标)
-	if base.PrivateIndicators != nil {
-		for key, value := range base.PrivateIndicators.GetAllValues() {
-			data.Indicators[key] = value
-		}
-	}
-	// 3. ControlState.Indicators (策略计算的实时指标)
-	if base.ControlState != nil && base.ControlState.Indicators != nil {
-		for key, value := range base.ControlState.Indicators {
-			data.Indicators[key] = value
-		}
-	}
-
-	// Collect thresholds from strategy configuration
-	data.Thresholds = h.extractThresholds(base)
 
 	return data
 }
 
-// extractThresholds extracts threshold values from strategy configuration
-func (h *WebSocketHub) extractThresholds(base *strategy.BaseStrategy) map[string]float64 {
+// extractThresholds is deprecated - use StrategyDataProvider.GetThresholds() instead
+func (h *WebSocketHub) extractThresholds(config *strategy.StrategyConfig) map[string]float64 {
 	thresholds := make(map[string]float64)
-	if base.Config == nil {
+	if config == nil {
 		return thresholds
 	}
 
 	// Extract thresholds from parameters
-	params := base.Config.Parameters
+	params := config.Parameters
 
 	// PairwiseArbStrategy thresholds
 	if entry, ok := params["entry_zscore"].(float64); ok {
@@ -418,6 +474,7 @@ func (h *WebSocketHub) extractThresholds(base *strategy.BaseStrategy) map[string
 }
 
 // collectMarketData collects latest market data for subscribed symbols
+// 使用 StrategyDataProvider 接口
 func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 	marketData := make(map[string]*MarketDataDetail)
 
@@ -429,51 +486,29 @@ func (h *WebSocketHub) collectMarketData() map[string]*MarketDataDetail {
 
 		mgr.ForEach(func(id string, strat strategy.Strategy) {
 			strategyCount++
-			base := strat.GetBaseStrategy()
-			if base != nil {
-				base.MarketDataMu.RLock()
-				hasData := base.LastMarketData != nil && len(base.LastMarketData) > 0
-				base.MarketDataMu.RUnlock()
 
-				if hasData {
-					withMarketData++
-					base.MarketDataMu.RLock()
-					// Iterate through all market data in the map
-					for symbol, md := range base.LastMarketData {
-						// Only create snapshot if we haven't already for this symbol
-						if _, exists := marketData[symbol]; !exists {
-							snapshot := &MarketDataDetail{
-								Symbol:       symbol,
-								Exchange:     md.Exchange,
-								LastPrice:    md.LastPrice,
-								Volume:       int64(md.TotalVolume),
-								Turnover:     md.Turnover,
-								OpenInterest: 0, // Not available in protobuf
-								UpdateTime:   time.Unix(0, int64(md.Timestamp)).Format(time.RFC3339),
-							}
-							// Set bid/ask if available
-							if len(md.BidPrice) > 0 {
-								snapshot.BidPrice = md.BidPrice[0]
-							}
-							if len(md.AskPrice) > 0 {
-								snapshot.AskPrice = md.AskPrice[0]
-							}
-							if len(md.BidQty) > 0 {
-								snapshot.BidVolume = int64(md.BidQty[0])
-							}
-							if len(md.AskQty) > 0 {
-								snapshot.AskVolume = int64(md.AskQty[0])
-							}
+			// 使用 StrategyDataProvider 接口获取行情快照
+			provider, ok := strat.(strategy.StrategyDataProvider)
+			if !ok {
+				log.Printf("[WebSocket] Strategy %s does not implement StrategyDataProvider", id)
+				return
+			}
+
+			mdSnapshot := provider.GetMarketDataSnapshot()
+			if len(mdSnapshot) > 0 {
+				withMarketData++
+				for symbol, md := range mdSnapshot {
+					// Only create snapshot if we haven't already for this symbol
+					if _, exists := marketData[symbol]; !exists {
+						snapshot := h.convertMarketData(symbol, md)
+						if snapshot != nil {
 							marketData[symbol] = snapshot
 							log.Printf("[WebSocket] Collected market data for %s: LastPrice=%.2f", symbol, md.LastPrice)
 						}
 					}
-					base.MarketDataMu.RUnlock()
-				} else {
-					log.Printf("[WebSocket] Strategy %s has empty LastMarketData", id)
 				}
 			} else {
-				log.Printf("[WebSocket] Strategy %s has nil BaseStrategy", id)
+				log.Printf("[WebSocket] Strategy %s has empty market data", id)
 			}
 		})
 
@@ -511,42 +546,43 @@ func (h *WebSocketHub) collectPositions() []*PositionDetail {
 func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strategy.Strategy) []*PositionDetail {
 	positions := make([]*PositionDetail, 0, 2)
 
-	base := strat.GetBaseStrategy()
-	if base == nil || base.Config == nil || len(base.Config.Symbols) < 2 {
+	config := strat.GetConfig()
+	if config == nil || len(config.Symbols) < 2 {
 		return positions
 	}
 
 	// Get exchange
 	exchange := "SHFE"
-	if len(base.Config.Exchanges) > 0 {
-		exchange = base.Config.Exchanges[0]
+	if len(config.Exchanges) > 0 {
+		exchange = config.Exchanges[0]
 	}
 
 	// Get leg positions from indicators (stored by PairwiseArb)
 	leg1Pos := int64(0)
 	leg2Pos := int64(0)
-	if base.ControlState != nil && base.ControlState.Indicators != nil {
-		if val, ok := base.ControlState.Indicators["leg1_position"]; ok {
+	controlState := strat.GetControlState()
+	if controlState != nil && controlState.Indicators != nil {
+		if val, ok := controlState.Indicators["leg1_position"]; ok {
 			leg1Pos = int64(val)
 		}
-		if val, ok := base.ControlState.Indicators["leg2_position"]; ok {
+		if val, ok := controlState.Indicators["leg2_position"]; ok {
 			leg2Pos = int64(val)
 		}
 	}
 
-	// Get current prices from LastMarketData
+	// Get current prices from LastMarketData using StrategyDataProvider
 	price1 := 0.0
 	price2 := 0.0
-	base.MarketDataMu.RLock()
-	if base.LastMarketData != nil {
-		if md1, ok := base.LastMarketData[base.Config.Symbols[0]]; ok {
+	provider, ok := strat.(strategy.StrategyDataProvider)
+	if ok {
+		mdSnapshot := provider.GetMarketDataSnapshot()
+		if md1, ok := mdSnapshot[config.Symbols[0]]; ok && md1 != nil {
 			price1 = md1.LastPrice
 		}
-		if md2, ok := base.LastMarketData[base.Config.Symbols[1]]; ok {
+		if md2, ok := mdSnapshot[config.Symbols[1]]; ok && md2 != nil {
 			price2 = md2.LastPrice
 		}
 	}
-	base.MarketDataMu.RUnlock()
 
 	// Leg 1
 	if leg1Pos != 0 {
@@ -558,8 +594,8 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 		}
 
 		avgPrice := 0.0
-		if base.ControlState != nil && base.ControlState.Indicators != nil {
-			if val, ok := base.ControlState.Indicators["leg1_price"]; ok {
+		if controlState != nil && controlState.Indicators != nil {
+			if val, ok := controlState.Indicators["leg1_price"]; ok {
 				avgPrice = val
 			}
 		}
@@ -575,7 +611,7 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
-			Symbol:        base.Config.Symbols[0],
+			Symbol:        config.Symbols[0],
 			Exchange:      exchange,
 			Direction:     direction,
 			Volume:        volume,
@@ -596,8 +632,8 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 		}
 
 		avgPrice := 0.0
-		if base.ControlState != nil && base.ControlState.Indicators != nil {
-			if val, ok := base.ControlState.Indicators["leg2_price"]; ok {
+		if controlState != nil && controlState.Indicators != nil {
+			if val, ok := controlState.Indicators["leg2_price"]; ok {
 				avgPrice = val
 			}
 		}
@@ -613,7 +649,7 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
-			Symbol:        base.Config.Symbols[1],
+			Symbol:        config.Symbols[1],
 			Exchange:      exchange,
 			Direction:     direction,
 			Volume:        volume,
@@ -631,57 +667,72 @@ func (h *WebSocketHub) collectPairwisePositions(strategyID string, strat strateg
 func (h *WebSocketHub) collectSingleLegPositions(strategyID string, strat strategy.Strategy) []*PositionDetail {
 	positions := make([]*PositionDetail, 0)
 
-	base := strat.GetBaseStrategy()
-	if base == nil || base.EstimatedPosition == nil || base.EstimatedPosition.IsFlat() {
+	estimatedPos := strat.GetEstimatedPosition()
+	if estimatedPos == nil || estimatedPos.IsFlat() {
+		return positions
+	}
+
+	config := strat.GetConfig()
+	if config == nil {
 		return positions
 	}
 
 	// Get exchange
 	exchange := "SHFE"
-	if len(base.Config.Exchanges) > 0 {
-		exchange = base.Config.Exchanges[0]
+	if len(config.Exchanges) > 0 {
+		exchange = config.Exchanges[0]
 	}
 
 	symbol := ""
-	if len(base.Config.Symbols) > 0 {
-		symbol = base.Config.Symbols[0]
+	if len(config.Symbols) > 0 {
+		symbol = config.Symbols[0]
 	}
 
-	// Get current price
+	// Get current price using StrategyDataProvider
 	currentPrice := 0.0
-	base.MarketDataMu.RLock()
-	if base.LastMarketData != nil {
-		if md, ok := base.LastMarketData[symbol]; ok {
+	provider, ok := strat.(strategy.StrategyDataProvider)
+	if ok {
+		mdSnapshot := provider.GetMarketDataSnapshot()
+		if md, ok := mdSnapshot[symbol]; ok && md != nil {
 			currentPrice = md.LastPrice
 		}
 	}
-	base.MarketDataMu.RUnlock()
+
+	pnl := strat.GetPNL()
 
 	// Determine direction and collect position
-	if base.EstimatedPosition.IsLong() {
+	if estimatedPos.IsLong() {
+		unrealizedPnL := 0.0
+		if pnl != nil {
+			unrealizedPnL = pnl.UnrealizedPnL
+		}
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
 			Symbol:        symbol,
 			Exchange:      exchange,
 			Direction:     "LONG",
-			Volume:        base.EstimatedPosition.LongQty,
-			AvgPrice:      base.EstimatedPosition.AvgLongPrice,
+			Volume:        estimatedPos.LongQty,
+			AvgPrice:      estimatedPos.AvgLongPrice,
 			CurrentPrice:  currentPrice,
-			UnrealizedPnL: base.PNL.UnrealizedPnL,
+			UnrealizedPnL: unrealizedPnL,
 			LegIndex:      0,
 		})
 	}
 
-	if base.EstimatedPosition.IsShort() {
+	if estimatedPos.IsShort() {
+		unrealizedPnL := 0.0
+		if pnl != nil {
+			unrealizedPnL = pnl.UnrealizedPnL
+		}
 		positions = append(positions, &PositionDetail{
 			StrategyID:    strategyID,
 			Symbol:        symbol,
 			Exchange:      exchange,
 			Direction:     "SHORT",
-			Volume:        base.EstimatedPosition.ShortQty,
-			AvgPrice:      base.EstimatedPosition.AvgShortPrice,
+			Volume:        estimatedPos.ShortQty,
+			AvgPrice:      estimatedPos.AvgShortPrice,
 			CurrentPrice:  currentPrice,
-			UnrealizedPnL: base.PNL.UnrealizedPnL,
+			UnrealizedPnL: unrealizedPnL,
 			LegIndex:      0,
 		})
 	}
@@ -701,25 +752,26 @@ func (h *WebSocketHub) collectOrders() []*OrderDetail {
 	mgr := h.trader.GetStrategyManager()
 	orderCount := 0
 	mgr.ForEach(func(id string, strat strategy.Strategy) {
-		// Get base strategy to access Orders map
-		base := strat.GetBaseStrategy()
-		if base == nil {
-			log.Printf("[WebSocket] Strategy %s has nil base", id)
+		// Get orders via StrategyDataProvider interface
+		provider, ok := strat.(strategy.StrategyDataProvider)
+		if !ok {
+			log.Printf("[WebSocket] Strategy %s does not implement StrategyDataProvider", id)
 			return
 		}
 
-		if base.Orders == nil {
+		ordersSnapshot := provider.GetOrdersSnapshot()
+		if ordersSnapshot == nil {
 			log.Printf("[WebSocket] Strategy %s has nil Orders map", id)
 			return
 		}
 
-		stratOrderCount := len(base.Orders)
+		stratOrderCount := len(ordersSnapshot)
 		orderCount += stratOrderCount
 		log.Printf("[WebSocket] Strategy %s has %d orders", id, stratOrderCount)
 
 		// Iterate through all orders for this strategy
 		orderIdx := 0
-		for orderID, orderUpdate := range base.Orders {
+		for orderID, orderUpdate := range ordersSnapshot {
 			// Debug: log first 3 orders
 			if orderIdx < 3 {
 				log.Printf("[WebSocket] DEBUG Order %s: Status=%d, Side=%d, Symbol=%s", orderID, orderUpdate.Status, orderUpdate.Side, orderUpdate.Symbol)

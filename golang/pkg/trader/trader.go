@@ -1033,13 +1033,13 @@ func (t *Trader) initializeMultiStrategy() error {
 
 // setInitialActivationState sets initial activation state based on config
 func (t *Trader) setInitialActivationState(strat strategy.Strategy) {
-	baseStrat := strat.GetBaseStrategy()
-	if baseStrat != nil {
+	controlState := strat.GetControlState()
+	if controlState != nil {
 		if t.Config.Session.AutoActivate {
-			baseStrat.ControlState.Activate()
+			controlState.Activate()
 			log.Printf("[Trader] Strategy %s: Activated (auto_activate=true)", strat.GetID())
 		} else {
-			baseStrat.ControlState.Deactivate()
+			controlState.Deactivate()
 			log.Printf("[Trader] Strategy %s: NOT activated (auto_activate=false)", strat.GetID())
 		}
 	}
@@ -1271,13 +1271,17 @@ func (t *Trader) handleControlSignals() {
 	}
 }
 
-// getBaseStrategy is a helper to get the BaseStrategy
+// getBaseStrategy is a helper to get the BaseStrategy via type assertion
 func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
 	if t.Strategy == nil {
 		log.Printf("[Trader] Error: Strategy is nil")
 		return nil
 	}
-	return t.Strategy.GetBaseStrategy()
+	// Use type assertion to get BaseStrategy from strategies that support it
+	if provider, ok := t.Strategy.(interface{ GetBaseStrategy() *strategy.BaseStrategy }); ok {
+		return provider.GetBaseStrategy()
+	}
+	return nil
 }
 
 // GetStrategyManager returns the strategy manager (for API access)

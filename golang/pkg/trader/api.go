@@ -417,12 +417,21 @@ func (a *APIServer) sendJSON(w http.ResponseWriter, statusCode int, data interfa
 }
 
 // getBaseStrategy is a helper to get the BaseStrategy
+// BaseStrategyProvider is an optional interface for strategies that expose BaseStrategy
+type BaseStrategyProvider interface {
+	GetBaseStrategy() *strategy.BaseStrategy
+}
+
 func (a *APIServer) getBaseStrategy() *strategy.BaseStrategy {
 	if a.trader.Strategy == nil {
 		log.Printf("[API] Error: Strategy is nil")
 		return nil
 	}
-	return a.trader.Strategy.GetBaseStrategy()
+	// Try to get BaseStrategy via optional interface
+	if provider, ok := a.trader.Strategy.(BaseStrategyProvider); ok {
+		return provider.GetBaseStrategy()
+	}
+	return nil
 }
 
 // handleTestPing handles GET /api/v1/test/ping
@@ -1226,13 +1235,13 @@ func (a *APIServer) handleRealtimeIndicators(w http.ResponseWriter, r *http.Requ
 			}
 
 			// Get control state info
-			baseStrat := strat.GetBaseStrategy()
-			if baseStrat != nil {
-				indicators.Active = baseStrat.ControlState.IsActive()
-				indicators.ConditionsMet = baseStrat.ControlState.ConditionsMet
-				indicators.Eligible = baseStrat.ControlState.Eligible
-				indicators.SignalStrength = baseStrat.ControlState.SignalStrength
-				indicators.Indicators = baseStrat.ControlState.Indicators
+			ctrlState := strat.GetControlState()
+			if ctrlState != nil {
+				indicators.Active = ctrlState.IsActive()
+				indicators.ConditionsMet = ctrlState.ConditionsMet
+				indicators.Eligible = ctrlState.Eligible
+				indicators.SignalStrength = ctrlState.SignalStrength
+				indicators.Indicators = ctrlState.Indicators
 			}
 
 			response.Strategies[id] = indicators

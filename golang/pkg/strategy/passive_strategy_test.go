@@ -189,8 +189,8 @@ func TestPassiveStrategy_InventoryManagement(t *testing.T) {
 	}
 
 	// Set position near max
-	ps.EstimatedPosition.NetQty = 9
-	ps.EstimatedPosition.LongQty = 9
+	ps.estimatedPosition.NetQty = 9
+	ps.estimatedPosition.LongQty = 9
 
 	ps.Start()
 

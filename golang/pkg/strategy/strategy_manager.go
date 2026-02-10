@@ -292,17 +292,17 @@ func (sm *StrategyManager) ActivateStrategy(strategyID string) error {
 		return fmt.Errorf("strategy %s not found", strategyID)
 	}
 
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrategy := strategy.GetBaseStrategy()
-	if baseStrategy != nil {
-		baseStrategy.ControlState.ExitRequested = false
-		baseStrategy.ControlState.CancelPending = false
-		baseStrategy.ControlState.FlattenMode = false
-		if baseStrategy.ControlState.RunState == StrategyRunStateStopped ||
-			baseStrategy.ControlState.RunState == StrategyRunStateFlattening {
-			baseStrategy.ControlState.RunState = StrategyRunStateActive
+	// 通过 Strategy 接口操作控制状态
+	ctrlState := strategy.GetControlState()
+	if ctrlState != nil {
+		ctrlState.ExitRequested = false
+		ctrlState.CancelPending = false
+		ctrlState.FlattenMode = false
+		if ctrlState.RunState == StrategyRunStateStopped ||
+			ctrlState.RunState == StrategyRunStateFlattening {
+			ctrlState.RunState = StrategyRunStateActive
 		}
-		baseStrategy.ControlState.Activate()
+		ctrlState.Activate()
 	}
 
 	// 启动策略（如果未运行）
@@ -326,11 +326,11 @@ func (sm *StrategyManager) DeactivateStrategy(strategyID string) error {
 		return fmt.Errorf("strategy %s not found", strategyID)
 	}
 
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrategy := strategy.GetBaseStrategy()
-	if baseStrategy != nil {
-		baseStrategy.TriggerFlatten(FlattenReasonManual, false)
-		baseStrategy.ControlState.Deactivate()
+	// 通过 Strategy 接口操作
+	strategy.TriggerFlatten(FlattenReasonManual, false)
+	ctrlState := strategy.GetControlState()
+	if ctrlState != nil {
+		ctrlState.Deactivate()
 	}
 
 	log.Printf("[StrategyManager] Strategy %s deactivated", strategyID)
@@ -433,13 +433,13 @@ func (sm *StrategyManager) GetStatus() *StrategyManagerStatus {
 			info.Allocation = cfg.Allocation
 		}
 
-		// 直接通过 Strategy 接口获取 BaseStrategy
-		baseStrategy := strategy.GetBaseStrategy()
-		if baseStrategy != nil {
-			info.Active = baseStrategy.ControlState.IsActive()
-			info.ConditionsMet = baseStrategy.ControlState.ConditionsMet
-			info.Eligible = baseStrategy.ControlState.Eligible
-			info.Indicators = baseStrategy.ControlState.Indicators
+		// 通过 Strategy 接口获取控制状态
+		ctrlState := strategy.GetControlState()
+		if ctrlState != nil {
+			info.Active = ctrlState.IsActive()
+			info.ConditionsMet = ctrlState.ConditionsMet
+			info.Eligible = ctrlState.Eligible
+			info.Indicators = ctrlState.Indicators
 		}
 
 		if info.Running {
@@ -478,13 +478,13 @@ func (sm *StrategyManager) GetStrategyStatus(strategyID string) (*StrategyStatus
 		info.Allocation = cfg.Allocation
 	}
 
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrategy := strategy.GetBaseStrategy()
-	if baseStrategy != nil {
-		info.Active = baseStrategy.ControlState.IsActive()
-		info.ConditionsMet = baseStrategy.ControlState.ConditionsMet
-		info.Eligible = baseStrategy.ControlState.Eligible
-		info.Indicators = baseStrategy.ControlState.Indicators
+	// 通过 Strategy 接口获取控制状态
+	ctrlState := strategy.GetControlState()
+	if ctrlState != nil {
+		info.Active = ctrlState.IsActive()
+		info.ConditionsMet = ctrlState.ConditionsMet
+		info.Eligible = ctrlState.Eligible
+		info.Indicators = ctrlState.Indicators
 	}
 
 	return info, nil
@@ -562,12 +562,9 @@ func (sm *StrategyManager) TriggerGlobalFlatten(reason string) error {
 	log.Printf("[StrategyManager] Triggering global flatten: %s", reason)
 
 	for id, strategy := range sm.strategies {
-		// 直接通过 Strategy 接口获取 BaseStrategy
-		baseStrategy := strategy.GetBaseStrategy()
-		if baseStrategy != nil {
-			baseStrategy.TriggerFlatten(FlattenReasonMaxLoss, false)
-			log.Printf("[StrategyManager] Strategy %s flatten triggered", id)
-		}
+		// 通过 Strategy 接口触发平仓
+		strategy.TriggerFlatten(FlattenReasonMaxLoss, false)
+		log.Printf("[StrategyManager] Strategy %s flatten triggered", id)
 	}
 
 	return nil
@@ -647,14 +644,9 @@ func (sm *StrategyManager) ReloadStrategyModel(strategyID string) error {
 	// 转换参数
 	strategyParams := config.ConvertModelToStrategyParams(newParams)
 
-	// 直接通过 Strategy 接口获取 BaseStrategy
-	baseStrategy := strategy.GetBaseStrategy()
-	if baseStrategy != nil {
-		if err := baseStrategy.UpdateParameters(strategyParams); err != nil {
-			return fmt.Errorf("failed to update parameters: %w", err)
-		}
-	} else {
-		return fmt.Errorf("strategy does not expose BaseStrategy")
+	// 通过 Strategy 接口更新参数
+	if err := strategy.UpdateParameters(strategyParams); err != nil {
+		return fmt.Errorf("failed to update parameters: %w", err)
 	}
 
 	log.Printf("[StrategyManager] ✓ Strategy %s model reloaded successfully", strategyID)

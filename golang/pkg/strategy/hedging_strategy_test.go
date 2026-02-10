@@ -276,7 +276,7 @@ func TestHedgingStrategy_Rebalancing(t *testing.T) {
 	hs.Start()
 
 	// Set up position that needs rebalancing
-	hs.EstimatedPosition.NetQty = 10 // Delta = 10
+	hs.estimatedPosition.NetQty = 10 // Delta = 10
 	hs.currentDelta = 10.0
 	hs.targetDelta = 0.0
 
@@ -335,7 +335,7 @@ func TestHedgingStrategy_DeltaCalculation(t *testing.T) {
 	}
 
 	// Set positions
-	hs.EstimatedPosition.NetQty = 10
+	hs.estimatedPosition.NetQty = 10
 
 	// Calculate delta
 	hs.calculateDelta()

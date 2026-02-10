@@ -63,7 +63,7 @@ func TestPairwiseArbStrategy_Initialize(t *testing.T) {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
-	if pas.Config == nil {
+	if pas.config == nil {
 		t.Error("Config should not be nil after initialization")
 	}
 
@@ -636,8 +636,10 @@ func TestPairwiseArbStrategy_GetSpreadStatus(t *testing.T) {
 func TestPairwiseArbStrategy_StartStop(t *testing.T) {
 	pas := NewPairwiseArbStrategy("pairwise_1")
 
-	if !pas.IsRunning() {
-		t.Error("Strategy should be running initially (auto-activated)")
+	// 策略创建后默认不运行，需要显式 Start
+	// C++: 策略需要显式激活才能运行
+	if pas.IsRunning() {
+		t.Error("Strategy should not be running initially (need explicit Start)")
 	}
 
 	pas.Start()
