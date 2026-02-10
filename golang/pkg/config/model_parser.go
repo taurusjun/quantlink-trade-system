@@ -218,6 +218,56 @@ func ConvertModelToStrategyParams(modelParams map[string]interface{}) map[string
 		params["hedge_size_ratio"] = val
 	}
 
+	// AVG_SPREAD_AWAY -> avg_spread_away
+	if val, ok := modelParams["AVG_SPREAD_AWAY"]; ok {
+		params["avg_spread_away"] = val
+	}
+
+	// PIL_FACTOR -> pil_factor
+	if val, ok := modelParams["PIL_FACTOR"]; ok {
+		params["pil_factor"] = val
+	}
+
+	// OPP_QTY -> opp_qty
+	if val, ok := modelParams["OPP_QTY"]; ok {
+		params["opp_qty"] = val
+	}
+
+	// PRICE_RATIO -> price_ratio
+	if val, ok := modelParams["PRICE_RATIO"]; ok {
+		params["price_ratio"] = val
+	}
+
+	// SUPPORTING_ORDERS -> supporting_orders
+	if val, ok := modelParams["SUPPORTING_ORDERS"]; ok {
+		params["supporting_orders"] = val
+	}
+
+	// MAX_QUOTE_LEVEL -> max_quote_level
+	if val, ok := modelParams["MAX_QUOTE_LEVEL"]; ok {
+		params["max_quote_level"] = val
+	}
+
+	// BEGIN_PLACE -> begin_zscore (alternative mapping)
+	if val, ok := modelParams["BEGIN_PLACE"]; ok {
+		params["begin_zscore"] = val
+	}
+
+	// LONG_PLACE -> long_zscore
+	if val, ok := modelParams["LONG_PLACE"]; ok {
+		params["long_zscore"] = val
+	}
+
+	// SHORT_PLACE -> short_zscore
+	if val, ok := modelParams["SHORT_PLACE"]; ok {
+		params["short_zscore"] = val
+	}
+
+	// BEGIN_REMOVE -> exit_zscore (alternative mapping)
+	if val, ok := modelParams["BEGIN_REMOVE"]; ok {
+		params["exit_zscore"] = val
+	}
+
 	return params
 }
 

@@ -9,14 +9,18 @@ import (
 )
 
 // ControlFile control文件结构
+// 对应 C++ control 文件格式：
+// 主合约 Model路径 交易所 CPU绑核 策略类型 开始时间 结束时间 从合约
+// 例如：ag_F_2_SFE ./models/model.ag2502.ag2504.par.txt.92201 SFE 16 TB_PAIR_STRAT 0100 0700 ag_F_4_SFE
 type ControlFile struct {
-	Symbol1       string
-	Symbol2       string
-	ModelFilePath string
-	Exchange      string
-	StrategyType  string
-	StartTime     string
-	EndTime       string
+	Symbol1       string // 主合约 (ag_F_2_SFE -> ag2502)
+	Symbol2       string // 从合约 (ag_F_4_SFE -> ag2504)
+	ModelFilePath string // Model 文件路径
+	Exchange      string // 交易所 (SFE)
+	CPUAffinity   int    // CPU 绑核
+	StrategyType  string // 策略类型 (TB_PAIR_STRAT)
+	StartTime     string // 开始时间 (0100 -> 01:00:00)
+	EndTime       string // 结束时间 (0700 -> 07:00:00)
 }
 
 // ParseControlFile 解析control文件
@@ -39,10 +43,17 @@ func ParseControlFile(filePath string) (*ControlFile, error) {
 		return nil, fmt.Errorf("invalid control file format: expected 8 fields, got %d", len(parts))
 	}
 
+	// 解析 CPU 绑核参数
+	cpuAffinity := 0
+	if len(parts) > 3 {
+		cpuAffinity, _ = strconv.Atoi(parts[3])
+	}
+
 	control := &ControlFile{
 		Symbol1:       convertInternalSymbol(parts[0]),
 		ModelFilePath: parts[1],
 		Exchange:      parts[2],
+		CPUAffinity:   cpuAffinity,
 		StrategyType:  parts[4],
 		StartTime:     formatTime(parts[5]),
 		EndTime:       formatTime(parts[6]),

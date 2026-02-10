@@ -42,6 +42,19 @@ type ThresholdSet struct {
 	MinPrice float64 // MIN_PRICE - 最小价格限制
 	Slop     float64 // SLOP - 追单滑点(tick数)
 
+	// === 均值回归参数 (Mean Reversion Parameters) ===
+	Alpha         float64 // ALPHA - 均值回归学习率
+	AvgSpreadAway float64 // AVG_SPREAD_AWAY - 价差偏离阈值
+
+	// === 对冲参数 (Hedging Parameters) ===
+	HedgeThres     float64 // HEDGE_THRES - 对冲触发阈值
+	HedgeSizeRatio float64 // HEDGE_SIZE_RATIO - 对冲比例
+
+	// === 额外风控参数 (Additional Risk Parameters) ===
+	PilFactor  float64 // PIL_FACTOR - 盈亏因子
+	OppQty     int32   // OPP_QTY - 对手方数量阈值
+	PriceRatio float64 // PRICE_RATIO - 价格比例
+
 	// === 时间参数 (Timing Parameters) ===
 	Pause         int64 // PAUSE - 订单间隔(ms)
 	CancelReqPause int64 // CANCELREQ_PAUSE - 撤单间隔(ms)
@@ -118,6 +131,19 @@ func NewThresholdSet() *ThresholdSet {
 		MaxPrice: 1e12,
 		MinPrice: -1000,
 		Slop:     20,
+
+		// 均值回归默认值
+		Alpha:         0.0,   // 默认不启用
+		AvgSpreadAway: 0.0,   // 默认不启用
+
+		// 对冲默认值
+		HedgeThres:     0.0, // 默认不启用
+		HedgeSizeRatio: 1.0, // 默认1:1对冲
+
+		// 额外风控默认值
+		PilFactor:  1.0, // 默认1.0
+		OppQty:     0,   // 默认不限制
+		PriceRatio: 1.0, // 默认1.0
 
 		// 时间默认值
 		Pause:         0,
@@ -266,6 +292,33 @@ func (ts *ThresholdSet) LoadFromMap(params map[string]interface{}) {
 	}
 	if val, ok := params["slop"].(float64); ok {
 		ts.Slop = val
+	}
+
+	// 均值回归参数
+	if val, ok := params["alpha"].(float64); ok {
+		ts.Alpha = val
+	}
+	if val, ok := params["avg_spread_away"].(float64); ok {
+		ts.AvgSpreadAway = val
+	}
+
+	// 对冲参数
+	if val, ok := params["hedge_thres"].(float64); ok {
+		ts.HedgeThres = val
+	}
+	if val, ok := params["hedge_size_ratio"].(float64); ok {
+		ts.HedgeSizeRatio = val
+	}
+
+	// 额外风控参数
+	if val, ok := params["pil_factor"].(float64); ok {
+		ts.PilFactor = val
+	}
+	if val, ok := params["opp_qty"].(float64); ok {
+		ts.OppQty = int32(val)
+	}
+	if val, ok := params["price_ratio"].(float64); ok {
+		ts.PriceRatio = val
 	}
 
 	// 时间参数

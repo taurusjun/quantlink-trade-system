@@ -13,85 +13,182 @@ system:
 # Strategy Configuration (Multi-Strategy Mode)
 # ═══════════════════════════════════════════════════════════
 strategies:
-  - id: "test_92201"                    # 策略唯一标识符
-    type: "pairwise_arb"                # 策略类型
+  # 策略1: 白银配对套利 (ag2603/ag2605)
+  - id: "test_92201"                    # 策略唯一标识符（白银）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
     enabled: true                       # 是否启用此策略
-    allocation: 0.5                     # 资金分配比例
-    symbols:
-      - "ag2603"
-      - "ag2605"
-    exchanges:
-      - "SHFE"
-    max_position_size: 100
-    max_exposure: 1000000.0
+    allocation: 0.3                     # 资金分配比例 (30%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "ag2603"                        # 白银 2026年3月
+      - "ag2605"                        # 白银 2026年5月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 100              # 最大持仓数量
+    max_exposure: 300000.0              # 最大风险敞口
+
+    # Strategy-specific parameters (策略特定参数)
     parameters:
-      # C++: m_strategyID，用于 daily_init 文件名 (data/daily_init.92201)
-      strategy_id: 92201
-      spread_type: "difference"
-      lookback_period: 100.0
-      entry_zscore: 0.5
-      exit_zscore: 0.2
-      order_size: 10.0
-      min_correlation: 0.3
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 100.0            # 回看周期
+      entry_zscore: 0.5                 # 入场Z-Score阈值（降低以便测试）
+      exit_zscore: 0.2                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.5                 # 空仓入场阈值
+      long_zscore: 1.5                  # 满仓多头时做多阈值
+      short_zscore: 1.5                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
+      # 多层挂单参数（C++: MAX_QUOTE_LEVEL）
+      enable_multi_level: true          # 是否启用多层挂单（测试：开启）
+      max_quote_level: 3                # 最大挂单层数
+      quote_level_sizes: [4, 3, 2]      # 每层下单量
+      # 价格优化参数
+      enable_price_optimize: false      # 是否启用价格优化（默认关闭）
+      price_optimize_gap: 2             # 触发优化的 tick 跳跃数
+      tick_size_1: 1.0                  # Leg1 最小变动单位
+      tick_size_2: 1.0                  # Leg2 最小变动单位
+
+  # 策略2: 黄金配对套利 (au2604/au2606)
+  - id: "test_92202"                    # 策略唯一标识符（黄金）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
+    enabled: true                       # 是否启用此策略
+    allocation: 0.4                     # 资金分配比例 (40%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "au2604"                        # 黄金 2026年4月
+      - "au2606"                        # 黄金 2026年6月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 50               # 最大持仓数量（黄金价格高，数量少）
+    max_exposure: 400000.0              # 最大风险敞口
+
+    # Strategy-specific parameters (策略特定参数)
+    parameters:
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 100.0            # 回看周期
+      entry_zscore: 0.6                 # 入场Z-Score阈值（黄金波动较小）
+      exit_zscore: 0.2                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.6                 # 空仓入场阈值
+      long_zscore: 1.8                  # 满仓多头时做多阈值
+      short_zscore: 1.8                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 10.0       # 跳跃tick数（黄金tick size较小）
+      aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
+
+  # 策略3: 白银近月配对套利 (ag2603/ag2603) - 演示多策略
+  - id: "test_92203"                    # 策略唯一标识符（白银近月）
+    type: "pairwise_arb"                # 策略类型: pairwise_arb
+    enabled: true                       # 是否启用此策略
+    allocation: 0.3                     # 资金分配比例 (30%)
+    symbols:                            # 交易品种（配对交易需要两个）
+      - "ag2603"                        # 白银 2026年3月
+      - "ag2605"                        # 白银 2026年5月
+    exchanges:                          # 交易所
+      - "SHFE"                          # 上期所
+    max_position_size: 80               # 最大持仓数量
+    max_exposure: 300000.0              # 最大风险敞口
+
+    # Strategy-specific parameters (策略特定参数)
+    parameters:
+      spread_type: "difference"         # 价差类型: difference, ratio, log
+      lookback_period: 80.0             # 回看周期（更短）
+      entry_zscore: 0.7                 # 入场Z-Score阈值（更保守）
+      exit_zscore: 0.3                  # 出场Z-Score阈值
+      order_size: 1.0                   # 每条腿的下单数量（测试用1手）
+      min_correlation: 0.0              # 最小相关系数（测试时设为0）
+      # 动态阈值参数
+      use_dynamic_threshold: true       # 启用动态阈值
+      begin_zscore: 0.7                 # 空仓入场阈值
+      long_zscore: 2.0                  # 满仓多头时做多阈值
+      short_zscore: 2.0                 # 满仓空头时做空阈值
+      # 主动追单参数
+      aggressive_enabled: true          # 启用追单
+      aggressive_interval_ms: 500.0     # 追单间隔（毫秒）
+      aggressive_max_retry: 4.0         # 最大追单次数
+      aggressive_slop_ticks: 20.0       # 跳跃tick数
+      aggressive_fail_threshold: 3.0    # 失败阈值
+      supporting_orders: 3              # 🔒 限制追单数量（C++: SUPPORTING_ORDERS）
 
 # ═══════════════════════════════════════════════════════════
-# Trading Session Configuration
+# Trading Session Configuration (交易时段配置)
 # ═══════════════════════════════════════════════════════════
 session:
-  start_time: "00:00:00"
-  end_time: "23:59:59"
-  timezone: "Asia/Shanghai"
-  auto_start: true
-  auto_stop: false
-  auto_activate: false
+  start_time: "00:00:00"                # 开始时间（本地时间）- 测试模式：全天
+  end_time: "23:59:59"                  # 结束时间（本地时间）- 测试模式：全天
+  timezone: "Asia/Shanghai"             # 时区
+  auto_start: true                      # 自动启动Session Manager
+  auto_stop: false                      # 自动停止策略 - 测试模式：禁用自动停止
+  auto_activate: false                  # 自动激活策略 - false时需要手动激活（推荐）
 
 # ═══════════════════════════════════════════════════════════
-# Risk Management Configuration
+# Risk Management Configuration (风险管理配置)
 # ═══════════════════════════════════════════════════════════
 risk:
-  max_drawdown: 10000.0
-  stop_loss: 50000.0
-  max_loss: 100000.0
-  daily_loss_limit: 200000.0
-  max_reject_count: 10
-  check_interval_ms: 100
+  max_drawdown: 10000.0                 # 最大回撤限制
+  stop_loss: 50000.0                    # 止损金额（对应 tbsrc STOP_LOSS）
+  max_loss: 100000.0                    # 最大亏损限制（对应 tbsrc MAX_LOSS）
+  daily_loss_limit: 200000.0            # 每日亏损限制
+  max_reject_count: 10                  # 最大拒单次数
+  check_interval_ms: 100                # 风险检查间隔（毫秒）
 
 # ═══════════════════════════════════════════════════════════
-# Strategy Engine Configuration
+# Strategy Engine Configuration (策略引擎配置)
 # ═══════════════════════════════════════════════════════════
 engine:
-  ors_gateway_addr: "localhost:50052"
-  nats_addr: "nats://localhost:4222"
-  gateway_addr: "localhost:8080"
-  md_channel_size: 10000
-  order_channel_size: 1000
-  enable_async_order: true
+  ors_gateway_addr: "localhost:50052"   # 订单路由服务地址
+  nats_addr: "nats://localhost:4222"    # NATS 消息队列地址
+  counter_bridge_addr: "localhost:8080"  # Counter Bridge HTTP地址（持仓查询）
+  order_queue_size: 100                 # 订单队列大小
+  timer_interval: 5s                    # 定时器间隔
+  max_concurrent_orders: 10             # 最大并发订单数
 
 # ═══════════════════════════════════════════════════════════
-# Portfolio Configuration
+# Portfolio Management Configuration (组合管理配置)
 # ═══════════════════════════════════════════════════════════
 portfolio:
-  initial_capital: 1000000.0
-  cash_reserve_ratio: 0.1
-  max_positions: 10
-  rebalance_threshold: 0.05
+  total_capital: 1000000.0              # 总资金
+  strategy_allocation:                  # 策略资金分配
+    "test_92201": 0.3                   # 30% 分配给白银策略
+    "test_92202": 0.4                   # 40% 分配给黄金策略
+    "test_92203": 0.3                   # 30% 分配给白银近月策略
+  rebalance_interval_sec: 3600          # 再平衡间隔（秒）
+  min_allocation: 0.05                  # 最小分配比例
+  max_allocation: 0.50                  # 最大分配比例
+  enable_auto_rebalance: false          # 启用自动再平衡
+  enable_correlation_calc: false        # 启用相关性计算
 
 # ═══════════════════════════════════════════════════════════
-# Logging Configuration
-# ═══════════════════════════════════════════════════════════
-logging:
-  level: "info"
-  file: "./log/trader.test.log"
-  max_size_mb: 100
-  max_backups: 10
-  max_age_days: 30
-
-# ═══════════════════════════════════════════════════════════
-# API Server Configuration
+# API Configuration (API配置)
 # ═══════════════════════════════════════════════════════════
 api:
-  enabled: true
-  host: "0.0.0.0"
-  port: 9201
-  enable_swagger: true
-  enable_pprof: false
+  enabled: true                         # 启用 HTTP REST API
+  port: 9201                            # API 端口
+  host: "localhost"                     # API 绑定地址
+
+# ═══════════════════════════════════════════════════════════
+# Logging Configuration (日志配置)
+# ═══════════════════════════════════════════════════════════
+logging:
+  level: "info"                         # 日志级别: debug, info, warn, error
+  file: "./log/trader.test.log"         # 日志文件路径（测试专用）
+  max_size_mb: 100                      # 日志文件最大大小（MB）
+  max_backups: 10                       # 保留的旧日志文件数量
+  max_age_days: 30                      # 日志文件保留天数
+  compress: true                        # 压缩旧日志文件
+  console: true                         # 同时输出到控制台
+  json_format: false                    # 使用 JSON 格式

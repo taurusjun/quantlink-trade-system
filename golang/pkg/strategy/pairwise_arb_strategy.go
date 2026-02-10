@@ -447,6 +447,38 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 			pas.ID, pas.priceOptimizeGap, pas.tickSize1, pas.tickSize2)
 	}
 
+	// === 加载新增参数（对齐 C++ TradeBot_China） ===
+	// ALPHA - 均值回归学习率
+	if val, ok := config.Parameters["alpha"].(float64); ok {
+		pas.tholdFirst.Alpha = val
+		log.Printf("[PairwiseArbStrategy:%s] Loaded alpha: %v", pas.ID, val)
+	}
+	// AVG_SPREAD_AWAY - 价差偏离阈值
+	if val, ok := config.Parameters["avg_spread_away"].(float64); ok {
+		pas.tholdFirst.AvgSpreadAway = val
+		log.Printf("[PairwiseArbStrategy:%s] Loaded avg_spread_away: %v", pas.ID, val)
+	}
+	// HEDGE_THRES - 对冲触发阈值
+	if val, ok := config.Parameters["hedge_thres"].(float64); ok {
+		pas.tholdFirst.HedgeThres = val
+	}
+	// HEDGE_SIZE_RATIO - 对冲比例
+	if val, ok := config.Parameters["hedge_size_ratio"].(float64); ok {
+		pas.tholdFirst.HedgeSizeRatio = val
+	}
+	// PIL_FACTOR - 盈亏因子
+	if val, ok := config.Parameters["pil_factor"].(float64); ok {
+		pas.tholdFirst.PilFactor = val
+	}
+	// OPP_QTY - 对手方数量阈值
+	if val, ok := config.Parameters["opp_qty"].(float64); ok {
+		pas.tholdFirst.OppQty = int32(val)
+	}
+	// PRICE_RATIO - 价格比例
+	if val, ok := config.Parameters["price_ratio"].(float64); ok {
+		pas.tholdFirst.PriceRatio = val
+	}
+
 	// === 配置 ThresholdSet（C++: m_thold_first） ===
 	// 将 Z-Score 阈值映射到 ThresholdSet 的 PLACE/REMOVE 字段
 	pas.tholdFirst.BeginPlace = pas.beginZScore

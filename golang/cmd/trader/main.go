@@ -33,10 +33,14 @@ var (
 	help         = flag.Bool("help", false, "Print help and exit")
 
 	// Legacy system compatibility flags (旧系统兼容参数)
+	// 对齐 C++ TradeBot_China 启动命令：
+	// ./TradeBot --Live --controlFile ./controls/day/control.ag2502.ag2504.par.txt.92201 \
+	//            --strategyID 92201 --configFile ./config/config_CHINA.92201.cfg
 	legacyLive       = flag.Bool("Live", false, "Legacy: Live trading mode")
 	legacyBacktest   = flag.Bool("Backtest", false, "Legacy: Backtest mode")
 	legacySimulation = flag.Bool("Simulation", false, "Legacy: Simulation mode")
 	controlFile      = flag.String("controlFile", "", "Legacy: Control file path (symbol + model)")
+	modelFile        = flag.String("model-file", "", "C++ model file path (optional, overrides control file)")
 	legacyConfigFile = flag.String("configFile", "", "Legacy: Legacy config file path (deprecated)")
 	strategyIDLegacy = flag.String("strategyID", "", "Legacy: Strategy ID (same as --strategy-id)")
 	adjustLTP        = flag.Int("adjustLTP", 0, "Legacy: Adjust last trade price (deprecated)")
@@ -322,6 +326,9 @@ func watchConfigFile(configPath string, t *trader.Trader) {
 }
 
 // loadLegacyConfig 加载旧系统配置（control + model 文件）
+// 支持两种方式：
+// 1. --controlFile: 从 control 文件读取 model 路径
+// 2. --model-file: 直接指定 model 文件路径（覆盖 control 中的路径）
 func loadLegacyConfig() (*config.TraderConfig, error) {
 	// 解析 control 文件
 	log.Printf("[Main] Parsing control file: %s", *controlFile)
@@ -329,6 +336,13 @@ func loadLegacyConfig() (*config.TraderConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse control file: %w", err)
 	}
+
+	// 如果指定了 --model-file，覆盖 control 中的 model 路径
+	if *modelFile != "" {
+		log.Printf("[Main] Using model file from --model-file: %s", *modelFile)
+		control.ModelFilePath = *modelFile
+	}
+
 	log.Printf("[Main] ✓ Control file parsed: %s/%s, model=%s",
 		control.Symbol1, control.Symbol2, control.ModelFilePath)
 
