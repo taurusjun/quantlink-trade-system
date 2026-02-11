@@ -439,7 +439,6 @@ func (as *AggressiveStrategy) Stop() error {
 	return nil
 }
 
-// GetBaseStrategy returns the underlying BaseStrategy (for engine integration)
 // OnAuctionData handles auction period market data
 // AggressiveStrategy ignores auction data by default
 func (as *AggressiveStrategy) OnAuctionData(md *mdpb.MarketDataUpdate) {

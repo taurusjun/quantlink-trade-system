@@ -137,3 +137,19 @@ func ValidatePrice(price float64, symbol string) bool {
 
 	return remainder < tolerance || (tickSize-remainder) < tolerance
 }
+
+// GetContractMultiplier 获取品种的合约乘数
+// C++: m_instru->m_priceMultiplier
+func GetContractMultiplier(symbol string) float64 {
+	if spec, ok := DefaultInstrumentSpecs[symbol]; ok {
+		return float64(spec.ContractMultiplier)
+	}
+	// 默认返回1（不乘）
+	return 1.0
+}
+
+// GetInstrumentSpec 获取品种规格
+func GetInstrumentSpec(symbol string) (InstrumentSpec, bool) {
+	spec, ok := DefaultInstrumentSpecs[symbol]
+	return spec, ok
+}

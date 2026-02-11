@@ -306,9 +306,8 @@ func (ps *PassiveStrategy) TriggerFlatten(reason FlattenReason, aggressive bool)
 
 // GetPendingCancels returns orders pending cancellation
 func (ps *PassiveStrategy) GetPendingCancels() []*orspb.OrderUpdate {
-	// BaseStrategy.GetPendingCancelOrders returns []*CancelRequest
-	// Convert to []*orspb.OrderUpdate
-	return nil // PassiveStrategy doesn't track pending cancels this way
+	// PassiveStrategy doesn't track pending cancels
+	return nil
 }
 
 // UpdateParameters updates strategy parameters

@@ -56,9 +56,6 @@ func setupTestTraderWithMultiStrategy(t *testing.T) *Trader {
 		t.Fatalf("Failed to load strategies: %v", err)
 	}
 
-	// Set first strategy for backward compatibility
-	trader.Strategy = trader.StrategyMgr.GetFirstStrategy()
-
 	return trader
 }
 
@@ -283,17 +280,21 @@ func TestAPIRealtimeIndicators(t *testing.T) {
 	}
 }
 
-func TestAPIDashboardOverviewSingleStrategy(t *testing.T) {
-	// Test single-strategy mode
+func TestAPIDashboardOverviewWithSingleStrategyConfig(t *testing.T) {
+	// Test with a single strategy loaded via StrategyManager
 	cfg := &config.TraderConfig{
 		System: config.SystemConfig{
 			StrategyID:    "single_test",
 			Mode:          "simulation",
-			MultiStrategy: false,
+			MultiStrategy: true,
 		},
-		Strategy: config.StrategyConfig{
-			Type:    "passive",
-			Symbols: []string{"ag2502"},
+		Strategies: []config.StrategyItemConfig{
+			{
+				ID:       "single_test",
+				Type:     "passive",
+				Symbols:  []string{"ag2502"},
+				Enabled:  true,
+			},
 		},
 		Session: config.SessionConfig{
 			AutoActivate: false,
@@ -312,13 +313,11 @@ func TestAPIDashboardOverviewSingleStrategy(t *testing.T) {
 		t.Fatalf("Failed to create trader: %v", err)
 	}
 
-	// Create single strategy
-	trader.Strategy = strategy.NewPassiveStrategy("single_test")
-	trader.Strategy.Initialize(&strategy.StrategyConfig{
-		StrategyID:   "single_test",
-		StrategyType: "passive",
-		Symbols:      []string{"ag2502"},
-	})
+	// Create strategy manager with single strategy
+	trader.StrategyMgr = strategy.NewStrategyManager(nil)
+	if err := trader.StrategyMgr.LoadStrategies(cfg.Strategies); err != nil {
+		t.Fatalf("Failed to load strategies: %v", err)
+	}
 
 	api := NewAPIServer(trader, 9998)
 
@@ -341,8 +340,8 @@ func TestAPIDashboardOverviewSingleStrategy(t *testing.T) {
 		t.Fatalf("Unexpected response data type")
 	}
 
-	if dataMap["multi_strategy"] != false {
-		t.Error("Expected multi_strategy false for single strategy mode")
+	if dataMap["multi_strategy"] != true {
+		t.Error("Expected multi_strategy true")
 	}
 
 	if dataMap["total_strategies"].(float64) != 1 {

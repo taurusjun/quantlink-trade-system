@@ -16,7 +16,7 @@ type MockStrategy struct {
 	pnl          strategy.PNL
 	position     strategy.EstimatedPosition
 	riskMetrics  strategy.RiskMetrics
-	baseStrategy *strategy.BaseStrategy
+	controlState *strategy.StrategyControlState
 }
 
 func NewMockStrategy(id string) *MockStrategy {
@@ -26,7 +26,7 @@ func NewMockStrategy(id string) *MockStrategy {
 		pnl:          strategy.PNL{},
 		position:     strategy.EstimatedPosition{},
 		riskMetrics:  strategy.RiskMetrics{},
-		baseStrategy: strategy.NewBaseStrategy(id, "mock"),
+		controlState: strategy.NewStrategyControlState(true),
 	}
 }
 
@@ -49,7 +49,19 @@ func (m *MockStrategy) GetRiskMetrics() *strategy.RiskMetrics            { retur
 func (m *MockStrategy) GetStatus() *strategy.StrategyStatus              { return &strategy.StrategyStatus{} }
 func (m *MockStrategy) UpdateParameters(params map[string]interface{}) error { return nil }
 func (m *MockStrategy) GetCurrentParameters() map[string]interface{}     { return nil }
-func (m *MockStrategy) GetBaseStrategy() *strategy.BaseStrategy          { return m.baseStrategy }
+func (m *MockStrategy) GetControlState() *strategy.StrategyControlState  { return m.controlState }
+func (m *MockStrategy) GetConfig() *strategy.StrategyConfig              { return nil }
+func (m *MockStrategy) CanSendOrder() bool                               { return m.controlState.CanSendNewOrders() }
+func (m *MockStrategy) SetLastMarketData(symbol string, md *mdpb.MarketDataUpdate) {}
+func (m *MockStrategy) GetLastMarketData(symbol string) *mdpb.MarketDataUpdate { return nil }
+func (m *MockStrategy) TriggerFlatten(reason strategy.FlattenReason, aggressive bool) {}
+func (m *MockStrategy) GetPendingCancels() []*orspb.OrderUpdate          { return nil }
+func (m *MockStrategy) SendOrder()                                       {}
+func (m *MockStrategy) OnTradeUpdate()                                   {}
+func (m *MockStrategy) CheckSquareoff()                                  {}
+func (m *MockStrategy) HandleSquareON()                                  {}
+func (m *MockStrategy) HandleSquareoff()                                 {}
+func (m *MockStrategy) SetThresholds()                                   {}
 
 func TestRiskManager_Creation(t *testing.T) {
 	rm := NewRiskManager(nil)

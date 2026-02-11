@@ -41,7 +41,7 @@ const (
 // C++: ExecutionStrategy.h (tbsrc/Strategies/include/ExecutionStrategy.h)
 // 所有执行类策略的基类，包含持仓、订单、PNL、阈值等核心字段
 //
-// Go 设计：替代 BaseStrategy，包含所有必要字段
+// Go 设计：与 C++ ExecutionStrategy 完全对应，包含所有必要字段
 type ExecutionStrategy struct {
 	mu sync.RWMutex
 
