@@ -1933,7 +1933,7 @@ func (pas *PairwiseArbStrategy) Start() error {
 		log.Printf("[PairwiseArbStrategy:%s] Restored ytd positions: leg1=[ytd=%d, 2day=%d], leg2=[ytd=%d, 2day=%d]",
 			pas.ID, pas.leg1YtdPosition, leg1TodayNet, pas.leg2YtdPosition, leg2TodayNet)
 
-		// 恢复BaseStrategy持仓（符合新的持仓模型）
+		// 恢复 estimatedPosition 持仓（符合新的持仓模型）
 		pas.estimatedPosition.NetQty = snapshot.TotalNetQty
 		if snapshot.TotalNetQty > 0 {
 			pas.estimatedPosition.BuyQty = snapshot.TotalLongQty
@@ -2339,7 +2339,7 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 			pas.ID, pas.symbol2, qty)
 	}
 
-	// 更新BaseStrategy的Position（简化处理）
+	// 更新 estimatedPosition（简化处理）
 	totalQty := pas.leg1Position + pas.leg2Position
 	if totalQty > 0 {
 		pas.estimatedPosition.LongQty = totalQty
@@ -2350,6 +2350,81 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 	}
 
 	log.Printf("[PairwiseArbStrategy:%s] Positions initialized: leg1=%d, leg2=%d, net=%d",
+		pas.ID, pas.leg1Position, pas.leg2Position, pas.estimatedPosition.NetQty)
+
+	return nil
+}
+
+// InitializePositionsWithCost 使用成本价初始化持仓
+// 注意：此方法是 Go 代码新增的，C++ 原代码中没有对应实现
+// C++ 原代码的 m_buyPrice/m_sellPrice 是当天成交均价，开盘时为 0
+// C++ 的 P&L 只计算当天交易产生的盈亏，昨仓成本为 0
+// Go 代码使用 CTP 返回的成本价来计算完整的浮动盈亏，便于风控和监控
+func (pas *PairwiseArbStrategy) InitializePositionsWithCost(positions map[string]PositionWithCost) error {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	log.Printf("[PairwiseArbStrategy:%s] Initializing positions with cost from CTP", pas.ID)
+
+	// 初始化 leg1 持仓和成本 (firstStrat)
+	if pos, exists := positions[pas.symbol1]; exists && pos.Quantity != 0 {
+		pas.leg1Position = pos.Quantity
+		// 同步到 ExtraStrategy
+		if pas.firstStrat != nil {
+			pas.firstStrat.NetPosPass = int32(pos.Quantity)
+			pas.firstStrat.NetPos = int32(pos.Quantity)
+			// 设置成本价（与 C++ 不同：C++ 开盘时成本为 0）
+			if pos.Quantity > 0 {
+				pas.firstStrat.BuyQty = float64(pos.Quantity)
+				pas.firstStrat.BuyTotalQty = float64(pos.Quantity)
+				pas.firstStrat.BuyAvgPrice = pos.AvgCost
+				pas.firstStrat.BuyTotalValue = pos.AvgCost * float64(pos.Quantity)
+			} else {
+				pas.firstStrat.SellQty = float64(-pos.Quantity)
+				pas.firstStrat.SellTotalQty = float64(-pos.Quantity)
+				pas.firstStrat.SellAvgPrice = pos.AvgCost
+				pas.firstStrat.SellTotalValue = pos.AvgCost * float64(-pos.Quantity)
+			}
+		}
+		log.Printf("[PairwiseArbStrategy:%s] Initialized leg1: %s Qty=%d, AvgCost=%.2f",
+			pas.ID, pas.symbol1, pos.Quantity, pos.AvgCost)
+	}
+
+	// 初始化 leg2 持仓和成本 (secondStrat)
+	if pos, exists := positions[pas.symbol2]; exists && pos.Quantity != 0 {
+		pas.leg2Position = pos.Quantity
+		// 同步到 ExtraStrategy
+		if pas.secondStrat != nil {
+			pas.secondStrat.NetPosPass = int32(pos.Quantity)
+			pas.secondStrat.NetPos = int32(pos.Quantity)
+			// 设置成本价（与 C++ 不同：C++ 开盘时成本为 0）
+			if pos.Quantity > 0 {
+				pas.secondStrat.BuyQty = float64(pos.Quantity)
+				pas.secondStrat.BuyTotalQty = float64(pos.Quantity)
+				pas.secondStrat.BuyAvgPrice = pos.AvgCost
+				pas.secondStrat.BuyTotalValue = pos.AvgCost * float64(pos.Quantity)
+			} else {
+				pas.secondStrat.SellQty = float64(-pos.Quantity)
+				pas.secondStrat.SellTotalQty = float64(-pos.Quantity)
+				pas.secondStrat.SellAvgPrice = pos.AvgCost
+				pas.secondStrat.SellTotalValue = pos.AvgCost * float64(-pos.Quantity)
+			}
+		}
+		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2: %s Qty=%d, AvgCost=%.2f",
+			pas.ID, pas.symbol2, pos.Quantity, pos.AvgCost)
+	}
+
+	// 更新 estimatedPosition
+	totalQty := pas.leg1Position + pas.leg2Position
+	if totalQty > 0 {
+		pas.estimatedPosition.LongQty = totalQty
+		pas.estimatedPosition.NetQty = totalQty
+	} else if totalQty < 0 {
+		pas.estimatedPosition.ShortQty = -totalQty
+		pas.estimatedPosition.NetQty = totalQty
+	}
+
+	log.Printf("[PairwiseArbStrategy:%s] Positions with cost initialized: leg1=%d, leg2=%d, net=%d",
 		pas.ID, pas.leg1Position, pas.leg2Position, pas.estimatedPosition.NetQty)
 
 	return nil
@@ -2444,55 +2519,61 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 
 	// Leg1 浮动盈亏（使用对手价和 firstStrat 的平均价格）
 	// 参考 tbsrc ExtraStrategy::CalculatePNL
+	// C++: m_unrealisedPNL = m_netpos * (counterPrice - costPrice) * m_instru->m_priceMultiplier
 	if pas.leg1Position != 0 {
 		var leg1PnL float64
 		var avgCost float64
 		var counterPrice float64
+		multiplier1 := GetContractMultiplier(pas.symbol1) // C++: m_instru->m_priceMultiplier
 
 		if pas.leg1Position > 0 {
 			// Leg1 多头: 使用卖一价（bid），因为平仓时要卖出
-			// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice)
+			// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice) * m_priceMultiplier
 			avgCost = pas.firstStrat.BuyAvgPrice  // 使用 firstStrat 的买入均价
 			counterPrice = pas.bid1
-			leg1PnL = (counterPrice - avgCost) * float64(pas.leg1Position)
+			leg1PnL = (counterPrice - avgCost) * float64(pas.leg1Position) * multiplier1
 		} else {
 			// Leg1 空头: 使用买一价（ask），因为平仓时要买入
-			// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0])
+			// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0]) * m_priceMultiplier
 			avgCost = pas.firstStrat.SellAvgPrice  // 使用 firstStrat 的卖出均价
 			counterPrice = pas.ask1
-			leg1PnL = (avgCost - counterPrice) * float64(-pas.leg1Position)
+			leg1PnL = (avgCost - counterPrice) * float64(-pas.leg1Position) * multiplier1
 		}
 		unrealizedPnL += leg1PnL
 
-		log.Printf("[PairwiseArb:%s] 📊 Leg1(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
-			pas.ID, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice)
+		log.Printf("[PairwiseArb:%s] 📊 Leg1(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f, Mult=%.0f)",
+			pas.ID, pas.symbol1, leg1PnL, pas.leg1Position, avgCost, counterPrice, multiplier1)
 	}
 
 	// Leg2 浮动盈亏（使用对手价和 secondStrat 的平均价格）
 	// 参考 tbsrc ExtraStrategy::CalculatePNL
+	// C++: m_unrealisedPNL = m_netpos * (counterPrice - costPrice) * m_instru->m_priceMultiplier
 	if pas.leg2Position != 0 {
 		var leg2PnL float64
 		var avgCost float64
 		var counterPrice float64
+		multiplier2 := GetContractMultiplier(pas.symbol2) // C++: m_instru->m_priceMultiplier
 
 		if pas.leg2Position > 0 {
 			// Leg2 多头: 使用卖一价（bid）
+			// tbsrc: m_unrealisedPNL = m_netpos * (m_instru->bidPx[0] - m_buyPrice) * m_priceMultiplier
 			avgCost = pas.secondStrat.BuyAvgPrice  // 使用 secondStrat 的买入均价
 			counterPrice = pas.bid2
-			leg2PnL = (counterPrice - avgCost) * float64(pas.leg2Position)
+			leg2PnL = (counterPrice - avgCost) * float64(pas.leg2Position) * multiplier2
 		} else {
 			// Leg2 空头: 使用买一价（ask）
+			// tbsrc: m_unrealisedPNL = -1 * m_netpos * (m_sellPrice - m_instru->askPx[0]) * m_priceMultiplier
 			avgCost = pas.secondStrat.SellAvgPrice  // 使用 secondStrat 的卖出均价
 			counterPrice = pas.ask2
-			leg2PnL = (avgCost - counterPrice) * float64(-pas.leg2Position)
+			leg2PnL = (avgCost - counterPrice) * float64(-pas.leg2Position) * multiplier2
 		}
 		unrealizedPnL += leg2PnL
 
-		log.Printf("[PairwiseArb:%s] 📊 Leg2(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f)",
-			pas.ID, pas.symbol2, leg2PnL, pas.leg2Position, avgCost, counterPrice)
+		log.Printf("[PairwiseArb:%s] 📊 Leg2(%s) P&L: %.2f (Pos=%d, AvgCost=%.2f, Counter=%.2f, Mult=%.0f)",
+			pas.ID, pas.symbol2, leg2PnL, pas.leg2Position, avgCost, counterPrice, multiplier2)
 	}
 
-	// 更新 BaseStrategy 的 PNL
+	// 更新 PNL
 	// tbsrc: 配对策略的总 P&L = 两条腿的 P&L 相加
 	pas.pnl.UnrealizedPnL = unrealizedPnL
 	pas.pnl.TotalPnL = pas.pnl.RealizedPnL + pas.pnl.UnrealizedPnL
@@ -2530,12 +2611,6 @@ func (pas *PairwiseArbStrategy) GetID() string {
 // GetType returns the strategy type
 func (pas *PairwiseArbStrategy) GetType() string {
 	return pas.Type
-}
-
-// GetBaseStrategy returns nil (PairwiseArbStrategy 不再使用 BaseStrategy)
-// 保留此方法以满足接口，但返回 nil
-func (pas *PairwiseArbStrategy) GetBaseStrategy() *BaseStrategy {
-	return nil
 }
 
 // IsRunning returns true if strategy is running

@@ -26,8 +26,7 @@ type Trader struct {
 
 	// Core components
 	Engine      *strategy.StrategyEngine
-	Strategy    strategy.Strategy              // 单策略模式（向后兼容）或第一个策略
-	StrategyMgr *strategy.StrategyManager      // 多策略管理器（新增）
+	StrategyMgr *strategy.StrategyManager      // 多策略管理器
 	Portfolio   *portfolio.PortfolioManager
 	RiskManager *risk.RiskManager
 	SessionMgr  *SessionManager
@@ -62,13 +61,8 @@ func NewTrader(cfg *config.TraderConfig) (*Trader, error) {
 
 // Initialize initializes all components
 func (t *Trader) Initialize() error {
-	if t.Config.System.MultiStrategy {
-		log.Printf("[Trader] Initializing trader (Multi-Strategy Mode, Mode: %s)...",
-			t.Config.System.Mode)
-	} else {
-		log.Printf("[Trader] Initializing trader (Strategy ID: %s, Mode: %s)...",
-			t.Config.System.StrategyID, t.Config.System.Mode)
-	}
+	log.Printf("[Trader] Initializing trader (Multi-Strategy Mode, Mode: %s)...",
+		t.Config.System.Mode)
 
 	log.Println("[Trader] DEBUG: Starting Initialize()")
 
@@ -189,17 +183,9 @@ func (t *Trader) Initialize() error {
 		log.Println("[Trader] ✓ Strategy Engine initialized")
 	}
 
-	// 4. Create strategy instance(s)
-	if t.Config.System.MultiStrategy {
-		// 多策略模式：使用 StrategyManager
-		if err := t.initializeMultiStrategy(); err != nil {
-			return fmt.Errorf("failed to initialize multi-strategy: %w", err)
-		}
-	} else {
-		// 单策略模式（向后兼容）
-		if err := t.initializeSingleStrategy(); err != nil {
-			return fmt.Errorf("failed to initialize single strategy: %w", err)
-		}
+	// 4. Create strategy instance(s) - 使用 StrategyManager
+	if err := t.initializeMultiStrategy(); err != nil {
+		return fmt.Errorf("failed to initialize strategies: %w", err)
 	}
 
 	// 5. Create Session Manager
@@ -327,32 +313,66 @@ func (t *Trader) queryInitialPositions() error {
 }
 
 // initializeStrategyPositions 初始化策略持仓（从CTP查询结果）
+// 注意：此函数使用 CTP 返回的成本价初始化昨仓
+// 与 C++ 原代码不同：C++ 的昨仓成本为 0，只计算当天交易产生的盈亏
+// Go 代码使用 CTP 返回的成本价来计算完整的浮动盈亏，便于风控和监控
 func (t *Trader) initializeStrategyPositions() {
 	t.positionsMu.RLock()
 	positionsByExchange := t.positionsByExchange
 	t.positionsMu.RUnlock()
 
-	// 按品种聚合持仓（净持仓）
-	posMap := make(map[string]int64)
+	// 按品种聚合持仓（净持仓 + 成本价）
+	// 注意：CTP 返回的 avg_price 是持仓成本价
+	// C++ 原代码不使用此成本价，而是使用当天成交均价（开盘时为 0）
+	posMapWithCost := make(map[string]strategy.PositionWithCost)
 	for _, posList := range positionsByExchange {
 		for _, pos := range posList {
 			qty := int64(pos.Volume)
 			if pos.Direction == "SHORT" || pos.Direction == "short" {
 				qty = -qty
 			}
-			posMap[pos.Symbol] += qty
+
+			existing := posMapWithCost[pos.Symbol]
+			newQty := existing.Quantity + qty
+
+			// 计算加权平均成本
+			// CTP 返回的 avg_price = PositionCost / Position
+			// PositionCost = 开仓价格 * 合约乘数 * 持仓数量
+			// 所以 avg_price = 开仓价格 * 合约乘数
+			// 需要除以合约乘数才能得到实际的开仓价格
+			avgCost := pos.AvgPrice
+			multiplier := strategy.GetContractMultiplier(pos.Symbol)
+			if multiplier > 1 && avgCost > 0 {
+				avgCost = avgCost / multiplier
+				log.Printf("[Trader] Converted avg_price for %s: raw=%.2f / multiplier=%.0f = %.2f",
+					pos.Symbol, pos.AvgPrice, multiplier, avgCost)
+			}
+
+			if newQty != 0 && existing.Quantity != 0 && avgCost > 0 {
+				// 加权平均成本
+				totalValue := existing.AvgCost*float64(abs64(existing.Quantity)) + avgCost*float64(pos.Volume)
+				totalQty := float64(abs64(existing.Quantity) + int64(pos.Volume))
+				existing.AvgCost = totalValue / totalQty
+			} else if avgCost > 0 {
+				existing.AvgCost = avgCost
+			}
+			existing.Quantity = newQty
+			posMapWithCost[pos.Symbol] = existing
 		}
 	}
 
-	if len(posMap) == 0 {
+	if len(posMapWithCost) == 0 {
 		log.Println("[Trader] No positions to initialize in strategies")
 		return
 	}
 
-	log.Printf("[Trader] Initializing strategy positions from CTP query (%d symbols)", len(posMap))
+	log.Printf("[Trader] Initializing strategy positions from CTP query (%d symbols)", len(posMapWithCost))
+	for symbol, pos := range posMapWithCost {
+		log.Printf("[Trader]   %s: Qty=%d, AvgCost=%.2f", symbol, pos.Quantity, pos.AvgCost)
+	}
 
-	// 传递给每个策略
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+	// 传递给每个策略（使用新的带成本价的接口）
+	if t.StrategyMgr != nil {
 		for _, strategyID := range t.StrategyMgr.GetStrategyIDs() {
 			strat, exists := t.StrategyMgr.GetStrategy(strategyID)
 			if !exists || strat == nil {
@@ -360,18 +380,29 @@ func (t *Trader) initializeStrategyPositions() {
 			}
 
 			if initializer, ok := strat.(strategy.PositionInitializer); ok {
-				if err := initializer.InitializePositions(posMap); err != nil {
-					log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", strategyID, err)
+				// 优先使用带成本价的初始化方法
+				if err := initializer.InitializePositionsWithCost(posMapWithCost); err != nil {
+					log.Printf("[Trader] Warning: Failed to initialize positions with cost for %s: %v", strategyID, err)
+					// 回退到不带成本价的方法
+					posMap := make(map[string]int64)
+					for symbol, pos := range posMapWithCost {
+						posMap[symbol] = pos.Quantity
+					}
+					if err := initializer.InitializePositions(posMap); err != nil {
+						log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", strategyID, err)
+					}
 				}
 			}
 		}
-	} else if t.Strategy != nil {
-		if initializer, ok := t.Strategy.(strategy.PositionInitializer); ok {
-			if err := initializer.InitializePositions(posMap); err != nil {
-				log.Printf("[Trader] Warning: Failed to initialize strategy positions: %v", err)
-			}
-		}
 	}
+}
+
+// abs64 返回 int64 的绝对值
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // startPositionVerification 启动定期持仓校验
@@ -470,7 +501,7 @@ func (t *Trader) verifyPositions() error {
 func (t *Trader) aggregateStrategyPositions() map[string]int64 {
 	posMap := make(map[string]int64)
 
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+	if t.StrategyMgr != nil {
 		for _, strategyID := range t.StrategyMgr.GetStrategyIDs() {
 			strat, exists := t.StrategyMgr.GetStrategy(strategyID)
 			if !exists || strat == nil {
@@ -482,12 +513,6 @@ func (t *Trader) aggregateStrategyPositions() map[string]int64 {
 				for symbol, qty := range provider.GetPositionsBySymbol() {
 					posMap[symbol] += qty
 				}
-			}
-		}
-	} else if t.Strategy != nil {
-		if provider, ok := t.Strategy.(strategy.PositionProvider); ok {
-			for symbol, qty := range provider.GetPositionsBySymbol() {
-				posMap[symbol] += qty
 			}
 		}
 	}
@@ -526,7 +551,7 @@ func (t *Trader) printPositionSummary() {
 func (t *Trader) saveAllPositions() {
 	log.Println("[Trader] Saving all strategy positions...")
 
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+	if t.StrategyMgr != nil {
 		for _, strategyID := range t.StrategyMgr.GetStrategyIDs() {
 			strat, exists := t.StrategyMgr.GetStrategy(strategyID)
 			if !exists || strat == nil {
@@ -538,12 +563,6 @@ func (t *Trader) saveAllPositions() {
 			} else {
 				log.Printf("[Trader] ✓ Saved positions for %s", strategyID)
 			}
-		}
-	} else if t.Strategy != nil {
-		if err := strategy.SaveStrategyPosition(t.Strategy); err != nil {
-			log.Printf("[Trader] Warning: Failed to save strategy positions: %v", err)
-		} else {
-			log.Printf("[Trader] ✓ Saved strategy positions for %s", t.Strategy.GetID())
 		}
 	}
 }
@@ -573,10 +592,9 @@ func (t *Trader) verifyPositionsOnStartup() error {
 	// 加载保存的持仓快照
 	var savedPosMap map[string]int64
 	var savedTimestamp time.Time
-	var strategyID string
 
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-		// 多策略模式：聚合所有策略保存的持仓
+	if t.StrategyMgr != nil {
+		// 聚合所有策略保存的持仓
 		savedPosMap = make(map[string]int64)
 		for _, sid := range t.StrategyMgr.GetStrategyIDs() {
 			snapshot, err := strategy.LoadPositionSnapshot(sid)
@@ -589,18 +607,7 @@ func (t *Trader) verifyPositionsOnStartup() error {
 					savedPosMap[symbol] += qty
 				}
 				savedTimestamp = snapshot.Timestamp
-				strategyID = sid
 			}
-		}
-	} else if t.Strategy != nil {
-		strategyID = t.Strategy.GetID()
-		snapshot, err := strategy.LoadPositionSnapshot(strategyID)
-		if err != nil {
-			log.Printf("[Trader] Warning: Failed to load saved positions: %v", err)
-		}
-		if snapshot != nil {
-			savedPosMap = snapshot.SymbolsPos
-			savedTimestamp = snapshot.Timestamp
 		}
 	}
 
@@ -750,25 +757,18 @@ func (t *Trader) Start() error {
 		log.Println("[Trader] Strategy initialized but NOT activated")
 		log.Println("[Trader] Waiting for manual activation...")
 		log.Println("[Trader] Activate via:")
-		log.Println("[Trader]   - Web UI: POST /api/v1/strategy/activate")
-		log.Println("[Trader]   - Web UI: POST /api/v1/strategies/{id}/activate (multi-strategy)")
+		log.Println("[Trader]   - Web UI: POST /api/v1/strategies/{id}/activate")
 		log.Printf("[Trader]   - Signal: kill -SIGUSR1 %d\n", os.Getpid())
 		log.Println("[Trader] ════════════════════════════════════════════════════════════")
 	}
 
 	if autoActivate {
-		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-			// Multi-strategy mode: start all strategies
+		if t.StrategyMgr != nil {
+			// Start all strategies
 			if err := t.StrategyMgr.Start(); err != nil {
 				return fmt.Errorf("failed to start strategies: %w", err)
 			}
 			log.Printf("[Trader] ✓ %d strategies activated and trading", t.StrategyMgr.GetStrategyCount())
-		} else {
-			// Single-strategy mode
-			if err := t.Strategy.Start(); err != nil {
-				return fmt.Errorf("failed to start strategy: %w", err)
-			}
-			log.Println("[Trader] ✓ Strategy activated and trading")
 		}
 	}
 
@@ -799,7 +799,7 @@ func (t *Trader) Start() error {
 
 	log.Println("[Trader] ✓ Trader started successfully")
 	log.Println("[Trader] ════════════════════════════════════════════════════════════")
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
+	if t.StrategyMgr != nil {
 		log.Printf("[Trader] Mode: %s (Multi-Strategy)", t.Config.System.Mode)
 		log.Printf("[Trader] Strategies: %d active", t.StrategyMgr.GetStrategyCount())
 		for _, id := range t.StrategyMgr.GetStrategyIDs() {
@@ -807,10 +807,6 @@ func (t *Trader) Start() error {
 				log.Printf("[Trader]   - %s (%s): %v", id, cfg.Type, cfg.Symbols)
 			}
 		}
-	} else {
-		log.Printf("[Trader] Strategy: %s (%s)", t.Config.System.StrategyID, t.Config.Strategy.Type)
-		log.Printf("[Trader] Mode: %s", t.Config.System.Mode)
-		log.Printf("[Trader] Symbols: %v", t.Config.Strategy.Symbols)
 	}
 	log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
@@ -851,19 +847,11 @@ func (t *Trader) Stop() error {
 	}
 
 	// Stop strategies
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-		// Multi-strategy mode
+	if t.StrategyMgr != nil {
 		if err := t.StrategyMgr.Stop(); err != nil {
 			log.Printf("[Trader] Error stopping strategies: %v", err)
 		} else {
 			log.Println("[Trader] ✓ All strategies stopped")
-		}
-	} else if t.Strategy != nil {
-		// Single-strategy mode
-		if err := t.Strategy.Stop(); err != nil {
-			log.Printf("[Trader] Error stopping strategy: %v", err)
-		} else {
-			log.Println("[Trader] ✓ Strategy stopped")
 		}
 	}
 
@@ -910,119 +898,19 @@ func (t *Trader) GetStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"running":        t.IsRunning(),
 		"mode":           t.Config.System.Mode,
-		"multi_strategy": t.Config.System.MultiStrategy,
+		"multi_strategy": true,
 	}
 
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-		// Multi-strategy mode
+	if t.StrategyMgr != nil {
 		status["strategy_count"] = t.StrategyMgr.GetStrategyCount()
 		status["manager_status"] = t.StrategyMgr.GetStatus()
 		status["aggregated_pnl"] = t.StrategyMgr.GetAggregatedPNL()
-
-		// For backward compatibility, also include first strategy info
-		if t.Strategy != nil {
-			status["strategy_id"] = t.Strategy.GetID()
-			status["strategy"] = t.Strategy.GetStatus()
-			status["position"] = t.Strategy.GetEstimatedPosition()
-			status["pnl"] = t.Strategy.GetPNL()
-			status["risk"] = t.Strategy.GetRiskMetrics()
-		}
-	} else {
-		// Single-strategy mode
-		status["strategy_id"] = t.Config.System.StrategyID
-		status["strategy"] = t.Strategy.GetStatus()
-		status["position"] = t.Strategy.GetEstimatedPosition()
-		status["pnl"] = t.Strategy.GetPNL()
-		status["risk"] = t.Strategy.GetRiskMetrics()
 	}
 
 	return status
 }
 
-// createStrategy creates a strategy instance based on type
-func (t *Trader) createStrategy() (strategy.Strategy, error) {
-	strategyID := t.Config.System.StrategyID
-	strategyType := t.Config.Strategy.Type
-
-	var s strategy.Strategy
-
-	switch strategyType {
-	case "passive":
-		s = strategy.NewPassiveStrategy(strategyID)
-	case "aggressive":
-		s = strategy.NewAggressiveStrategy(strategyID)
-	case "hedging":
-		s = strategy.NewHedgingStrategy(strategyID)
-	case "pairwise_arb":
-		s = strategy.NewPairwiseArbStrategy(strategyID)
-	default:
-		return nil, fmt.Errorf("unknown strategy type: %s", strategyType)
-	}
-
-	return s, nil
-}
-
-// toStrategyConfig converts trader config to strategy config
-func (t *Trader) toStrategyConfig() *strategy.StrategyConfig {
-	return &strategy.StrategyConfig{
-		StrategyID:      t.Config.System.StrategyID,
-		StrategyType:    t.Config.Strategy.Type,
-		Symbols:         t.Config.Strategy.Symbols,
-		Exchanges:       t.Config.Strategy.Exchanges,
-		MaxPositionSize: t.Config.Strategy.MaxPositionSize,
-		MaxExposure:     t.Config.Strategy.MaxExposure,
-		RiskLimits: map[string]float64{
-			"max_drawdown":    t.Config.Risk.MaxDrawdown,
-			"stop_loss":       t.Config.Risk.StopLoss,
-			"max_loss":        t.Config.Risk.MaxLoss,
-			"daily_loss":      t.Config.Risk.DailyLossLimit,
-			"max_reject":      float64(t.Config.Risk.MaxRejectCount),
-		},
-		Parameters: t.Config.Strategy.Parameters,
-		Enabled:    true,
-	}
-}
-
-// initializeSingleStrategy initializes in single-strategy mode (backward compatible)
-func (t *Trader) initializeSingleStrategy() error {
-	log.Printf("[Trader] Creating %s strategy...", t.Config.Strategy.Type)
-
-	var err error
-	t.Strategy, err = t.createStrategy()
-	if err != nil {
-		return fmt.Errorf("failed to create strategy: %w", err)
-	}
-
-	// Initialize strategy
-	if err := t.Strategy.Initialize(t.toStrategyConfig()); err != nil {
-		return fmt.Errorf("failed to initialize strategy: %w", err)
-	}
-	log.Println("[Trader] ✓ Strategy initialized")
-
-	// Set initial activation state based on config
-	t.setInitialActivationState(t.Strategy)
-
-	// Add strategy to engine
-	if err := t.Engine.AddStrategy(t.Strategy); err != nil {
-		return fmt.Errorf("failed to add strategy to engine: %w", err)
-	}
-
-	// Add strategy to portfolio (if portfolio manager exists)
-	if t.Portfolio != nil {
-		allocation := 1.0 // default 100% for single strategy
-		if alloc, ok := t.Config.Portfolio.StrategyAllocation[t.Config.System.StrategyID]; ok {
-			allocation = alloc
-		}
-		if err := t.Portfolio.AddStrategy(t.Strategy, allocation); err != nil {
-			return fmt.Errorf("failed to add strategy to portfolio: %w", err)
-		}
-		log.Printf("[Trader] ✓ Strategy added to portfolio (allocation: %.2f%%)", allocation*100)
-	}
-
-	return nil
-}
-
-// initializeMultiStrategy initializes in multi-strategy mode
+// initializeMultiStrategy initializes strategies using StrategyManager
 func (t *Trader) initializeMultiStrategy() error {
 	log.Printf("[Trader] Creating StrategyManager for %d strategies...",
 		len(t.Config.GetEnabledStrategies()))
@@ -1036,9 +924,8 @@ func (t *Trader) initializeMultiStrategy() error {
 		return fmt.Errorf("failed to load strategies: %w", err)
 	}
 
-	// Set t.Strategy to first strategy for backward compatibility
-	t.Strategy = t.StrategyMgr.GetFirstStrategy()
-	if t.Strategy == nil {
+	// Check if at least one strategy was loaded
+	if t.StrategyMgr.GetStrategyCount() == 0 {
 		return fmt.Errorf("no strategies loaded")
 	}
 
@@ -1083,14 +970,8 @@ func (t *Trader) setInitialActivationState(strat strategy.Strategy) {
 func (t *Trader) getAllSymbols() []string {
 	symbolSet := make(map[string]bool)
 
-	if t.Config.System.MultiStrategy {
-		for _, cfg := range t.Config.GetEnabledStrategies() {
-			for _, symbol := range cfg.Symbols {
-				symbolSet[symbol] = true
-			}
-		}
-	} else {
-		for _, symbol := range t.Config.Strategy.Symbols {
+	for _, cfg := range t.Config.GetEnabledStrategies() {
+		for _, symbol := range cfg.Symbols {
 			symbolSet[symbol] = true
 		}
 	}
@@ -1112,8 +993,7 @@ func (t *Trader) runSessionManager() {
 
 		inSession := t.SessionMgr.IsInSession()
 
-		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-			// Multi-strategy mode
+		if t.StrategyMgr != nil {
 			t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
 				strategyRunning := strat.IsRunning()
 
@@ -1131,23 +1011,6 @@ func (t *Trader) runSessionManager() {
 					}
 				}
 			})
-		} else {
-			// Single-strategy mode
-			strategyRunning := t.Strategy.IsRunning()
-
-			if inSession && !strategyRunning && t.Config.Session.AutoStart {
-				log.Println("[Trader] Trading session started - starting strategy")
-				if err := t.Strategy.Start(); err != nil {
-					log.Printf("[Trader] Error starting strategy: %v", err)
-				}
-			}
-
-			if !inSession && strategyRunning && t.Config.Session.AutoStop {
-				log.Println("[Trader] Trading session ended - stopping strategy")
-				if err := t.Strategy.Stop(); err != nil {
-					log.Printf("[Trader] Error stopping strategy: %v", err)
-				}
-			}
 		}
 	}
 }
@@ -1162,17 +1025,10 @@ func (t *Trader) runRiskMonitoring() {
 
 		var strategies map[string]strategy.Strategy
 
-		if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-			// Multi-strategy mode: get all strategies
+		if t.StrategyMgr != nil {
 			strategies = t.StrategyMgr.GetAllStrategies()
 		} else {
-			// Single-strategy mode
-			if !t.Strategy.IsRunning() {
-				continue
-			}
-			strategies = map[string]strategy.Strategy{
-				t.Config.System.StrategyID: t.Strategy,
-			}
+			continue
 		}
 
 		// Check each strategy's risk
@@ -1237,39 +1093,11 @@ func (t *Trader) handleControlSignals() {
 			log.Println("[Trader] Received SIGUSR1: Activating all strategies")
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
-			if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-				// Multi-strategy mode: activate all
+			if t.StrategyMgr != nil {
 				if err := t.StrategyMgr.ActivateAll(); err != nil {
 					log.Printf("[Trader] Error activating strategies: %v", err)
 				} else {
 					log.Printf("[Trader] ✓ %d strategies activated", t.StrategyMgr.GetStrategyCount())
-				}
-			} else {
-				// Single-strategy mode
-				baseStrat := t.getBaseStrategy()
-				if baseStrat == nil {
-					log.Println("[Trader] Error: Failed to access strategy control state")
-					continue
-				}
-
-				// Reset control state
-				baseStrat.ControlState.ExitRequested = false
-				baseStrat.ControlState.CancelPending = false
-				baseStrat.ControlState.FlattenMode = false
-				if baseStrat.ControlState.RunState == strategy.StrategyRunStateStopped ||
-					baseStrat.ControlState.RunState == strategy.StrategyRunStateFlattening {
-					baseStrat.ControlState.RunState = strategy.StrategyRunStateActive
-				}
-				baseStrat.ControlState.Activate()
-
-				if !t.Strategy.IsRunning() {
-					if err := t.Strategy.Start(); err != nil {
-						log.Printf("[Trader] Error starting strategy: %v", err)
-					} else {
-						log.Println("[Trader] ✓ Strategy activated and trading")
-					}
-				} else {
-					log.Println("[Trader] ✓ Strategy already running, re-activated")
 				}
 			}
 
@@ -1279,23 +1107,12 @@ func (t *Trader) handleControlSignals() {
 			log.Println("[Trader] Received SIGUSR2: Deactivating all strategies (squareoff)")
 			log.Println("[Trader] ════════════════════════════════════════════════════════════")
 
-			if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-				// Multi-strategy mode: deactivate all
+			if t.StrategyMgr != nil {
 				if err := t.StrategyMgr.DeactivateAll(); err != nil {
 					log.Printf("[Trader] Error deactivating strategies: %v", err)
 				} else {
 					log.Printf("[Trader] ✓ %d strategies deactivated", t.StrategyMgr.GetStrategyCount())
 				}
-			} else {
-				// Single-strategy mode
-				baseStrat := t.getBaseStrategy()
-				if baseStrat == nil {
-					log.Println("[Trader] Error: Failed to access strategy control state")
-					continue
-				}
-
-				baseStrat.TriggerFlatten(strategy.FlattenReasonManual, false)
-				baseStrat.ControlState.Deactivate()
 			}
 
 			log.Println("[Trader] ✓ Strategies deactivated, positions being closed")
@@ -1305,19 +1122,6 @@ func (t *Trader) handleControlSignals() {
 	}
 }
 
-// getBaseStrategy is a helper to get the BaseStrategy via type assertion
-func (t *Trader) getBaseStrategy() *strategy.BaseStrategy {
-	if t.Strategy == nil {
-		log.Printf("[Trader] Error: Strategy is nil")
-		return nil
-	}
-	// Use type assertion to get BaseStrategy from strategies that support it
-	if provider, ok := t.Strategy.(interface{ GetBaseStrategy() *strategy.BaseStrategy }); ok {
-		return provider.GetBaseStrategy()
-	}
-	return nil
-}
-
 // GetStrategyManager returns the strategy manager (for API access)
 func (t *Trader) GetStrategyManager() *strategy.StrategyManager {
 	return t.StrategyMgr
@@ -1325,45 +1129,33 @@ func (t *Trader) GetStrategyManager() *strategy.StrategyManager {
 
 // IsMultiStrategy returns whether running in multi-strategy mode
 func (t *Trader) IsMultiStrategy() bool {
-	return t.Config.System.MultiStrategy && t.StrategyMgr != nil
+	return t.StrategyMgr != nil
 }
 
 // onModelReload handles model hot reload callback
 func (t *Trader) onModelReload(newParams map[string]interface{}) error {
 	log.Printf("[Trader] Processing model hot reload with %d parameters", len(newParams))
 
-	if t.IsMultiStrategy() {
-		// Multi-strategy mode: apply to all strategies
-		log.Printf("[Trader] Applying new parameters to all %d strategies...", t.StrategyMgr.GetStrategyCount())
-		var errs []error
-		t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
-			if err := strat.UpdateParameters(newParams); err != nil {
-				errs = append(errs, fmt.Errorf("strategy %s: %w", id, err))
-				log.Printf("[Trader] ✗ Failed to apply parameters to strategy %s: %v", id, err)
-			} else {
-				log.Printf("[Trader] ✓ Successfully applied parameters to strategy %s", id)
-			}
-		})
-
-		if len(errs) > 0 {
-			// In a real scenario, you might want to decide on a rollback strategy
-			return fmt.Errorf("failed to apply parameters to some strategies: %v", errs)
-		}
-
-	} else {
-		// Single-strategy mode (backward compatibility)
-		log.Println("[Trader] Applying new parameters to single strategy...")
-		baseStrat := t.getBaseStrategy()
-		if baseStrat == nil {
-			return fmt.Errorf("failed to access base strategy")
-		}
-
-		if err := baseStrat.UpdateParameters(newParams); err != nil {
-			return fmt.Errorf("failed to apply new parameters: %w", err)
-		}
+	if t.StrategyMgr == nil {
+		return fmt.Errorf("strategy manager not initialized")
 	}
 
-	log.Println("[Trader] ✓ Model parameters reloaded successfully for all applicable strategies")
+	log.Printf("[Trader] Applying new parameters to all %d strategies...", t.StrategyMgr.GetStrategyCount())
+	var errs []error
+	t.StrategyMgr.ForEach(func(id string, strat strategy.Strategy) {
+		if err := strat.UpdateParameters(newParams); err != nil {
+			errs = append(errs, fmt.Errorf("strategy %s: %w", id, err))
+			log.Printf("[Trader] ✗ Failed to apply parameters to strategy %s: %v", id, err)
+		} else {
+			log.Printf("[Trader] ✓ Successfully applied parameters to strategy %s", id)
+		}
+	})
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to apply parameters to some strategies: %v", errs)
+	}
+
+	log.Println("[Trader] ✓ Model parameters reloaded successfully for all strategies")
 	return nil
 }
 
@@ -1388,10 +1180,12 @@ func (t *Trader) GetModelStatus() map[string]interface{} {
 	status := t.ModelWatcher.GetStatus()
 	status["enabled"] = true
 
-	// Add strategy current parameters (via BaseStrategy)
-	baseStrat := t.getBaseStrategy()
-	if baseStrat != nil {
-		status["current_parameters"] = baseStrat.GetCurrentParameters()
+	// Add strategy current parameters from first strategy
+	if t.StrategyMgr != nil {
+		firstStrategy := t.StrategyMgr.GetFirstStrategy()
+		if firstStrategy != nil {
+			status["current_parameters"] = firstStrategy.GetCurrentParameters()
+		}
 	}
 
 	return status
@@ -1505,7 +1299,50 @@ func (t *Trader) clearPositionFiles() error {
 }
 
 // initializeStrategiesWithCTPPositions 使用 CTP 持仓初始化策略
+// 注意：此函数已升级为使用带成本价的初始化
+// 与 C++ 原代码不同：C++ 的昨仓成本为 0，只计算当天交易产生的盈亏
+// Go 代码使用 CTP 返回的成本价来计算完整的浮动盈亏
 func (t *Trader) initializeStrategiesWithCTPPositions(ctpPosMap map[string]int64) error {
+	// 从 positionsByExchange 获取带成本价的持仓信息
+	t.positionsMu.RLock()
+	posMapWithCost := make(map[string]strategy.PositionWithCost)
+	for _, posList := range t.positionsByExchange {
+		for _, pos := range posList {
+			qty := int64(pos.Volume)
+			if pos.Direction == "SHORT" || pos.Direction == "short" {
+				qty = -qty
+			}
+
+			existing := posMapWithCost[pos.Symbol]
+			newQty := existing.Quantity + qty
+
+			// 处理成本价（与 initializeStrategyPositions 相同的逻辑）
+			// CTP 返回的 avg_price = PositionCost / Position
+			// PositionCost = 开仓价格 * 合约乘数 * 持仓数量
+			// 所以 avg_price = 开仓价格 * 合约乘数
+			// 需要除以合约乘数才能得到实际的开仓价格
+			// 注意：此转换是 Go 代码新增的，C++ 原代码中昨仓成本为 0
+			avgCost := pos.AvgPrice
+			multiplier := strategy.GetContractMultiplier(pos.Symbol)
+			if multiplier > 1 && avgCost > 0 {
+				avgCost = avgCost / multiplier
+				log.Printf("[Trader] CTP initializeStrategiesWithCTPPositions: Converted avg_price for %s: raw=%.2f / multiplier=%.0f = %.2f",
+					pos.Symbol, pos.AvgPrice, multiplier, avgCost)
+			}
+
+			if newQty != 0 && existing.Quantity != 0 && avgCost > 0 {
+				totalValue := existing.AvgCost*float64(abs64(existing.Quantity)) + avgCost*float64(pos.Volume)
+				totalQty := float64(abs64(existing.Quantity) + int64(pos.Volume))
+				existing.AvgCost = totalValue / totalQty
+			} else if avgCost > 0 {
+				existing.AvgCost = avgCost
+			}
+			existing.Quantity = newQty
+			posMapWithCost[pos.Symbol] = existing
+		}
+	}
+	t.positionsMu.RUnlock()
+
 	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
 		// 多策略模式
 		for _, sid := range t.StrategyMgr.GetStrategyIDs() {
@@ -1516,20 +1353,16 @@ func (t *Trader) initializeStrategiesWithCTPPositions(ctpPosMap map[string]int64
 			}
 
 			if posInit, ok := strat.(strategy.PositionInitializer); ok {
-				if err := posInit.InitializePositions(ctpPosMap); err != nil {
-					log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", sid, err)
+				// 优先使用带成本价的初始化
+				if err := posInit.InitializePositionsWithCost(posMapWithCost); err != nil {
+					log.Printf("[Trader] Warning: InitializePositionsWithCost failed for %s: %v, falling back", sid, err)
+					if err := posInit.InitializePositions(ctpPosMap); err != nil {
+						log.Printf("[Trader] Warning: Failed to initialize positions for %s: %v", sid, err)
+					}
 				} else {
-					log.Printf("[Trader] Initialized positions for strategy %s from CTP", sid)
+					log.Printf("[Trader] Initialized positions with cost for strategy %s from CTP", sid)
 				}
 			}
-		}
-	} else if t.Strategy != nil {
-		// 单策略模式
-		if posInit, ok := t.Strategy.(strategy.PositionInitializer); ok {
-			if err := posInit.InitializePositions(ctpPosMap); err != nil {
-				return fmt.Errorf("failed to initialize positions: %w", err)
-			}
-			log.Printf("[Trader] Initialized positions for strategy %s from CTP", t.Strategy.GetID())
 		}
 	}
 
@@ -1538,8 +1371,7 @@ func (t *Trader) initializeStrategiesWithCTPPositions(ctpPosMap map[string]int64
 
 // savePositionSnapshots 保存所有策略的持仓快照
 func (t *Trader) savePositionSnapshots() error {
-	if t.Config.System.MultiStrategy && t.StrategyMgr != nil {
-		// 多策略模式
+	if t.StrategyMgr != nil {
 		for _, sid := range t.StrategyMgr.GetStrategyIDs() {
 			strat, exists := t.StrategyMgr.GetStrategy(sid)
 			if !exists {
@@ -1560,20 +1392,6 @@ func (t *Trader) savePositionSnapshots() error {
 					log.Printf("[Trader] Saved position snapshot for strategy %s", sid)
 				}
 			}
-		}
-	} else if t.Strategy != nil {
-		// 单策略模式
-		if posProvider, ok := t.Strategy.(strategy.PositionProvider); ok {
-			posMap := posProvider.GetPositionsBySymbol()
-			snapshot := strategy.PositionSnapshot{
-				StrategyID: t.Strategy.GetID(),
-				Timestamp:  time.Now(),
-				SymbolsPos: posMap,
-			}
-			if err := strategy.SavePositionSnapshot(snapshot); err != nil {
-				return fmt.Errorf("failed to save positions: %w", err)
-			}
-			log.Printf("[Trader] Saved position snapshot for strategy %s", t.Strategy.GetID())
 		}
 	}
 

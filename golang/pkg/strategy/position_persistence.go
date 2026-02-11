@@ -26,9 +26,24 @@ type PositionSnapshot struct {
 	SymbolsYesterdayPos map[string]int64 `json:"symbols_yesterday_position,omitempty"` // symbol -> ytd_position
 }
 
+// PositionWithCost 持仓信息（含成本价）
+// 注意：C++ 原代码中，m_buyPrice/m_sellPrice 是当天成交均价，开盘时为 0
+// Go 代码增加此结构以支持从 CTP 获取昨仓成本价，这是与 C++ 的差异
+// C++ 的 P&L 只计算当天交易产生的盈亏，昨仓成本为 0
+// Go 代码使用 CTP 返回的成本价来计算完整的浮动盈亏，便于风控和监控
+type PositionWithCost struct {
+	Quantity int64   // 持仓数量（正=多头，负=空头）
+	AvgCost  float64 // 平均成本价
+}
+
 // PositionInitializer 接口：支持从外部初始化持仓
 type PositionInitializer interface {
 	InitializePositions(positions map[string]int64) error
+	// InitializePositionsWithCost 使用成本价初始化持仓
+	// 注意：此方法是 Go 代码新增的，C++ 原代码中没有对应实现
+	// C++ 的昨仓成本为 0，只计算当天交易产生的盈亏
+	// Go 代码使用 CTP 返回的成本价来计算完整的浮动盈亏
+	InitializePositionsWithCost(positions map[string]PositionWithCost) error
 }
 
 // PositionProvider 接口：提供当前持仓

@@ -1148,8 +1148,12 @@ void CTPTDPlugin::ConvertPosition(CThostFtdcInvestorPositionField* ctp_pos, Posi
     pos_info.yesterday_volume = ctp_pos->YdPosition;
 
     // 持仓均价
+    // 注意：使用 OpenCost（开仓成本）而不是 PositionCost（持仓成本）
+    // CTP 中 PositionCost 对于昨仓使用昨日结算价，而非实际开仓价格
+    // OpenCost 始终是实际开仓价格 × 合约乘数 × 数量
+    // 与 C++ 原代码不同：C++ 只计算当天盈亏，Go 需要完整的浮动盈亏
     if (ctp_pos->Position > 0) {
-        pos_info.avg_price = ctp_pos->PositionCost / ctp_pos->Position;
+        pos_info.avg_price = ctp_pos->OpenCost / ctp_pos->Position;
     } else {
         pos_info.avg_price = 0.0;
     }
