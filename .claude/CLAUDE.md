@@ -1422,6 +1422,31 @@ chore: 更新依赖版本
 
 ## 端到端测试规则
 
+### ⚠️ 重要：测试前必须编译和部署
+
+**端到端测试的完整流程是：编译 → 部署 → 测试**
+
+如果修改了代码，必须先重新编译并部署到 `deploy/` 目录，否则测试的是旧代码！
+
+```bash
+# 1. 编译（根据修改的模块选择）
+# 编译 Go trader
+cd golang && go build -o ../bin/trader cmd/trader/main.go
+
+# 编译 C++ gateway（如果修改了 gateway 代码）
+cd gateway/build && make -j4
+
+# 2. 部署到 deploy 目录
+./scripts/build_deploy.sh --go      # 只部署 Go
+./scripts/build_deploy.sh --cpp     # 只部署 C++
+./scripts/build_deploy.sh           # 全部部署
+
+# 3. 运行测试
+cd deploy
+./scripts/test/e2e/test_simulator_e2e.sh      # 模拟测试
+./scripts/test/e2e/test_ctp_live_e2e.sh       # CTP 实盘测试
+```
+
 ### 核心测试脚本
 
 所有脚本统一使用 `--run` 参数控制行为：
