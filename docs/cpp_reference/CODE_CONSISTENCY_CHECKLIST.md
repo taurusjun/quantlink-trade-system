@@ -169,10 +169,11 @@ void ExecutionStrategy::SetThresholds() {
 
 | # | 问题 | 严重程度 | 状态 | 修复方案 |
 |---|------|---------|------|---------|
-| 1 | avgSpreadRatio_ori 使用 SMA 而非 EMA | **高** | 待修复 | 添加 ALPHA 参数，使用 EMA |
-| 2 | ALPHA 参数缺失 | **高** | 待修复 | 添加到配置文件 |
-| 3 | avgPx 保存时使用 SMA 均值 | 中 | 已修复 | 现在保存 spreadMean |
-| 4 | ytd2 初始化时未同步 NetPosAgg | 中 | 已修复 | 初始化时同步 |
+| 1 | avgSpreadRatio_ori 使用 SMA 而非 EMA | **高** | ✅ 已修复 | 添加 ALPHA 参数，使用 EMA |
+| 2 | ALPHA 参数缺失 | **高** | ✅ 已修复 | 添加 alpha 到配置文件 |
+| 3 | avgPx 保存时使用 SMA 均值 | 中 | ✅ 已修复 | 现在保存 avgSpreadRatio_ori |
+| 4 | ytd2 初始化时未同步 NetPosAgg | 中 | ✅ 已修复 | 初始化时同步 |
+| 5 | setDynamicThresholds 使用 leg1Position 而非 NetPosPass | 中 | ✅ 已修复 | 改为使用 firstStrat.NetPosPass |
 
 ---
 

@@ -1264,14 +1264,21 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 	// C++: short_place_diff_thold = BEGIN_PLACE - SHORT_PLACE
 	shortPlaceDiff := pas.beginZScore - pas.shortZScore
 
-	// 计算持仓比例：netpos / maxPos
-	posRatio := float64(pas.leg1Position) / float64(pas.maxPositionSize)
+	// C++: 使用 m_firstStrat->m_netpos_pass (被动成交净持仓)
+	// 不是用 m_netpos (总净持仓)
+	var netPosPass int32 = 0
+	if pas.firstStrat != nil {
+		netPosPass = pas.firstStrat.NetPosPass
+	}
 
-	if pas.leg1Position == 0 {
+	// 计算持仓比例：m_netpos_pass / m_tholdMaxPos
+	posRatio := float64(netPosPass) / float64(pas.maxPositionSize)
+
+	if netPosPass == 0 {
 		// C++: 无持仓时使用初始阈值
 		pas.entryZScoreBid = pas.beginZScore
 		pas.entryZScoreAsk = pas.beginZScore
-	} else if pas.leg1Position > 0 {
+	} else if netPosPass > 0 {
 		// C++: 多头持仓
 		// tholdBidPlace = BEGIN_PLACE + long_place_diff_thold * netpos / maxPos
 		pas.entryZScoreBid = pas.beginZScore + longPlaceDiff*posRatio
