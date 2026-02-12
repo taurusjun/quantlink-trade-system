@@ -6,8 +6,9 @@
 # System Configuration
 # ═══════════════════════════════════════════════════════════
 system:
-  mode: "live"                          # 运行模式: live, backtest, simulation
+  mode: "simulation"                    # 运行模式: live, backtest, simulation
   multi_strategy: true                  # 启用多策略模式（用于订单和持仓追踪）
+  data_dir: "data/simulation"           # 数据目录（与实盘隔离）
 
 # ═══════════════════════════════════════════════════════════
 # Strategy Configuration (Multi-Strategy Mode)

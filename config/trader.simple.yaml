@@ -3,6 +3,7 @@ system:
   strategy_id: "test_simple"
   mode: "live"
   multi_strategy: false
+  data_dir: "data/simple_test"          # 简单测试数据目录
 
 strategy:
   type: "pairwise_arb"

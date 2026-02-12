@@ -7,10 +7,29 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 )
+
+// dataDir 全局数据目录，由配置设置
+// 默认为 "data"，实盘和模拟盘应使用不同目录
+var dataDir = "data"
+
+// SetDataDir 设置数据目录
+// 应在策略初始化前调用，通常由 Trader 根据配置设置
+func SetDataDir(dir string) {
+	if dir != "" {
+		dataDir = dir
+		log.Printf("[Strategy] Data directory set to: %s", dataDir)
+	}
+}
+
+// GetDataDir 获取当前数据目录
+func GetDataDir() string {
+	return dataDir
+}
 
 // DailyInitRow 每日初始化数据行
 // C++: std::map<std::string, std::string> row
@@ -168,6 +187,7 @@ func SaveMatrix2(filepath string, strategyID int32, avgSpreadRatio_ori float64,
 
 // GetDailyInitPath 获取 daily_init 文件路径
 // C++: std::string("../data/daily_init.") + std::to_string(m_strategyID)
+// 使用全局 dataDir 变量，支持实盘/模拟盘数据隔离
 func GetDailyInitPath(strategyID int32) string {
-	return fmt.Sprintf("data/daily_init.%d", strategyID)
+	return filepath.Join(dataDir, fmt.Sprintf("daily_init.%d", strategyID))
 }

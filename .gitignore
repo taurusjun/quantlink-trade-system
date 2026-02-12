@@ -74,3 +74,6 @@ scripts/test/*/test_logs/
 *.tmp
 *.swp
 .DS_Store
+
+# 手动配置文件目录（含敏感信息）
+deploy_manual/

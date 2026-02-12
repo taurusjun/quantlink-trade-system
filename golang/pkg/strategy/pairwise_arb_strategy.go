@@ -287,8 +287,12 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if val, ok := config.Parameters["order_size"].(float64); ok {
 		pas.orderSize = int64(val)
 	}
+	// 优先从 Parameters 读取 max_position_size，否则从顶层 MaxPositionSize 读取
+	// 修复: 实盘配置通常在顶层设置 max_position_size，而不是在 parameters 中
 	if val, ok := config.Parameters["max_position_size"].(float64); ok {
 		pas.maxPositionSize = int64(val)
+	} else if config.MaxPositionSize > 0 {
+		pas.maxPositionSize = config.MaxPositionSize
 	}
 	if val, ok := config.Parameters["min_correlation"].(float64); ok {
 		pas.minCorrelation = val

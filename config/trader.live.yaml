@@ -8,6 +8,7 @@
 system:
   mode: "live"                          # 运行模式: live
   multi_strategy: true                  # 启用多策略模式
+  data_dir: "data/live"                 # 实盘数据目录（与模拟盘隔离）
 
 # ═══════════════════════════════════════════════════════════
 # Strategy Configuration (Multi-Strategy Mode)

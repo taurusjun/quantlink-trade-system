@@ -177,6 +177,7 @@ void ExecutionStrategy::SetThresholds() {
 | 6 | 追单计数处理缺失 (HandleAggOrder) | **高** | ✅ 已修复 | 添加 handleAggOrder() 递减计数 |
 | 7 | 撤单阈值未实现 (tholdBidRemove/AskRemove) | **高** | ✅ 已修复 | 添加撤单阈值计算和检查 |
 | 8 | AVG_SPREAD_AWAY 保护机制缺失 | **高** | ✅ 已修复 | 添加价差偏离检测和策略停止 |
+| 9 | maxPositionSize 只从 Parameters 读取 | **高** | ✅ 已修复 | 添加从顶层 config.MaxPositionSize 回退读取 |
 
 ---
 
@@ -237,6 +238,8 @@ func TestDailyInitRoundTrip(t *testing.T) {
 - C++ 原代码: `/Users/user/PWorks/RD/tbsrc/Strategies/`
 - Go 代码: `/Users/user/PWorks/RD/quantlink-trade-system/golang/pkg/strategy/`
 - daily_init 文档: `docs/功能实现/daily_init文件分析_2026-02-10-17_10.md`
+- **动态阈值变量生命周期对比**: `docs/cpp_reference/动态阈值调整_变量生命周期对比_2026-02-12.md`
+- **核心变量生命周期对比**: `docs/cpp_reference/核心变量生命周期对比_2026-02-12.md`
 
 ---
 

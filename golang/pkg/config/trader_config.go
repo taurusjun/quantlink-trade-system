@@ -41,6 +41,7 @@ type SystemConfig struct {
 	StrategyID    string `yaml:"strategy_id"`     // 单策略模式的策略ID（向后兼容）
 	Mode          string `yaml:"mode"`            // live, backtest, simulation
 	MultiStrategy bool   `yaml:"multi_strategy"`  // 是否启用多策略模式（自动检测）
+	DataDir       string `yaml:"data_dir"`        // 数据目录路径（daily_init, positions 等）
 }
 
 // StrategyConfig contains strategy-specific configuration

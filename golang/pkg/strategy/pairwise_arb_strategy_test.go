@@ -764,7 +764,8 @@ func TestPairwiseArbStrategy_DynamicThreshold(t *testing.T) {
 	// C++: short_place_diff = BEGIN_PLACE - SHORT_PLACE = 2.0 - 0.5 = 1.5
 
 	// 测试空仓时阈值 = beginZScore (C++: 无持仓使用初始阈值)
-	pas.leg1Position = 0
+	// 注意: 动态阈值使用 firstStrat.NetPosPass，不是 leg1Position
+	pas.firstStrat.NetPosPass = 0
 	pas.setDynamicThresholds()
 	if pas.entryZScoreBid != 2.0 {
 		t.Errorf("Expected entryZScoreBid=2.0 at zero position, got %.2f", pas.entryZScoreBid)
@@ -776,7 +777,7 @@ func TestPairwiseArbStrategy_DynamicThreshold(t *testing.T) {
 	// 测试满仓多头 (posRatio=1.0)
 	// C++: tholdBidPlace = BEGIN + long_diff * 1.0 = 2.0 + 1.5 = 3.5
 	// C++: tholdAskPlace = BEGIN - short_diff * 1.0 = 2.0 - 1.5 = 0.5
-	pas.leg1Position = 100
+	pas.firstStrat.NetPosPass = 100
 	pas.setDynamicThresholds()
 	if pas.entryZScoreBid != 3.5 {
 		t.Errorf("Expected entryZScoreBid=3.5 at full long, got %.2f", pas.entryZScoreBid)
@@ -788,7 +789,7 @@ func TestPairwiseArbStrategy_DynamicThreshold(t *testing.T) {
 	// 测试满仓空头 (posRatio=-1.0)
 	// C++: tholdBidPlace = BEGIN + short_diff * (-1.0) = 2.0 - 1.5 = 0.5
 	// C++: tholdAskPlace = BEGIN - long_diff * (-1.0) = 2.0 + 1.5 = 3.5
-	pas.leg1Position = -100
+	pas.firstStrat.NetPosPass = -100
 	pas.setDynamicThresholds()
 	if pas.entryZScoreBid != 0.5 {
 		t.Errorf("Expected entryZScoreBid=0.5 at full short, got %.2f", pas.entryZScoreBid)
@@ -800,7 +801,7 @@ func TestPairwiseArbStrategy_DynamicThreshold(t *testing.T) {
 	// 测试半仓多头 (posRatio=0.5)
 	// C++: tholdBidPlace = BEGIN + long_diff * 0.5 = 2.0 + 0.75 = 2.75
 	// C++: tholdAskPlace = BEGIN - short_diff * 0.5 = 2.0 - 0.75 = 1.25
-	pas.leg1Position = 50
+	pas.firstStrat.NetPosPass = 50
 	pas.setDynamicThresholds()
 	if pas.entryZScoreBid != 2.75 {
 		t.Errorf("Expected entryZScoreBid=2.75 at half long, got %.2f", pas.entryZScoreBid)

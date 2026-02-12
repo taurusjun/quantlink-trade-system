@@ -51,16 +51,21 @@ type PositionProvider interface {
 	GetPositionsBySymbol() map[string]int64
 }
 
-const positionDataDir = "data/positions"
+// getPositionDataDir 获取持仓数据目录
+// 使用全局 dataDir 变量，支持实盘/模拟盘数据隔离
+func getPositionDataDir() string {
+	return filepath.Join(GetDataDir(), "positions")
+}
 
 // SavePositionSnapshot 保存持仓快照到文件
 func SavePositionSnapshot(snapshot PositionSnapshot) error {
+	posDir := getPositionDataDir()
 	// 确保目录存在
-	if err := os.MkdirAll(positionDataDir, 0755); err != nil {
+	if err := os.MkdirAll(posDir, 0755); err != nil {
 		return fmt.Errorf("failed to create position data directory: %w", err)
 	}
 
-	filename := filepath.Join(positionDataDir, fmt.Sprintf("%s.json", snapshot.StrategyID))
+	filename := filepath.Join(posDir, fmt.Sprintf("%s.json", snapshot.StrategyID))
 
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
@@ -76,7 +81,7 @@ func SavePositionSnapshot(snapshot PositionSnapshot) error {
 
 // LoadPositionSnapshot 从文件加载持仓快照
 func LoadPositionSnapshot(strategyID string) (*PositionSnapshot, error) {
-	filename := filepath.Join(positionDataDir, fmt.Sprintf("%s.json", strategyID))
+	filename := filepath.Join(getPositionDataDir(), fmt.Sprintf("%s.json", strategyID))
 
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -96,7 +101,7 @@ func LoadPositionSnapshot(strategyID string) (*PositionSnapshot, error) {
 
 // DeletePositionSnapshot 删除持仓快照文件
 func DeletePositionSnapshot(strategyID string) error {
-	filename := filepath.Join(positionDataDir, fmt.Sprintf("%s.json", strategyID))
+	filename := filepath.Join(getPositionDataDir(), fmt.Sprintf("%s.json", strategyID))
 	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete position snapshot: %w", err)
 	}

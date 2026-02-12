@@ -3,6 +3,7 @@
 
 system:
   mode: "live"
+  data_dir: "data/hot_reload_test"      # 热加载测试数据目录
 
 strategies:
   # 策略1：白银配对套利

@@ -66,6 +66,30 @@ func (t *Trader) Initialize() error {
 
 	log.Println("[Trader] DEBUG: Starting Initialize()")
 
+	// 0. 设置数据目录（实盘和模拟盘使用不同目录）
+	// 优先使用配置文件中的 data_dir，如果未配置则根据 mode 自动选择
+	dataDir := t.Config.System.DataDir
+	if dataDir == "" {
+		// 默认数据目录：data/live 或 data/simulation
+		switch t.Config.System.Mode {
+		case "live":
+			dataDir = "data/live"
+		case "simulation":
+			dataDir = "data/simulation"
+		default:
+			dataDir = "data"
+		}
+	}
+	strategy.SetDataDir(dataDir)
+	// 确保数据目录存在
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Printf("[Trader] Warning: failed to create data directory %s: %v", dataDir, err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "positions"), 0755); err != nil {
+		log.Printf("[Trader] Warning: failed to create positions directory: %v", err)
+	}
+	log.Printf("[Trader] Data directory: %s", dataDir)
+
 	// 1. Create and initialize Risk Manager
 	log.Println("[Trader] Creating Risk Manager...")
 	// 从配置文件读取风控参数，如果未设置则使用大默认值（相当于禁用）
