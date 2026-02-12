@@ -2222,10 +2222,19 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	// C++: SaveMatrix2(std::string("../data/daily_init.") + std::to_string(m_strategyID));
 	// 在 HandleSquareoff() 末尾调用，保存当前状态供下次启动恢复
 	dailyInitPath := GetDailyInitPath(pas.ExecutionStrategy.StrategyID)
+
+	// C++: avgSpreadRatio_ori 在停止时应保存运行时计算的均值
+	// 这样下次启动时可以恢复到当前的价差均值状态
+	// 如果运行时均值为 0（未初始化），则保留原始值
+	avgPxToSave := pas.spreadAnalyzer.GetStats().Mean
+	if avgPxToSave == 0 && pas.avgSpreadRatio_ori != 0 {
+		avgPxToSave = pas.avgSpreadRatio_ori
+	}
+
 	err := SaveMatrix2(
 		dailyInitPath,
 		pas.ExecutionStrategy.StrategyID,
-		pas.avgSpreadRatio_ori,                           // avgSpreadRatio_ori
+		avgPxToSave,                                      // avgSpreadRatio_ori（运行时均值）
 		pas.firstStrat.Instru.Symbol,                     // m_origbaseName1
 		pas.secondStrat.Instru.Symbol,                    // m_origbaseName2
 		pas.firstStrat.NetPosPass,                        // m_netpos_pass (ytd1)
@@ -2234,9 +2243,9 @@ func (pas *PairwiseArbStrategy) Stop() error {
 	if err != nil {
 		log.Printf("[PairwiseArbStrategy:%s] Warning: SaveMatrix2 failed: %v", pas.ID, err)
 	} else {
-		log.Printf("[PairwiseArbStrategy:%s] SaveMatrix2 saved: avgSpreadRatio_ori=%.6f, "+
+		log.Printf("[PairwiseArbStrategy:%s] SaveMatrix2 saved: avgPx=%.6f (spreadMean), "+
 			"origBaseName1=%s, origBaseName2=%s, netpos_pass=%d, netpos_agg=%d",
-			pas.ID, pas.avgSpreadRatio_ori,
+			pas.ID, avgPxToSave,
 			pas.firstStrat.Instru.Symbol, pas.secondStrat.Instru.Symbol,
 			pas.firstStrat.NetPosPass, pas.secondStrat.NetPosAgg)
 	}
@@ -2323,17 +2332,19 @@ func (pas *PairwiseArbStrategy) InitializePositions(positions map[string]int64) 
 	if qty, exists := positions[pas.symbol2]; exists {
 		pas.leg2Position = qty
 		// 同步到 ExtraStrategy
-		// C++: m_secondStrat->m_netpos_pass = qty (注意：secondStrat 通常是主动单腿)
+		// C++: m_secondStrat->m_netpos_agg = qty (secondStrat 是主动单腿，用 NetPosAgg)
+		// C++: daily_init 中 ytd2 保存的是 m_secondStrat->m_netpos_agg
 		if pas.secondStrat != nil {
 			pas.secondStrat.NetPosPass = int32(qty)
+			pas.secondStrat.NetPosAgg = int32(qty) // C++: m_netpos_agg
 			pas.secondStrat.NetPos = int32(qty)
 			if qty > 0 {
 				pas.secondStrat.BuyQty = float64(qty)
 			} else if qty < 0 {
 				pas.secondStrat.SellQty = float64(-qty)
 			}
-			log.Printf("[PairwiseArbStrategy:%s] Initialized secondStrat position: %s NetPosPass=%d",
-				pas.ID, pas.symbol2, pas.secondStrat.NetPosPass)
+			log.Printf("[PairwiseArbStrategy:%s] Initialized secondStrat position: %s NetPos=%d, NetPosAgg=%d",
+				pas.ID, pas.symbol2, pas.secondStrat.NetPos, pas.secondStrat.NetPosAgg)
 		}
 		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2 position: %s = %d",
 			pas.ID, pas.symbol2, qty)
@@ -2394,8 +2405,10 @@ func (pas *PairwiseArbStrategy) InitializePositionsWithCost(positions map[string
 	if pos, exists := positions[pas.symbol2]; exists && pos.Quantity != 0 {
 		pas.leg2Position = pos.Quantity
 		// 同步到 ExtraStrategy
+		// C++: m_secondStrat->m_netpos_agg = qty (secondStrat 是主动单腿)
 		if pas.secondStrat != nil {
 			pas.secondStrat.NetPosPass = int32(pos.Quantity)
+			pas.secondStrat.NetPosAgg = int32(pos.Quantity) // C++: m_netpos_agg
 			pas.secondStrat.NetPos = int32(pos.Quantity)
 			// 设置成本价（与 C++ 不同：C++ 开盘时成本为 0）
 			if pos.Quantity > 0 {
@@ -2410,8 +2423,8 @@ func (pas *PairwiseArbStrategy) InitializePositionsWithCost(positions map[string
 				pas.secondStrat.SellTotalValue = pos.AvgCost * float64(-pos.Quantity)
 			}
 		}
-		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2: %s Qty=%d, AvgCost=%.2f",
-			pas.ID, pas.symbol2, pos.Quantity, pos.AvgCost)
+		log.Printf("[PairwiseArbStrategy:%s] Initialized leg2: %s Qty=%d, AvgCost=%.2f, NetPosAgg=%d",
+			pas.ID, pas.symbol2, pos.Quantity, pos.AvgCost, pas.secondStrat.NetPosAgg)
 	}
 
 	// 更新 estimatedPosition
