@@ -69,6 +69,13 @@ type PairwiseArbStrategy struct {
 	entryZScoreBid      float64       // 运行时：做多入场阈值
 	entryZScoreAsk      float64       // 运行时：做空入场阈值
 
+	// 撤单阈值（C++: m_tholdBidRemove/m_tholdAskRemove）
+	// 用于在价差回归均值时撤销偏离的挂单
+	exitZScoreBid       float64       // 运行时：做多撤单阈值 (tholdBidRemove)
+	exitZScoreAsk       float64       // 运行时：做空撤单阈值 (tholdAskRemove)
+	longExitZScore      float64       // 满仓多头时撤单阈值 (LONG_REMOVE)
+	shortExitZScore     float64       // 满仓空头时撤单阈值 (SHORT_REMOVE)
+
 	// 主动追单参数（参考旧系统 SendAggressiveOrder）
 	aggressiveEnabled       bool          // 是否启用追单
 	aggressiveInterval      time.Duration // 追单间隔
@@ -326,6 +333,19 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	if val, ok := config.Parameters["short_zscore"].(float64); ok {
 		pas.shortZScore = val
 	}
+	// 撤单阈值参数（C++: LONG_REMOVE, SHORT_REMOVE）
+	if val, ok := config.Parameters["long_exit_zscore"].(float64); ok {
+		pas.longExitZScore = val
+	} else {
+		// 默认使用 exitZScore * 1.5
+		pas.longExitZScore = pas.exitZScore * 1.5
+	}
+	if val, ok := config.Parameters["short_exit_zscore"].(float64); ok {
+		pas.shortExitZScore = val
+	} else {
+		// 默认使用 exitZScore * 0.5
+		pas.shortExitZScore = pas.exitZScore * 0.5
+	}
 	// 是否启用动态阈值（需要配置 long_zscore 和 short_zscore）
 	if val, ok := config.Parameters["use_dynamic_threshold"].(bool); ok {
 		pas.useDynamicThreshold = val
@@ -336,6 +356,8 @@ func (pas *PairwiseArbStrategy) Initialize(config *StrategyConfig) error {
 	// 初始化运行时阈值
 	pas.entryZScoreBid = pas.beginZScore
 	pas.entryZScoreAsk = pas.beginZScore
+	pas.exitZScoreBid = pas.exitZScore
+	pas.exitZScoreAsk = pas.exitZScore
 
 	// 主动追单参数
 	if val, ok := config.Parameters["aggressive_enabled"].(bool); ok {
@@ -633,6 +655,30 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	pas.spreadAnalyzer.CalculateSpread()
 	pas.spreadAnalyzer.UpdateAll(pas.lookbackPeriod)
 
+	// === AVG_SPREAD_AWAY 保护机制（C++: PairwiseArbStrategy.cpp:506-517）===
+	// 检查当前价差是否偏离均值过大，如果是则停止策略
+	// C++: if (abs(currSpreadRatio - avgSpreadRatio) > m_tickSize * AVG_SPREAD_AWAY)
+	if pas.tholdFirst.AvgSpreadAway > 0 && pas.isValidMkdata {
+		currentSpread := pas.spreadAnalyzer.GetStats().CurrentSpread
+		avgSpreadRatio := pas.getAvgSpreadRatio()
+		spreadDeviation := math.Abs(currentSpread - avgSpreadRatio)
+		maxDeviation := pas.tickSize1 * pas.tholdFirst.AvgSpreadAway
+
+		if spreadDeviation > maxDeviation {
+			pas.isValidMkdata = false
+			log.Printf("[PairwiseArb:%s] ⚠️ AVG_SPREAD_AWAY triggered: deviation=%.4f > max=%.4f (curr=%.4f, avg=%.4f, tickSize=%.2f, away=%.2f)",
+				pas.ID, spreadDeviation, maxDeviation, currentSpread, avgSpreadRatio, pas.tickSize1, pas.tholdFirst.AvgSpreadAway)
+
+			// C++: if (m_Active) { HandleSquareoff(); }
+			if pas.ControlState.RunState == StrategyRunStateActive {
+				log.Printf("[PairwiseArb:%s] 🛑 Deactivating strategy due to AVG_SPREAD_AWAY", pas.ID)
+				pas.ControlState.RunState = StrategyRunStateExiting
+			}
+			return
+		}
+		pas.isValidMkdata = true
+	}
+
 	// === EMA 更新 avgSpreadRatio_ori（C++: PairwiseArbStrategy.cpp:519-522）===
 	// 收到第一腿行情时，使用 EMA 公式更新价差均值
 	// C++: avgSpreadRatio_ori = (1 - ALPHA) * avgSpreadRatio_ori + ALPHA * currSpreadRatio;
@@ -652,6 +698,10 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 
 	// 动态调整入场阈值（根据持仓）
 	pas.setDynamicThresholds()
+
+	// C++: 检查并撤销偏离均值的挂单
+	// 参考 PairwiseArbStrategy.cpp:205-228
+	pas.cancelOutOfRangeOrders()
 
 	// Get current statistics from SpreadAnalyzer
 	spreadStats := pas.spreadAnalyzer.GetStats()
@@ -1253,9 +1303,11 @@ func (pas *PairwiseArbStrategy) optimizeOrderPrice(side OrderSide, level int, ba
 //     tholdAskPlace = BEGIN_PLACE - long_place_diff_thold * netpos / maxPos
 func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 	if !pas.useDynamicThreshold || pas.maxPositionSize == 0 {
-		// 未启用动态阈值，使用静态 entryZScore
+		// 未启用动态阈值，使用静态 entryZScore 和 exitZScore
 		pas.entryZScoreBid = pas.entryZScore
 		pas.entryZScoreAsk = pas.entryZScore
+		pas.exitZScoreBid = pas.exitZScore
+		pas.exitZScoreAsk = pas.exitZScore
 		return
 	}
 
@@ -1263,6 +1315,10 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 	longPlaceDiff := pas.longZScore - pas.beginZScore
 	// C++: short_place_diff_thold = BEGIN_PLACE - SHORT_PLACE
 	shortPlaceDiff := pas.beginZScore - pas.shortZScore
+	// C++: long_remove_diff_thold = LONG_REMOVE - BEGIN_REMOVE
+	longRemoveDiff := pas.longExitZScore - pas.exitZScore
+	// C++: short_remove_diff_thold = BEGIN_REMOVE - SHORT_REMOVE
+	shortRemoveDiff := pas.exitZScore - pas.shortExitZScore
 
 	// C++: 使用 m_firstStrat->m_netpos_pass (被动成交净持仓)
 	// 不是用 m_netpos (总净持仓)
@@ -1278,18 +1334,28 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 		// C++: 无持仓时使用初始阈值
 		pas.entryZScoreBid = pas.beginZScore
 		pas.entryZScoreAsk = pas.beginZScore
+		pas.exitZScoreBid = pas.exitZScore
+		pas.exitZScoreAsk = pas.exitZScore
 	} else if netPosPass > 0 {
 		// C++: 多头持仓
 		// tholdBidPlace = BEGIN_PLACE + long_place_diff_thold * netpos / maxPos
 		pas.entryZScoreBid = pas.beginZScore + longPlaceDiff*posRatio
 		// tholdAskPlace = BEGIN_PLACE - short_place_diff_thold * netpos / maxPos
 		pas.entryZScoreAsk = pas.beginZScore - shortPlaceDiff*posRatio
+		// tholdBidRemove = BEGIN_REMOVE + long_remove_diff_thold * netpos / maxPos
+		pas.exitZScoreBid = pas.exitZScore + longRemoveDiff*posRatio
+		// tholdAskRemove = BEGIN_REMOVE - short_remove_diff_thold * netpos / maxPos
+		pas.exitZScoreAsk = pas.exitZScore - shortRemoveDiff*posRatio
 	} else {
 		// C++: 空头持仓 (netpos < 0)
 		// tholdBidPlace = BEGIN_PLACE + short_place_diff_thold * netpos / maxPos
 		pas.entryZScoreBid = pas.beginZScore + shortPlaceDiff*posRatio
 		// tholdAskPlace = BEGIN_PLACE - long_place_diff_thold * netpos / maxPos
 		pas.entryZScoreAsk = pas.beginZScore - longPlaceDiff*posRatio
+		// tholdBidRemove = BEGIN_REMOVE + short_remove_diff_thold * netpos / maxPos
+		pas.exitZScoreBid = pas.exitZScore + shortRemoveDiff*posRatio
+		// tholdAskRemove = BEGIN_REMOVE - long_remove_diff_thold * netpos / maxPos
+		pas.exitZScoreAsk = pas.exitZScore - longRemoveDiff*posRatio
 	}
 }
 
@@ -1298,6 +1364,94 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 // tValue 允许外部信号调整价差均值，使策略更容易入场或出场
 func (pas *PairwiseArbStrategy) getAvgSpreadRatio() float64 {
 	return pas.spreadAnalyzer.GetStats().Mean + pas.tValue
+}
+
+// cancelOutOfRangeOrders 检查并撤销偏离均值的挂单
+// C++: PairwiseArbStrategy.cpp:205-228
+//
+// 撤单逻辑：
+// - 买单撤单: LongSpreadRatio1 > avgSpreadRatio - tholdBidRemove
+//   即: 买价差 > 均值 - 撤单阈值（价差太高，撤销买单）
+// - 卖单撤单: ShortSpreadRatio1 < avgSpreadRatio + tholdAskRemove
+//   即: 卖价差 < 均值 + 撤单阈值（价差太低，撤销卖单）
+func (pas *PairwiseArbStrategy) cancelOutOfRangeOrders() {
+	// 检查撤单阈值是否有效
+	if pas.exitZScoreBid == 0 && pas.exitZScoreAsk == 0 {
+		return
+	}
+
+	// 检查价格数据有效性
+	if pas.bid2 <= 0 || pas.ask2 <= 0 {
+		return
+	}
+
+	// 获取当前价差均值（含 tValue 调整）
+	avgSpreadRatio := pas.getAvgSpreadRatio()
+
+	// 遍历 Leg1 的买单，检查是否需要撤单
+	// C++: for (PriceMapIter iter = m_bidMap1.begin(); iter != m_bidMap1.end(); iter++)
+	if pas.leg1OrderMap != nil {
+		for _, order := range pas.leg1OrderMap.GetAllBidOrders() {
+			// C++: LongSpreadRatio1 = iter->second->m_price - m_secondinstru->bidPx[0]
+			longSpreadRatio := order.Price - pas.bid2
+
+			// C++: if (LongSpreadRatio1 > avgSpreadRatio - m_firstStrat->m_tholdBidRemove)
+			// 买价差太高，撤单
+			if longSpreadRatio > avgSpreadRatio-pas.exitZScoreBid {
+				// 只撤销已确认的订单
+				// C++: m_status == NEW_CONFIRM || m_status == MODIFY_CONFIRM || m_status == MODIFY_REJECT
+				log.Printf("[PairwiseArb:%s] Cancel bid order (spread too high): orderID=%s, price=%.2f, spreadRatio=%.4f > %.4f (avg=%.4f - remove=%.4f)",
+					pas.ID, order.OrderID, order.Price, longSpreadRatio, avgSpreadRatio-pas.exitZScoreBid, avgSpreadRatio, pas.exitZScoreBid)
+
+				// 发送撤单请求
+				pas.sendCancelOrder(order.OrderID, pas.symbol1)
+			}
+		}
+	}
+
+	// 遍历 Leg1 的卖单，检查是否需要撤单
+	// C++: for (PriceMapIter iter = m_askMap1.begin(); iter != m_askMap1.end(); iter++)
+	if pas.leg1OrderMap != nil {
+		for _, order := range pas.leg1OrderMap.GetAllAskOrders() {
+			// C++: ShortSpreadRatio1 = iter->second->m_price - m_secondinstru->askPx[0]
+			shortSpreadRatio := order.Price - pas.ask2
+
+			// C++: if (ShortSpreadRatio1 < avgSpreadRatio + m_firstStrat->m_tholdAskRemove)
+			// 卖价差太低，撤单
+			if shortSpreadRatio < avgSpreadRatio+pas.exitZScoreAsk {
+				log.Printf("[PairwiseArb:%s] Cancel ask order (spread too low): orderID=%s, price=%.2f, spreadRatio=%.4f < %.4f (avg=%.4f + remove=%.4f)",
+					pas.ID, order.OrderID, order.Price, shortSpreadRatio, avgSpreadRatio+pas.exitZScoreAsk, avgSpreadRatio, pas.exitZScoreAsk)
+
+				// 发送撤单请求
+				pas.sendCancelOrder(order.OrderID, pas.symbol1)
+			}
+		}
+	}
+}
+
+// sendCancelOrder 发送撤单请求
+// 注意：撤单信号通过 Signal 的 Metadata 标记为撤单
+func (pas *PairwiseArbStrategy) sendCancelOrder(orderID, symbol string) {
+	// 通过 Signal 字段标记为撤单信号
+	cancelSignal := &TradingSignal{
+		StrategyID: pas.ID,
+		Symbol:     symbol,
+		Side:       OrderSideBuy, // 占位符，实际会根据 metadata 中的 action=cancel 处理
+		Signal:     0,            // 撤单信号
+		Timestamp:  time.Now(),
+		Metadata: map[string]interface{}{
+			"action":          "cancel",
+			"cancel_order_id": orderID,
+		},
+	}
+
+	// 通过策略的 signals channel 发送（如果有订阅者）
+	// 注意：这个信号需要被 Trader 或 PluginProcessor 拦截并处理撤单
+	log.Printf("[PairwiseArb:%s] Cancel signal for order: %s (need handler to process)", pas.ID, orderID)
+
+	// 目前先记录日志，后续需要在 PluginProcessor 中添加撤单处理
+	// TODO: 实现撤单处理逻辑
+	_ = cancelSignal
 }
 
 // === 价格计算方法（C++: GetBidPrice_first 等）===
@@ -1701,6 +1855,7 @@ func (pas *PairwiseArbStrategy) calculatePendingNetpos() int64 {
 }
 
 // OnOrderUpdate handles order updates
+// C++: PairwiseArbStrategy::ORSCallBack
 func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	// CRITICAL: 检查订单是否属于本策略
 	// 修复 Bug: 防止策略接收到其他策略的订单回调
@@ -1712,50 +1867,117 @@ func (pas *PairwiseArbStrategy) OnOrderUpdate(update *orspb.OrderUpdate) {
 	pas.mu.Lock()
 	defer pas.mu.Unlock()
 
-	log.Printf("[PairwiseArb:%s] 🚨 OnOrderUpdate ENTRY: OrderID=%s, Status=%v, Symbol=%s, Side=%v, FilledQty=%d",
+	log.Printf("[PairwiseArb:%s] OnOrderUpdate: OrderID=%s, Status=%v, Symbol=%s, Side=%v, FilledQty=%d",
 		pas.ID, update.OrderId, update.Status, update.Symbol, update.Side, update.FilledQty)
 
 	if !pas.running {
-		log.Printf("[PairwiseArb:%s] ⚠️  Strategy not running, ignoring update", pas.ID)
+		log.Printf("[PairwiseArb:%s] Strategy not running, ignoring update", pas.ID)
 		return
 	}
 
 	// Update base strategy position (for overall PNL tracking)
-	log.Printf("[PairwiseArb:%s] 🚨 BEFORE UpdatePosition call, EstimatedPosition ptr=%p", pas.ID, pas.estimatedPosition)
 	pas.UpdatePosition(update)
-	log.Printf("[PairwiseArb:%s] 🚨 AFTER UpdatePosition call, EstimatedPosition=%+v", pas.ID, pas.estimatedPosition)
 
 	// 维护订单映射（多层挂单用）
 	pas.updateOrderMaps(update)
 
-	// Update leg-specific positions (similar to tbsrc: each leg has its own ExtraStrategy)
-	// 参考 tbsrc ExtraStrategy::TradeCallBack
-	if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
-		symbol := update.Symbol
-		qty := int64(update.FilledQty)
-		price := update.AvgPrice
+	symbol := update.Symbol
 
-		// Determine which leg this order belongs to
-		if symbol == pas.symbol1 {
+	// C++: 区分 Leg1 (被动单) 和 Leg2 (主动单) 处理逻辑
+	if symbol == pas.symbol1 {
+		// Leg1 订单处理
+		// C++: m_firstStrat->ORSCallBack(response);
+		if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
+			qty := int64(update.FilledQty)
+			price := update.AvgPrice
 			pas.updateLeg1Position(update.Side, qty, price)
-		} else if symbol == pas.symbol2 {
-			pas.updateLeg2Position(update.Side, qty, price)
+			// C++: m_agg_repeat = 1; (Leg1 成交时重置追单计数)
+			pas.aggRepeat = 1
+			log.Printf("[PairwiseArb:%s] Leg1 trade, reset aggRepeat=1", pas.ID)
 		}
+	} else if symbol == pas.symbol2 {
+		// Leg2 订单处理
+		// C++: HandleAggOrder(response, order, m_secondStrat);
+		pas.handleAggOrder(update)
+		// C++: m_secondStrat->ORSCallBack(response);
+		if update.Status == orspb.OrderStatus_FILLED && update.FilledQty > 0 {
+			qty := int64(update.FilledQty)
+			price := update.AvgPrice
+			pas.updateLeg2Position(update.Side, qty, price)
+			// C++: m_agg_repeat = 1; (Leg2 成交时也重置)
+			pas.aggRepeat = 1
+			log.Printf("[PairwiseArb:%s] Leg2 trade, reset aggRepeat=1", pas.ID)
+		}
+	}
 
-		// 成交后检查敞口，如果敞口为0则重置追单状态
+	// 成交后检查敞口，如果敞口为0则完全重置追单状态
+	if update.Status == orspb.OrderStatus_FILLED {
 		exposure := pas.calculateExposure()
 		if exposure == 0 {
 			sellAggOrder := int(pas.secondStrat.SellAggOrder)
 			buyAggOrder := int(pas.secondStrat.BuyAggOrder)
-			if pas.aggRepeat > 1 || sellAggOrder > 0 || buyAggOrder > 0 {
-				log.Printf("[PairwiseArb:%s] ✅ Exposure cleared, resetting aggressive order state (retry=%d, sellAgg=%d, buyAgg=%d)",
-					pas.ID, pas.aggRepeat-1, sellAggOrder, buyAggOrder)
+			if sellAggOrder > 0 || buyAggOrder > 0 {
+				log.Printf("[PairwiseArb:%s] Exposure cleared, resetting all aggressive state (sellAgg=%d, buyAgg=%d)",
+					pas.ID, sellAggOrder, buyAggOrder)
 			}
-			pas.aggRepeat = 1
 			pas.aggDirection = 0
-			pas.aggFailCount = 0   // 成功清除敞口，重置失败计数
-			pas.secondStrat.SellAggOrder = 0   // 重置卖追单计数（使用 secondStrat）
-			pas.secondStrat.BuyAggOrder = 0    // 重置买追单计数（使用 secondStrat）
+			pas.aggFailCount = 0
+			pas.secondStrat.SellAggOrder = 0
+			pas.secondStrat.BuyAggOrder = 0
+		}
+	}
+
+	// C++: if (m_Active) SendAggressiveOrder();
+	// 在订单回调后立即检查是否需要追单
+	if pas.ControlState.RunState == StrategyRunStateActive {
+		pas.sendAggressiveOrder()
+	}
+}
+
+// handleAggOrder 处理主动追单订单的状态更新
+// C++: PairwiseArbStrategy::HandleAggOrder
+//
+// 在以下情况下递减追单计数 (sellAggOrder/buyAggOrder):
+// - ORS_REJECT, BUSINESS_REJECT, SIM_REJECT, RMS_REJECT
+// - ORDERS_PER_DAY_LIMIT_REJECT, ORDER_ERROR
+// - CANCEL_ORDER_CONFIRM (撤单确认)
+// - TRADE_CONFIRM 且 openQty == filledQty (完全成交)
+func (pas *PairwiseArbStrategy) handleAggOrder(update *orspb.OrderUpdate) {
+	// 判断是否需要递减追单计数
+	shouldDecrement := false
+
+	switch update.Status {
+	case orspb.OrderStatus_REJECTED:
+		// C++: ORS_REJECT, BUSINESS_REJECT, SIM_REJECT, RMS_REJECT, ORDER_ERROR
+		shouldDecrement = true
+		log.Printf("[PairwiseArb:%s] Leg2 order rejected: %s", pas.ID, update.OrderId)
+
+	case orspb.OrderStatus_CANCELED:
+		// C++: CANCEL_ORDER_CONFIRM
+		shouldDecrement = true
+		log.Printf("[PairwiseArb:%s] Leg2 order canceled: %s", pas.ID, update.OrderId)
+
+	case orspb.OrderStatus_FILLED:
+		// C++: TRADE_CONFIRM && openQty == Quantity (完全成交)
+		// Go: FilledQty == Quantity 表示完全成交
+		if update.FilledQty == update.Quantity {
+			shouldDecrement = true
+			log.Printf("[PairwiseArb:%s] Leg2 order fully filled: %s", pas.ID, update.OrderId)
+		}
+	}
+
+	if shouldDecrement {
+		// C++: order->m_side == BUY ? strat->buyAggOrder-- : strat->sellAggOrder--;
+		if update.Side == orspb.OrderSide_BUY {
+			if pas.secondStrat.BuyAggOrder > 0 {
+				pas.secondStrat.BuyAggOrder--
+				log.Printf("[PairwiseArb:%s] Decremented buyAggOrder to %.0f", pas.ID, pas.secondStrat.BuyAggOrder)
+			}
+		} else {
+			if pas.secondStrat.SellAggOrder > 0 {
+				pas.secondStrat.SellAggOrder--
+				log.Printf("[PairwiseArb:%s] Decremented sellAggOrder to %.0f", pas.ID, pas.secondStrat.SellAggOrder)
+			}
 		}
 	}
 }
