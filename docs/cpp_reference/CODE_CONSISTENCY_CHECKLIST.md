@@ -174,6 +174,9 @@ void ExecutionStrategy::SetThresholds() {
 | 3 | avgPx 保存时使用 SMA 均值 | 中 | ✅ 已修复 | 现在保存 avgSpreadRatio_ori |
 | 4 | ytd2 初始化时未同步 NetPosAgg | 中 | ✅ 已修复 | 初始化时同步 |
 | 5 | setDynamicThresholds 使用 leg1Position 而非 NetPosPass | 中 | ✅ 已修复 | 改为使用 firstStrat.NetPosPass |
+| 6 | 追单计数处理缺失 (HandleAggOrder) | **高** | ✅ 已修复 | 添加 handleAggOrder() 递减计数 |
+| 7 | 撤单阈值未实现 (tholdBidRemove/AskRemove) | **高** | ✅ 已修复 | 添加撤单阈值计算和检查 |
+| 8 | AVG_SPREAD_AWAY 保护机制缺失 | **高** | ✅ 已修复 | 添加价差偏离检测和策略停止 |
 
 ---
 
