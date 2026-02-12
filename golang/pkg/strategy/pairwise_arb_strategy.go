@@ -633,6 +633,16 @@ func (pas *PairwiseArbStrategy) OnMarketData(md *mdpb.MarketDataUpdate) {
 	pas.spreadAnalyzer.CalculateSpread()
 	pas.spreadAnalyzer.UpdateAll(pas.lookbackPeriod)
 
+	// === EMA 更新 avgSpreadRatio_ori（C++: PairwiseArbStrategy.cpp:519-522）===
+	// 收到第一腿行情时，使用 EMA 公式更新价差均值
+	// C++: avgSpreadRatio_ori = (1 - ALPHA) * avgSpreadRatio_ori + ALPHA * currSpreadRatio;
+	// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue;
+	if md.Symbol == pas.symbol1 && pas.tholdFirst.Alpha > 0 {
+		currentSpread := pas.spreadAnalyzer.GetStats().CurrentSpread
+		alpha := pas.tholdFirst.Alpha
+		pas.avgSpreadRatio_ori = (1-alpha)*pas.avgSpreadRatio_ori + alpha*currentSpread
+	}
+
 	// Update PNL (配对策略专用计算：分别计算两腿)
 	pas.updatePairwisePNL()
 
@@ -740,14 +750,24 @@ func (pas *PairwiseArbStrategy) generateSignals(md *mdpb.MarketDataUpdate) {
 		return
 	}
 
-	// 应用外部 tValue 调整
+	// === 计算 Z-Score（C++: PairwiseArbStrategy.cpp:205-206）===
+	// C++: currSpreadRatio = mid1 - mid2 * PRICE_RATIO;
+	// C++: expectedRatio = (currSpreadRatio - avgSpreadRatio) / m_stdevSpreadRatio;
 	// C++: avgSpreadRatio = avgSpreadRatio_ori + tValue
-	// 调整后的 Z-Score = (spread - (mean + tValue)) / std = zscore_ori - tValue/std
-	adjustedZScore := spreadStats.ZScore
-	if pas.tValue != 0 && spreadStats.Std > 1e-10 {
-		// tValue > 0: zscore 降低（均值升高，当前spread相对更低）
-		// tValue < 0: zscore 升高（均值降低，当前spread相对更高）
-		adjustedZScore = (spreadStats.CurrentSpread - (spreadStats.Mean + pas.tValue)) / spreadStats.Std
+	//
+	// 如果启用了 EMA（alpha > 0），使用 avgSpreadRatio_ori 作为均值
+	// 否则回退到 SpreadAnalyzer 的 SMA 均值
+	var adjustedZScore float64
+	if pas.tholdFirst.Alpha > 0 && pas.avgSpreadRatio_ori != 0 {
+		// 使用 EMA 均值（与 C++ 一致）
+		avgSpreadRatio := pas.avgSpreadRatio_ori + pas.tValue
+		adjustedZScore = (spreadStats.CurrentSpread - avgSpreadRatio) / spreadStats.Std
+	} else {
+		// 回退到 SMA 均值（兼容旧配置）
+		adjustedZScore = spreadStats.ZScore
+		if pas.tValue != 0 && spreadStats.Std > 1e-10 {
+			adjustedZScore = (spreadStats.CurrentSpread - (spreadStats.Mean + pas.tValue)) / spreadStats.Std
+		}
 	}
 
 	// Entry signals using dynamic thresholds
