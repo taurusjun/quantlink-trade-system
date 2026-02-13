@@ -512,12 +512,29 @@ func (es *ExecutionStrategy) ProcessTrade(orderID uint32, filledQty int32, price
 		}
 	}
 
+	// C++: ExecutionStrategy.cpp:2067-2091
+	// 当该腿完全平仓时，结算 realized P&L
+	// C++: m_realisedPNL = (m_sellTotalValue - m_buyTotalValue) * m_instru->m_priceMultiplier
+	if es.NetPos == 0 {
+		multiplier := GetContractMultiplier(es.Instru.Symbol)
+		es.RealisedPNL = (es.SellTotalValue - es.BuyTotalValue) * multiplier
+
+		// C++: 平仓后重置当前持仓变量（保留 TotalValue/TotalQty 运行总量）
+		es.BuyValue = 0
+		es.BuyQty = 0
+		es.BuyPrice = 0
+		es.SellValue = 0
+		es.SellQty = 0
+		es.SellPrice = 0
+		es.TransValue = 0
+	}
+
 	ordTypeStr := "STANDARD"
 	if ordType == OrderHitTypeCross {
 		ordTypeStr = "CROSS"
 	}
-	log.Printf("[ExecutionStrategy:%d] Trade processed: side=%v, qty=%d@%.2f, netPos=%d (pass=%d, agg=%d), ordType=%s",
-		es.StrategyID, side, originalFilledQty, price, es.NetPos, es.NetPosPass, es.NetPosAgg, ordTypeStr)
+	log.Printf("[ExecutionStrategy:%d] Trade processed: side=%v, qty=%d@%.2f, netPos=%d (pass=%d, agg=%d), ordType=%s, realisedPNL=%.2f",
+		es.StrategyID, side, originalFilledQty, price, es.NetPos, es.NetPosPass, es.NetPosAgg, ordTypeStr, es.RealisedPNL)
 }
 
 // ProcessNewConfirm 处理新订单确认

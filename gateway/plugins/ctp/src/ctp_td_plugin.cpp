@@ -1148,12 +1148,20 @@ void CTPTDPlugin::ConvertPosition(CThostFtdcInvestorPositionField* ctp_pos, Posi
     pos_info.yesterday_volume = ctp_pos->YdPosition;
 
     // 持仓均价
-    // 注意：使用 OpenCost（开仓成本）而不是 PositionCost（持仓成本）
+    // 注意：优先使用 OpenCost（开仓成本），回退到 PositionCost（持仓成本）
     // CTP 中 PositionCost 对于昨仓使用昨日结算价，而非实际开仓价格
     // OpenCost 始终是实际开仓价格 × 合约乘数 × 数量
+    // 但 CTP 今仓记录的 OpenCost 可能为 0（CTP API 已知行为），此时回退到 PositionCost
     // 与 C++ 原代码不同：C++ 只计算当天盈亏，Go 需要完整的浮动盈亏
     if (ctp_pos->Position > 0) {
-        pos_info.avg_price = ctp_pos->OpenCost / ctp_pos->Position;
+        if (ctp_pos->OpenCost > 0) {
+            pos_info.avg_price = ctp_pos->OpenCost / ctp_pos->Position;
+        } else if (ctp_pos->PositionCost > 0) {
+            // OpenCost=0 时回退到 PositionCost（昨仓用结算价，但总比 0 好）
+            pos_info.avg_price = ctp_pos->PositionCost / ctp_pos->Position;
+        } else {
+            pos_info.avg_price = 0.0;
+        }
     } else {
         pos_info.avg_price = 0.0;
     }
@@ -1301,21 +1309,32 @@ void CTPTDPlugin::UpdatePositionFromCTP() {
         pos.exchange = pos_info.exchange;
 
         if (pos_info.direction == OrderDirection::BUY) {
-            // 多头持仓 - 累加
+            // 多头持仓 - 累加，加权平均合并今仓和昨仓成本价
+            uint32_t old_vol = pos.long_position;
+            double old_avg = pos.long_avg_price;
             pos.long_position += pos_info.volume;
             pos.long_today_position += pos_info.today_volume;
             pos.long_yesterday_position += pos_info.yesterday_volume;
-            // 均价取最后一条的值（或者应该加权平均，但这里简化处理）
-            if (pos_info.avg_price > 0) {
-                pos.long_avg_price = pos_info.avg_price;
+            if (pos_info.avg_price > 0 && pos_info.volume > 0) {
+                if (old_vol > 0 && old_avg > 0) {
+                    pos.long_avg_price = (old_avg * old_vol + pos_info.avg_price * pos_info.volume) / pos.long_position;
+                } else {
+                    pos.long_avg_price = pos_info.avg_price;
+                }
             }
         } else {
-            // 空头持仓 - 累加
+            // 空头持仓 - 累加，加权平均合并今仓和昨仓成本价
+            uint32_t old_vol = pos.short_position;
+            double old_avg = pos.short_avg_price;
             pos.short_position += pos_info.volume;
             pos.short_today_position += pos_info.today_volume;
             pos.short_yesterday_position += pos_info.yesterday_volume;
-            if (pos_info.avg_price > 0) {
-                pos.short_avg_price = pos_info.avg_price;
+            if (pos_info.avg_price > 0 && pos_info.volume > 0) {
+                if (old_vol > 0 && old_avg > 0) {
+                    pos.short_avg_price = (old_avg * old_vol + pos_info.avg_price * pos_info.volume) / pos.short_position;
+                } else {
+                    pos.short_avg_price = pos_info.avg_price;
+                }
             }
         }
     }

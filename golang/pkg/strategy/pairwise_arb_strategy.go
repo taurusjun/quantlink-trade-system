@@ -45,7 +45,7 @@ type PairwiseArbStrategy struct {
 	orderSize         int64   // Size per leg (default: 10)
 	maxPositionSize   int64   // Maximum position per leg (default: 50)
 	minCorrelation    float64 // Minimum correlation to trade (default: 0.7)
-	hedgeRatio        float64 // Current hedge ratio (calculated dynamically)
+	hedgeRatio        float64 // 对冲比率，当前固定为 1.0（同品种跨期套利）
 	spreadType        string  // "ratio" or "difference" (default: "difference")
 	useCointegration  bool    // Use cointegration instead of correlation (default: false)
 
@@ -885,8 +885,14 @@ func (pas *PairwiseArbStrategy) generateSpreadSignals(md *mdpb.MarketDataUpdate,
 		signal2Side = OrderSideBuy
 	}
 
-	// Calculate hedge quantity using current hedge ratio
-	hedgeQty := int64(math.Round(float64(qty) * spreadStats.HedgeRatio))
+	// C++: SendAggressiveOrder() 中对冲数量 = m_firstStrat->m_netpos_pass + m_secondStrat->m_netpos_agg + pending
+	// C++ 原代码始终使用 1:1 对冲（同品种跨期套利，合约乘数相同、价格接近）
+	// 不使用 SpreadAnalyzer 的动态 hedgeRatio（回归 beta），避免：
+	//   1. 回归不稳定导致两腿数量漂移
+	//   2. 整数取整累积误差
+	//   3. 破坏市场中性（套利策略不应有方向性暴露）
+	// 如需跨品种套利，可在配置中增加 hedge_ratio_mode: dynamic
+	hedgeQty := qty
 
 	// 计算leg1的订单价格（使用bid/ask和滑点）
 	orderPrice1 := GetOrderPrice(signal1Side, pas.bid1, pas.ask1, pas.symbol1,
@@ -1139,8 +1145,9 @@ func (pas *PairwiseArbStrategy) generateLevelSignal(direction string, level int,
 		signal2Side = OrderSideBuy
 	}
 
-	// Calculate hedge quantity using current hedge ratio
-	hedgeQty := int64(math.Round(float64(qty) * stats.HedgeRatio))
+	// C++: 同品种跨期套利固定 1:1 对冲，不使用动态 hedgeRatio
+	// 参考: tbsrc/Strategies/PairwiseArbStrategy.cpp SendAggressiveOrder()
+	hedgeQty := qty
 
 	// Generate signal for leg 1 (被动单)
 	signal1 := &TradingSignal{
@@ -2842,6 +2849,11 @@ func (pas *PairwiseArbStrategy) updatePairwisePNL() {
 	// 更新 PNL
 	// tbsrc: 配对策略的总 P&L = 两条腿的 P&L 相加
 	pas.pnl.UnrealizedPnL = unrealizedPnL
+	// C++: arbi_realisedPNL = (m_firstStrat->m_realisedPNL - m_firstStrat->m_transTotalValue)
+	//                       + (m_secondStrat->m_realisedPNL - m_secondStrat->m_transTotalValue)
+	// 参考: tbsrc/Strategies/PairwiseArbStrategy.cpp:180
+	pas.pnl.RealizedPnL = (pas.firstStrat.RealisedPNL - pas.firstStrat.TransTotalValue) +
+		(pas.secondStrat.RealisedPNL - pas.secondStrat.TransTotalValue)
 	pas.pnl.TotalPnL = pas.pnl.RealizedPnL + pas.pnl.UnrealizedPnL
 	pas.pnl.NetPnL = pas.pnl.TotalPnL - pas.pnl.TradingFees
 	pas.pnl.Timestamp = time.Now()
@@ -3006,8 +3018,7 @@ func (pas *PairwiseArbStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 				if closedQty > pas.estimatedPosition.SellQty {
 					closedQty = pas.estimatedPosition.SellQty
 				}
-				realizedPnL := (pas.estimatedPosition.SellAvgPrice - price) * float64(closedQty)
-				pas.pnl.RealizedPnL += realizedPnL
+				// realized P&L 由按腿的 ExecutionStrategy.ProcessTrade() 计算，此处不做跨合约计算
 				pas.estimatedPosition.SellQty -= closedQty
 				pas.estimatedPosition.NetQty += closedQty
 				qty -= closedQty
@@ -3032,8 +3043,7 @@ func (pas *PairwiseArbStrategy) UpdatePosition(update *orspb.OrderUpdate) {
 				if closedQty > pas.estimatedPosition.BuyQty {
 					closedQty = pas.estimatedPosition.BuyQty
 				}
-				realizedPnL := (price - pas.estimatedPosition.BuyAvgPrice) * float64(closedQty)
-				pas.pnl.RealizedPnL += realizedPnL
+				// realized P&L 由按腿的 ExecutionStrategy.ProcessTrade() 计算，此处不做跨合约计算
 				pas.estimatedPosition.BuyQty -= closedQty
 				pas.estimatedPosition.NetQty -= closedQty
 				qty -= closedQty
