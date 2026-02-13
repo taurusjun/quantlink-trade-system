@@ -322,8 +322,60 @@ if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
     message(STATUS "Counter Bridge target added (MWMR mode):")
     message(STATUS "  - Reads RequestMsg from SysV MWMR queue (key=0x0F20)")
     message(STATUS "  - Routes to broker plugins: ${COUNTER_BRIDGE_PLUGINS_STR}")
-    message(STATUS "  - Writes ResponseMsg to SysV MWMR queue (key=0x1308)")
+    message(STATUS "  - Writes ResponseMsg to SysV MWMR queue (key=0x3001)")
     message(STATUS "  - Binary-compatible with hftbase/tbsrc-golang")
 else()
     message(STATUS "Counter Bridge: Skipped (requires at least one plugin)")
 endif()
+
+# ==================== MD SHM Feeder (市场数据 SysV MWMR 写入器) ====================
+# 将CTP/模拟行情写入 SysV MWMR 共享内存，供 Go trader 直接读取
+
+# Simulator mode: always available (no dependencies beyond Threads)
+add_executable(md_shm_feeder
+    src/md_shm_feeder.cpp
+)
+
+target_include_directories(md_shm_feeder PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(md_shm_feeder
+    Threads::Threads
+)
+
+# CTP mode: requires CTP framework and yaml-cpp
+if(APPLE AND HAS_YAML_CPP AND BUILD_CTP_PLUGIN)
+    set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
+    if(EXISTS "${CTP_FRAMEWORK_DIR}/thostmduserapi_se.framework")
+        target_compile_definitions(md_shm_feeder PRIVATE ENABLE_CTP_MD)
+        target_include_directories(md_shm_feeder PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CTP_FRAMEWORK_DIR}/include
+            /opt/homebrew/include
+        )
+        target_sources(md_shm_feeder PRIVATE
+            src/ctp_config.cpp
+        )
+        target_link_libraries(md_shm_feeder
+            ${CTP_FRAMEWORK_DIR}/thostmduserapi_se.framework/Versions/A/thostmduserapi_se
+            /opt/homebrew/lib/libyaml-cpp.dylib
+        )
+        set_target_properties(md_shm_feeder PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "${CTP_FRAMEWORK_DIR}"
+        )
+        message(STATUS "MD SHM Feeder: Built with CTP + Simulator modes")
+    else()
+        message(STATUS "MD SHM Feeder: Built with Simulator mode only (CTP framework not found)")
+    endif()
+else()
+    message(STATUS "MD SHM Feeder: Built with Simulator mode only")
+endif()
+
+message(STATUS "MD SHM Feeder target added:")
+message(STATUS "  - Writes MarketUpdateNew to SysV MWMR queue (key=0x1001)")
+message(STATUS "  - Simulator mode: md_shm_feeder simulator:ag2506,ag2512")
+message(STATUS "  - CTP mode: md_shm_feeder ctp:config.yaml")
+
+install(TARGETS md_shm_feeder DESTINATION bin)
