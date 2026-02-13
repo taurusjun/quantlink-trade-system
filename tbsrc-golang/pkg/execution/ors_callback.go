@@ -232,9 +232,17 @@ func (om *OrderManager) processTrade(resp *shm.ResponseMsg, ord *types.OrderStat
 		(om.State.BuyExchContractTx*om.State.BuyQty + om.State.SellExchContractTx*om.State.SellQty)
 
 	// C++: netpos == 0 时结算
+	// 参考: ExecutionStrategy.cpp:2052-2072
 	if om.State.Netpos == 0 {
 		// C++: m_realisedPNL = (sellTotalValue - buyTotalValue) * priceMultiplier
 		om.State.RealisedPNL = (om.State.SellTotalValue - om.State.BuyTotalValue) * inst.PriceMultiplier
+
+		// C++: 重新计算 session 级手续费 transTotalValue
+		// 参考: ExecutionStrategy.cpp:2067-2072
+		om.State.TransTotalValue = om.State.BuyExchTx*om.State.BuyTotalValue*inst.PriceMultiplier +
+			om.State.SellExchTx*om.State.SellTotalValue*inst.PriceMultiplier +
+			om.State.BuyExchContractTx*om.State.BuyTotalQty +
+			om.State.SellExchContractTx*om.State.SellTotalQty
 
 		// C++: 重置当前腿
 		om.State.BuyValue = 0

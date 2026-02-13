@@ -64,13 +64,12 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 
 	// C++: Phase 7 — 时间/亏损/止损检查（每腿独立）
 	// 参考: ExecutionStrategy.cpp:2150-2186, 2279-2339
+	// 传递指针，因为止损触发时 C++ 会翻倍阈值防止 auto-resume 后立即重新触发
 	currentTimeNs := pas.Leg1.State.ExchTS
 	maxLoss := pas.Thold1.MaxLoss
-	upnlLoss := pas.Thold1.UPNLLoss
-	stopLoss := pas.Thold1.StopLoss
 
-	pas.Leg1.State.CheckSquareoff(currentTimeNs, maxLoss, upnlLoss, stopLoss)
-	pas.Leg2.State.CheckSquareoff(currentTimeNs, 0, upnlLoss, stopLoss) // maxLoss handled at cross-leg level below
+	pas.Leg1.State.CheckSquareoff(currentTimeNs, maxLoss, &pas.Thold1.UPNLLoss, &pas.Thold1.StopLoss)
+	pas.Leg2.State.CheckSquareoff(currentTimeNs, 0, &pas.Thold2.UPNLLoss, &pas.Thold2.StopLoss)
 
 	// C++: 检查跨腿 maxLoss
 	// 参考: PairwiseArbStrategy.cpp:487-492

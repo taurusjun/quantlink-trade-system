@@ -49,12 +49,18 @@ func (om *OrderManager) SendNewOrder(side types.TransactionType, price float64, 
 		if _, exists := om.BidMap[price]; exists {
 			return 0, false
 		}
+		// C++: 取消同价反向挂单，防止自交叉
+		// 参考: ExecutionStrategy.cpp:1347
+		om.SendCancelOrderByPrice(inst, price, types.Sell)
 		om.State.BuyOpenOrders++
 		om.State.BuyOpenQty += float64(qty)
 	} else {
 		if _, exists := om.AskMap[price]; exists {
 			return 0, false
 		}
+		// C++: 取消同价反向挂单，防止自交叉
+		// 参考: ExecutionStrategy.cpp:1477
+		om.SendCancelOrderByPrice(inst, price, types.Buy)
 		om.State.SellOpenOrders++
 		om.State.SellOpenQty += float64(qty)
 	}
@@ -163,12 +169,34 @@ func (om *OrderManager) SendModifyOrder(inst *instrument.Instrument, orderID uin
 
 // SendCancelOrderByID 按 orderID 撤单
 // 参考: tbsrc/Strategies/ExtraStrategy.cpp:401-485
+// C++: CROSS 订单默认不允许撤销（保护激进对冲单）
+// 参考: ExecutionStrategy.cpp:1760-1763
 func (om *OrderManager) SendCancelOrderByID(inst *instrument.Instrument, orderID uint32) bool {
 	ord, ok := om.OrdMap[orderID]
 	if !ok {
 		return false
 	}
 
+	// C++: CROSS 订单保护 — 不允许通过常规路径撤销
+	// 参考: ExecutionStrategy.cpp:1760-1763
+	if ord.OrdType == types.HitCross {
+		return false
+	}
+
+	return om.sendCancelOrderInternal(inst, orderID, ord)
+}
+
+// SendCancelOrderByIDForce 强制撤单，忽略 CROSS 保护
+// 用于 PairwiseArbStrategy.cancelCrossOrders 等需要主动撤销 CROSS 订单的场景
+func (om *OrderManager) SendCancelOrderByIDForce(inst *instrument.Instrument, orderID uint32) bool {
+	ord, ok := om.OrdMap[orderID]
+	if !ok {
+		return false
+	}
+	return om.sendCancelOrderInternal(inst, orderID, ord)
+}
+
+func (om *OrderManager) sendCancelOrderInternal(inst *instrument.Instrument, orderID uint32, ord *types.OrderStats) bool {
 	// C++: only cancel if in confirmed/modify states
 	if ord.Status != types.StatusNewConfirm &&
 		ord.Status != types.StatusModifyConfirm &&
@@ -186,7 +214,7 @@ func (om *OrderManager) SendCancelOrderByID(inst *instrument.Instrument, orderID
 	return true
 }
 
-// SendCancelOrderByPrice 按价格和方向撤单
+// SendCancelOrderByPrice 按价格和方向撤单（忽略 CROSS 保护，因为是按价格查找的）
 // 参考: tbsrc/Strategies/ExtraStrategy.cpp:375-399
 func (om *OrderManager) SendCancelOrderByPrice(inst *instrument.Instrument, price float64, side types.TransactionType) bool {
 	var ord *types.OrderStats
@@ -198,7 +226,7 @@ func (om *OrderManager) SendCancelOrderByPrice(inst *instrument.Instrument, pric
 	if ord == nil {
 		return false
 	}
-	return om.SendCancelOrderByID(inst, ord.OrderID)
+	return om.sendCancelOrderInternal(inst, ord.OrderID, ord)
 }
 
 // RemoveOrder 从所有 map 中移除订单

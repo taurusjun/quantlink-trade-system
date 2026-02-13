@@ -156,10 +156,11 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 
 // cancelCrossOrders 撤销一条腿上所有 CROSS/MATCH 订单
 // 参考: PairwiseArbStrategy.cpp:188-203
+// 使用 SendCancelOrderByIDForce 绕过 CROSS 保护（这里是主动撤销 CROSS 订单的场景）
 func (pas *PairwiseArbStrategy) cancelCrossOrders(leg *execution.LegManager) {
 	for _, ord := range leg.Orders.OrdMap {
 		if ord.OrdType == types.HitCross || ord.OrdType == types.HitMatch {
-			leg.Orders.SendCancelOrderByID(leg.Inst, ord.OrderID)
+			leg.Orders.SendCancelOrderByIDForce(leg.Inst, ord.OrderID)
 		}
 	}
 }

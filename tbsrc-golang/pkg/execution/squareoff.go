@@ -15,7 +15,11 @@ import (
 //   阶段 2: 检查标准退出条件（时间/亏损/订单数/成交量）→ m_onExit = true
 //   阶段 3: UPNL_LOSS / STOP_LOSS 检查
 //   阶段 4: Auto-resume（15 分钟冷却后恢复）
-func (s *ExecutionState) CheckSquareoff(currentTimeNs uint64, maxLoss, upnlLoss, stopLoss float64) {
+// 参数说明：
+//   maxLoss — 最大亏损阈值（0 表示不检查）
+//   upnlLoss — 未实现亏损阈值指针（触发时翻倍，nil 表示不检查）
+//   stopLoss — 回撤止损阈值指针（触发时翻倍，nil 表示不检查）
+func (s *ExecutionState) CheckSquareoff(currentTimeNs uint64, maxLoss float64, upnlLoss, stopLoss *float64) {
 	// C++: Phase 1 — aggressive flat time
 	if s.EndTimeAggEpoch > 0 && currentTimeNs >= s.EndTimeAggEpoch && !s.AggFlat {
 		s.AggFlat = true
@@ -88,8 +92,11 @@ func (s *ExecutionState) CheckSquareoff(currentTimeNs uint64, maxLoss, upnlLoss,
 // C++ 逻辑:
 //   1. unrealisedPNL < -UPNL_LOSS → trigger flat + onStopLoss
 //   2. drawdown < -STOP_LOSS → trigger flat + onStopLoss
-//   3. onStopLoss 时 thresholds doubled（允许更宽的价差范围平仓）
-func (s *ExecutionState) checkStopLoss(currentTimeNs uint64, upnlLoss, stopLoss float64) {
+//   3. 触发时将阈值翻倍，防止 auto-resume 后立即重新触发
+//
+// 参数使用指针，因为触发时 C++ 会翻倍阈值 (m_thold->UPNL_LOSS += m_thold->UPNL_LOSS)
+// 参考: ExecutionStrategy.cpp:2291-2298
+func (s *ExecutionState) checkStopLoss(currentTimeNs uint64, upnlLoss, stopLoss *float64) {
 	if s.Netpos == 0 {
 		return // 无持仓，无需检查
 	}
@@ -98,13 +105,13 @@ func (s *ExecutionState) checkStopLoss(currentTimeNs uint64, upnlLoss, stopLoss 
 	reason := ""
 
 	// C++: UPNL_LOSS — 未实现亏损限制
-	if upnlLoss > 0 && s.UnrealisedPNL < -upnlLoss {
+	if upnlLoss != nil && *upnlLoss > 0 && s.UnrealisedPNL < -*upnlLoss {
 		triggered = true
 		reason = "upnl_loss"
 	}
 
 	// C++: STOP_LOSS — 回撤限制
-	if stopLoss > 0 && s.Drawdown < -stopLoss {
+	if stopLoss != nil && *stopLoss > 0 && s.Drawdown < -*stopLoss {
 		triggered = true
 		reason = "stop_loss"
 	}
@@ -114,6 +121,16 @@ func (s *ExecutionState) checkStopLoss(currentTimeNs uint64, upnlLoss, stopLoss 
 		s.OnCancel = true
 		s.OnStopLoss = true
 		s.StopLossTS = currentTimeNs
+
+		// C++: 阈值翻倍，防止 auto-resume 后立即重新触发
+		// 参考: ExecutionStrategy.cpp:2291-2298
+		if upnlLoss != nil {
+			*upnlLoss += *upnlLoss
+		}
+		if stopLoss != nil {
+			*stopLoss += *stopLoss
+		}
+
 		log.Printf("[Squareoff] stop loss triggered: reason=%s upnl=%.2f drawdown=%.2f",
 			reason, s.UnrealisedPNL, s.Drawdown)
 	}

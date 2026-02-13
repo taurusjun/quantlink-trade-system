@@ -292,12 +292,12 @@ func TestCheckSquareoff_Time(t *testing.T) {
 		EndTimeEpoch: 1000000,
 	}
 
-	s.CheckSquareoff(999999, 0, 0, 0)
+	s.CheckSquareoff(999999, 0, nil, nil)
 	if s.OnExit {
 		t.Error("should not exit before EndTimeEpoch")
 	}
 
-	s.CheckSquareoff(1000001, 0, 0, 0)
+	s.CheckSquareoff(1000001, 0, nil, nil)
 	if !s.OnExit {
 		t.Error("should exit after EndTimeEpoch")
 	}
@@ -314,7 +314,7 @@ func TestCheckSquareoff_AggFlat(t *testing.T) {
 		EndTimeAggEpoch: 500000,
 	}
 
-	s.CheckSquareoff(500001, 0, 0, 0)
+	s.CheckSquareoff(500001, 0, nil, nil)
 	if !s.AggFlat {
 		t.Error("AggFlat should be true after EndTimeAggEpoch")
 	}
@@ -329,19 +329,19 @@ func TestCheckSquareoff_MaxLoss(t *testing.T) {
 	}
 
 	// maxLoss=0 → no trigger
-	s.CheckSquareoff(100, 0, 0, 0)
+	s.CheckSquareoff(100, 0, nil, nil)
 	if s.OnExit {
 		t.Error("should not exit when maxLoss=0")
 	}
 
 	// maxLoss=2000, netPNL=-1500 → no trigger
-	s.CheckSquareoff(100, 2000, 0, 0)
+	s.CheckSquareoff(100, 2000, nil, nil)
 	if s.OnExit {
 		t.Error("should not exit when loss < maxLoss")
 	}
 
 	// maxLoss=1000, netPNL=-1500 → trigger
-	s.CheckSquareoff(100, 1000, 0, 0)
+	s.CheckSquareoff(100, 1000, nil, nil)
 	if !s.OnExit {
 		t.Error("should exit when loss > maxLoss")
 	}
@@ -356,13 +356,13 @@ func TestCheckSquareoff_MaxOrders(t *testing.T) {
 		OrderCount:    99,
 	}
 
-	s.CheckSquareoff(100, 0, 0, 0)
+	s.CheckSquareoff(100, 0, nil, nil)
 	if s.OnExit {
 		t.Error("should not exit when orderCount < maxOrderCount")
 	}
 
 	s.OrderCount = 100
-	s.CheckSquareoff(100, 0, 0, 0)
+	s.CheckSquareoff(100, 0, nil, nil)
 	if !s.OnExit {
 		t.Error("should exit when orderCount >= maxOrderCount")
 	}
@@ -375,13 +375,15 @@ func TestCheckSquareoff_UPNLLoss(t *testing.T) {
 	}
 
 	// upnlLoss=1000 → no trigger
-	s.CheckSquareoff(100, 0, 1000, 0)
+	upnl := 1000.0
+	s.CheckSquareoff(100, 0, &upnl, nil)
 	if s.OnStopLoss {
 		t.Error("should not trigger stop loss when upnl > -upnlLoss")
 	}
 
 	// upnlLoss=500, unrealisedPNL=-800 → trigger
-	s.CheckSquareoff(100, 0, 500, 0)
+	upnl = 500.0
+	s.CheckSquareoff(100, 0, &upnl, nil)
 	if !s.OnStopLoss {
 		t.Error("should trigger stop loss when upnl < -upnlLoss")
 	}
@@ -390,6 +392,10 @@ func TestCheckSquareoff_UPNLLoss(t *testing.T) {
 	}
 	if s.StopLossTS != 100 {
 		t.Errorf("StopLossTS = %d, want 100", s.StopLossTS)
+	}
+	// C++: threshold should be doubled after trigger
+	if upnl != 1000.0 {
+		t.Errorf("upnlLoss = %f, want 1000 (doubled from 500)", upnl)
 	}
 }
 
@@ -400,15 +406,21 @@ func TestCheckSquareoff_StopLoss(t *testing.T) {
 	}
 
 	// stopLoss=1000 → no trigger
-	s.CheckSquareoff(100, 0, 0, 1000)
+	sl := 1000.0
+	s.CheckSquareoff(100, 0, nil, &sl)
 	if s.OnStopLoss {
 		t.Error("should not trigger when drawdown > -stopLoss")
 	}
 
 	// stopLoss=500, drawdown=-600 → trigger
-	s.CheckSquareoff(100, 0, 0, 500)
+	sl = 500.0
+	s.CheckSquareoff(100, 0, nil, &sl)
 	if !s.OnStopLoss {
 		t.Error("should trigger stop loss when drawdown < -stopLoss")
+	}
+	// C++: threshold should be doubled
+	if sl != 1000.0 {
+		t.Errorf("stopLoss = %f, want 1000 (doubled from 500)", sl)
 	}
 }
 
@@ -423,13 +435,13 @@ func TestCheckSquareoff_AutoResume(t *testing.T) {
 	}
 
 	// Before 15-min cool-off (900 seconds = 900_000_000_000 ns)
-	s.CheckSquareoff(500_000_000_000, 0, 0, 0) // 500 seconds
+	s.CheckSquareoff(500_000_000_000, 0, nil, nil) // 500 seconds
 	if !s.OnStopLoss {
 		t.Error("should still be on stop loss before 15-min cool-off")
 	}
 
 	// After 15-min cool-off
-	s.CheckSquareoff(1_000_000_000_000, 0, 0, 0) // 1000 seconds
+	s.CheckSquareoff(1_000_000_000_000, 0, nil, nil) // 1000 seconds
 	if s.OnStopLoss {
 		t.Error("should auto-resume after 15-min cool-off")
 	}
