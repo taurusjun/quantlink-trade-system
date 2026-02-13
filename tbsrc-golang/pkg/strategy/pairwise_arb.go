@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"tbsrc-golang/pkg/client"
+	"tbsrc-golang/pkg/config"
 	"tbsrc-golang/pkg/execution"
 	"tbsrc-golang/pkg/instrument"
 	"tbsrc-golang/pkg/shm"
@@ -52,6 +53,9 @@ type PairwiseArbStrategy struct {
 
 	// 监控
 	LastMonitorTS uint64
+
+	// daily_init 文件路径（用于 HandleSquareoff 时保存状态）
+	DailyInitPath string
 }
 
 // NewPairwiseArbStrategy 创建配对套利策略
@@ -150,6 +154,21 @@ func (pas *PairwiseArbStrategy) HandleSquareoff() {
 
 	// C++: deactivate
 	pas.SetActive(false)
+
+	// 保存 daily_init 状态（参考 SaveMatrix2）
+	if pas.DailyInitPath != "" {
+		saveDaily := &config.DailyInit{
+			AvgSpreadOri: pas.Spread.AvgSpreadOri,
+			NetposYtd1:   pas.Leg1.State.NetposPassYtd,
+			Netpos2day1:  pas.Leg1.State.NetposPass - pas.Leg1.State.NetposPassYtd,
+			NetposAgg2:   pas.Leg2.State.NetposAgg,
+		}
+		if err := config.SaveDailyInit(pas.DailyInitPath, saveDaily); err != nil {
+			log.Printf("[PairwiseArb] daily_init 保存失败: %v", err)
+		} else {
+			log.Printf("[PairwiseArb] daily_init 已保存: %s", pas.DailyInitPath)
+		}
+	}
 }
 
 // HandleSquareON 恢复策略

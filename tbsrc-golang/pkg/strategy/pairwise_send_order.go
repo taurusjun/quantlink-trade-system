@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"time"
+
 	"tbsrc-golang/pkg/execution"
 	"tbsrc-golang/pkg/instrument"
 	"tbsrc-golang/pkg/shm"
@@ -24,9 +26,11 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 	thold1 := pas.Thold1
 
 	// ---- Phase 1: 动态阈值 ----
-	// C++: SetThresholds()
-	// 参考: PairwiseArbStrategy.cpp:148-150
-	pas.Leg1.State.SetThresholds(inst1, pas.Thold1)
+	// C++: PairwiseArbStrategy::SetThresholds()
+	// 参考: PairwiseArbStrategy.cpp:902-947
+	// 注意：PairwiseArb 有自己的 SetThresholds，使用 NetposPass（被动持仓）
+	// 而非通用的 ExecutionStrategy::SetThresholds 使用 Netpos（总持仓）
+	pas.setThresholds()
 
 	state1 := pas.Leg1.State
 	bidPlace := state1.TholdBidPlace
@@ -85,6 +89,7 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 			askPrice, ordType = pas.GetAskPrice(askPrice, ordType, level)
 
 			// C++: 检查持仓限制
+			// C++: if (m_netpos_pass * -1 < m_tholdAskMaxPos)
 			netposPass := pas.Leg1.State.NetposPass
 			tholdAskMaxPos := state1.TholdAskMaxPos
 			if tholdAskMaxPos == 0 {
@@ -92,12 +97,18 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 			}
 
 			if tholdAskMaxPos == 0 || -netposPass < tholdAskMaxPos {
-				// C++: 检查挂单数量限制
-				if state1.SellOpenOrders >= thold1.MaxOSOrder {
+				// C++: if (sellOpenOrders > SUPPORTING_ORDERS || sellOpenQty + -1*netpos_pass >= tholdAskMaxPos)
+				if state1.SellOpenOrders > thold1.SupportingOrders ||
+					int32(state1.SellOpenQty)+(-netposPass) >= tholdAskMaxPos {
 					// 找最差的 ask（价格最高），如果新价更好则撤最差的
 					pas.cancelWorstAskIfBetter(askPrice)
 				} else {
-					pas.Leg1.SendAskOrder(shm.NEWORDER, level, askPrice, ordType, 0, 0, 0)
+					pas.Leg1.SendAskOrder2(shm.NEWORDER, level, askPrice, ordType, 0, 0, 0)
+				}
+			} else {
+				// C++: 持仓超限，撤所有 ask
+				for _, ord := range pas.Leg1.Orders.AskMap {
+					pas.Leg1.Orders.SendCancelOrderByID(pas.Inst1, ord.OrderID)
 				}
 			}
 		}
@@ -113,6 +124,7 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 			bidPrice, ordType = pas.GetBidPrice(bidPrice, ordType, level)
 
 			// C++: 检查持仓限制
+			// C++: if (m_netpos_pass < m_tholdBidMaxPos)
 			netposPass := pas.Leg1.State.NetposPass
 			tholdBidMaxPos := state1.TholdBidMaxPos
 			if tholdBidMaxPos == 0 {
@@ -120,12 +132,18 @@ func (pas *PairwiseArbStrategy) SendOrder() {
 			}
 
 			if tholdBidMaxPos == 0 || netposPass < tholdBidMaxPos {
-				// C++: 检查挂单数量限制
-				if state1.BuyOpenOrders >= thold1.MaxOSOrder {
+				// C++: if (buyOpenOrders > SUPPORTING_ORDERS || buyOpenQty + netpos_pass >= tholdBidMaxPos)
+				if state1.BuyOpenOrders > thold1.SupportingOrders ||
+					int32(state1.BuyOpenQty)+netposPass >= tholdBidMaxPos {
 					// 找最差的 bid（价格最低），如果新价更好则撤最差的
 					pas.cancelWorstBidIfBetter(bidPrice)
 				} else {
-					pas.Leg1.SendBidOrder(shm.NEWORDER, level, bidPrice, ordType, 0, 0, 0)
+					pas.Leg1.SendBidOrder2(shm.NEWORDER, level, bidPrice, ordType, 0, 0, 0)
+				}
+			} else {
+				// C++: 持仓超限，撤所有 bid
+				for _, ord := range pas.Leg1.Orders.BidMap {
+					pas.Leg1.Orders.SendCancelOrderByID(pas.Inst1, ord.OrderID)
 				}
 			}
 		}
@@ -182,27 +200,56 @@ func (pas *PairwiseArbStrategy) cancelOutOfRangeOrders(avgSpread, bidRemove, ask
 }
 
 // hedgeLeg2 对冲 leg2
-// 参考: PairwiseArbStrategy.cpp:348-375
+// 参考: PairwiseArbStrategy.cpp:348-385
+//
+// C++ 逻辑:
+//   1. 计算 net exposure = netpos_pass + netpos_agg + pendingNetposAgg
+//   2. 检查 agg order 数量限制 (SUPPORTING_ORDERS)
+//   3. 检查 last_agg_side + 100ms 冷却时间
+//   4. 发送 SendAskOrder2/SendBidOrder2 with CROSS ordType
 func (pas *PairwiseArbStrategy) hedgeLeg2() {
-	exposure := pas.NetExposure()
+	pendingAgg := pas.CalcPendingNetposAgg()
+	exposure := pas.Leg1.State.NetposPass + pas.Leg2.State.NetposAgg + pendingAgg
 	if exposure == 0 {
 		return
 	}
 
 	inst2 := pas.Inst2
+	thold1 := pas.Thold1
+
+	// C++: 获取当前时间（毫秒）
+	nowMS := uint64(time.Now().UnixMilli())
 
 	if exposure > 0 {
-		// C++: 需要在 leg2 卖出
+		// C++: NET LONG — 需要在 leg2 卖出
+		// C++: sellAggOrder <= SUPPORTING_ORDERS
+		if pas.SellAggOrder > thold1.SupportingOrders {
+			return
+		}
+		// C++: last_agg_side != SELL || (now - last_agg_time > 100ms)
+		if pas.LastAggSide == types.Sell && nowMS-pas.LastAggTS <= 100 {
+			return
+		}
+		// C++: price = bidPx[0] - tickSize
 		sellPrice := inst2.BidPx[0] - inst2.TickSize
-		pas.Leg2.Orders.SendNewOrder(types.Sell, sellPrice, exposure, 0, inst2,
-			types.Quote, types.HitCross, pas.Leg2)
+		pas.Leg2.SendAskOrder2(shm.NEWORDER, 0, sellPrice, types.HitCross, exposure, 0, 0)
 		pas.SellAggOrder++
+		pas.LastAggTS = nowMS
+		pas.LastAggSide = types.Sell
 	} else {
-		// C++: 需要在 leg2 买入
+		// C++: NET SHORT — 需要在 leg2 买入
+		if pas.BuyAggOrder > thold1.SupportingOrders {
+			return
+		}
+		if pas.LastAggSide == types.Buy && nowMS-pas.LastAggTS <= 100 {
+			return
+		}
+		// C++: price = askPx[0] + tickSize
 		buyPrice := inst2.AskPx[0] + inst2.TickSize
-		pas.Leg2.Orders.SendNewOrder(types.Buy, buyPrice, -exposure, 0, inst2,
-			types.Quote, types.HitCross, pas.Leg2)
+		pas.Leg2.SendBidOrder2(shm.NEWORDER, 0, buyPrice, types.HitCross, -exposure, 0, 0)
 		pas.BuyAggOrder++
+		pas.LastAggTS = nowMS
+		pas.LastAggSide = types.Buy
 	}
 }
 

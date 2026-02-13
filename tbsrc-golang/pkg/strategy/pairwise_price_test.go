@@ -136,6 +136,85 @@ func TestGetAskPrice_InvisibleBook_NoGap(t *testing.T) {
 	}
 }
 
+// ---- GetBidPrice2 / GetAskPrice2 (leg2 invisible book) tests ----
+
+func TestGetBidPrice2_NoInvisibleBook(t *testing.T) {
+	pas := newTestPAS()
+	pas.UseInvisibleBook = false
+
+	price, ordType := pas.GetBidPrice2(5800, types.HitStandard, 0)
+	if price != 5800 || ordType != types.HitStandard {
+		t.Errorf("got price=%f ordType=%d, want 5800/STANDARD", price, ordType)
+	}
+}
+
+func TestGetBidPrice2_Level0_NoChange(t *testing.T) {
+	pas := newTestPAS()
+	pas.UseInvisibleBook = true
+
+	price, _ := pas.GetBidPrice2(5800, types.HitStandard, 0)
+	if price != 5800 {
+		t.Errorf("price = %f, want 5800 (level=0)", price)
+	}
+}
+
+func TestGetBidPrice2_WithGap_Improve(t *testing.T) {
+	pas := newTestPAS()
+	pas.UseInvisibleBook = true
+	pas.Thold2.BeginPlace = 2.0
+
+	// Create a gap in leg2 book: bidPx[1]=5797 (gap from bidPx[0]=5800)
+	pas.Inst2.BidPx[1] = 5797
+
+	// C++: bidInv = leg1.bidPx[0] - leg2.bidPx[level] - tickSize
+	// bidInv = 5810 - 5797 - 1 = 12
+	// Check: bidInv >= avgSpread + leg2.BEGIN_PLACE → 12 >= 10 + 2 = 12 → yes
+	pas.Leg2.Orders.BidMap[5797] = &types.OrderStats{
+		OrderID:    801,
+		Price:      5797,
+		QuantAhead: 20, // > lotSize(15)
+	}
+
+	price, _ := pas.GetBidPrice2(5797, types.HitStandard, 1)
+	if price != 5798 { // 5797 + 1 tick
+		t.Errorf("price = %f, want 5798 (improved by 1 tick)", price)
+	}
+}
+
+func TestGetAskPrice2_WithGap_Improve(t *testing.T) {
+	pas := newTestPAS()
+	pas.UseInvisibleBook = true
+	pas.Thold2.BeginPlace = 2.0
+
+	// Create a gap in leg2 book: askPx[1]=5804 (gap from askPx[0]=5801)
+	pas.Inst2.AskPx[1] = 5804
+
+	// C++: askInv = leg1.askPx[0] - leg2.askPx[level] + tickSize
+	// askInv = 5811 - 5804 + 1 = 8
+	// Check: askInv <= avgSpread - leg2.BEGIN_PLACE → 8 <= 10 - 2 = 8 → yes
+	pas.Leg2.Orders.AskMap[5804] = &types.OrderStats{
+		OrderID:    802,
+		Price:      5804,
+		QuantAhead: 20, // > lotSize(15)
+	}
+
+	price, _ := pas.GetAskPrice2(5804, types.HitStandard, 1)
+	if price != 5803 { // 5804 - 1 tick
+		t.Errorf("price = %f, want 5803 (improved by 1 tick)", price)
+	}
+}
+
+func TestGetAskPrice2_NoGap_NoChange(t *testing.T) {
+	pas := newTestPAS()
+	pas.UseInvisibleBook = true
+
+	// askPx[1]=5802, askPx[0]=5801. Gap=1=tickSize → no gap
+	price, _ := pas.GetAskPrice2(5802, types.HitStandard, 1)
+	if price != 5802 {
+		t.Errorf("price = %f, want 5802 (no gap)", price)
+	}
+}
+
 func TestGetAskPrice_InvisibleBook_SmallQueueAhead(t *testing.T) {
 	pas := newTestPAS()
 	pas.UseInvisibleBook = true

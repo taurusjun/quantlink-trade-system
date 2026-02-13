@@ -130,6 +130,7 @@ func main() {
 		log.Printf("[main] daily_init 加载失败 (使用零值): %v", err)
 		daily = &config.DailyInit{}
 	}
+	pas.DailyInitPath = dailyPath
 	pas.Init(daily.AvgSpreadOri, daily.NetposYtd1, daily.Netpos2day1, daily.NetposAgg2)
 	log.Printf("[main] daily_init: avgSpreadOri=%.4f ytd1=%d 2day1=%d agg2=%d",
 		daily.AvgSpreadOri, daily.NetposYtd1, daily.Netpos2day1, daily.NetposAgg2)

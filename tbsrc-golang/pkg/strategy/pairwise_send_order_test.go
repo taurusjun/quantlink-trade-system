@@ -108,14 +108,20 @@ func TestSendOrder_PositionLimitBlocksAsk(t *testing.T) {
 	pas := newTestPAS()
 	pas.Spread.Seed(5.0) // 触发 ask placement
 
-	// Set max position to 5, current short = -6 → -(-6)=6 >= 5 → blocked
+	// AskMaxSize=5 (in lots mode) → tholdAskMaxPos=5
+	// NetposPass=-6 → -(-6)=6 >= 5 → blocked
+	pas.Inst1.SendInLots = true
+	pas.Inst2.SendInLots = true
+	pas.Thold1.AskMaxSize = 5
+	pas.Thold1.BidMaxSize = 5
+	pas.Thold1.AskSize = 1
+	pas.Thold1.BidSize = 1
 	pas.Leg1.State.NetposPass = -6
-	pas.Leg1.State.TholdAskMaxPos = 5
-	pas.Leg1.State.TholdMaxPos = 5
 
 	pas.SendOrder()
 
-	// No ask orders should be placed due to position limit
+	// No ask orders should be placed due to position limit;
+	// instead all existing asks should be cancelled
 	if len(pas.Leg1.Orders.AskMap) != 0 {
 		t.Error("expected no ask orders when position limit exceeded")
 	}
@@ -227,6 +233,9 @@ func TestSendOrder_HedgeLeg2_ShortExposure(t *testing.T) {
 func TestSendOrder_MultiLevel(t *testing.T) {
 	pas := newTestPAS()
 	pas.MaxQuoteLevel = 3
+	// SUPPORTING_ORDERS must be >= 2 so multiple outstanding orders are allowed
+	// (with 0, after placing 1 order the next level enters cancel-worst path)
+	pas.Thold1.SupportingOrders = 5
 	// Low avgSpread so multiple levels trigger ask placement
 	// level0: shortSpread = 5811 - 5801 = 10 > 3+2 = 5 → yes
 	// level1: shortSpread = 5812 - 5801 = 11 > 3+2 = 5 → yes
