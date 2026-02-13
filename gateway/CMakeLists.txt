@@ -254,17 +254,15 @@ if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
     set(CTP_FRAMEWORK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ctp)
 
     # Counter Bridge可执行文件
+    # 注意：MWMR改造后不再依赖gRPC/protobuf（使用SysV MWMR共享内存直连）
     add_executable(counter_bridge
         src/counter_bridge.cpp
-        ${PROTO_SRCS}
-        ${GRPC_SRCS}
     )
 
     # 包含目录
     target_include_directories(counter_bridge PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-        ${GENERATED_PROTOBUF_PATH}
         /opt/homebrew/include
     )
 
@@ -283,10 +281,8 @@ if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
         )
     endif()
 
-    # 基础链接库
+    # 基础链接库（不再需要gRPC/protobuf）
     target_link_libraries(counter_bridge
-        gRPC::grpc++
-        gRPC::grpc++_reflection
         Threads::Threads
         /opt/homebrew/lib/libyaml-cpp.dylib
     )
@@ -323,11 +319,11 @@ if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
     # 安装
     install(TARGETS counter_bridge DESTINATION bin)
 
-    message(STATUS "Counter Bridge target added:")
-    message(STATUS "  - Reads orders from shared memory (ors_request)")
+    message(STATUS "Counter Bridge target added (MWMR mode):")
+    message(STATUS "  - Reads RequestMsg from SysV MWMR queue (key=0x0F20)")
     message(STATUS "  - Routes to broker plugins: ${COUNTER_BRIDGE_PLUGINS_STR}")
-    message(STATUS "  - Writes responses to shared memory (ors_response)")
-    message(STATUS "  - Extensible: add more brokers by implementing ITDPlugin")
+    message(STATUS "  - Writes ResponseMsg to SysV MWMR queue (key=0x1308)")
+    message(STATUS "  - Binary-compatible with hftbase/tbsrc-golang")
 else()
     message(STATUS "Counter Bridge: Skipped (requires at least one plugin)")
 endif()
