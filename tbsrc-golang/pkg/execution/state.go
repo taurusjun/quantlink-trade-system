@@ -124,6 +124,7 @@ type ExecutionState struct {
 	// 结束时间
 	EndTimeEpoch    uint64 // m_endTimeEpoch
 	EndTimeAggEpoch uint64 // m_endTimeAggEpoch
+	SqrOffTimeEpoch uint64 // 渐进式平仓时间 epoch（纳秒）
 
 	// 止损时间戳（用于 auto-resume 冷却）
 	StopLossTS uint64 // 触发 stop loss 时的纳秒时间戳

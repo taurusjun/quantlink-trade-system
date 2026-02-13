@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"tbsrc-golang/pkg/instrument"
+	"tbsrc-golang/pkg/shm"
 	"tbsrc-golang/pkg/types"
 )
 
@@ -496,5 +497,320 @@ func TestHandleRMSReject(t *testing.T) {
 	s.HandleRMSReject(inst)
 	if s.RmsQty != 15 {
 		t.Errorf("RmsQty = %d, want 15 (lotSize)", s.RmsQty)
+	}
+}
+
+// === Phase 9 Tests ===
+
+func TestCancelReqPause_Cooldown(t *testing.T) {
+	// 测试 CANCELREQ_PAUSE 撤单冷却机制
+	// C++ 参考: ExecutionStrategy.cpp:1764-1770
+	state := &ExecutionState{ExchTS: 1000}
+	om := NewOrderManager(nil, state)
+	om.CancelReqPause = 500 // 500 纳秒冷却
+
+	inst := &instrument.Instrument{TickSize: 1.0, LotSize: 15}
+
+	// 下一个订单
+	oid, ok := om.SendNewOrder(types.Buy, 5800, 1, 0, inst, types.Quote, types.HitStandard, nil)
+	if !ok {
+		t.Fatal("SendNewOrder failed")
+	}
+
+	// 确认订单
+	ord := om.OrdMap[oid]
+	ord.Status = types.StatusNewConfirm
+
+	// 第一次撤单成功
+	ok = om.SendCancelOrderByID(inst, oid)
+	if !ok {
+		t.Error("first cancel should succeed")
+	}
+
+	// 模拟撤单拒绝
+	ord.Status = types.StatusNewConfirm
+	om.LastCancelRejectSet = 1
+	om.LastCancelRejectOrderID = oid
+	om.LastCancelRejectTime = 1000 // 拒绝时间
+
+	// 在冷却期内重新撤单 — 应该被阻止
+	state.ExchTS = 1200 // 200ns < 500ns pause
+	ok = om.sendCancelOrderInternal(inst, oid, ord)
+	if ok {
+		t.Error("cancel should be blocked during cooldown period")
+	}
+
+	// 冷却期过后撤单 — 应该成功
+	state.ExchTS = 1600 // 600ns > 500ns pause
+	ok = om.sendCancelOrderInternal(inst, oid, ord)
+	if !ok {
+		t.Error("cancel should succeed after cooldown period")
+	}
+}
+
+func TestCancelReqPause_DifferentOrderID(t *testing.T) {
+	// 测试冷却只对同一 orderID 生效
+	state := &ExecutionState{ExchTS: 1000}
+	om := NewOrderManager(nil, state)
+	om.CancelReqPause = 500
+
+	inst := &instrument.Instrument{TickSize: 1.0, LotSize: 15}
+
+	// 下两个订单
+	oid1, _ := om.SendNewOrder(types.Buy, 5800, 1, 0, inst, types.Quote, types.HitStandard, nil)
+	oid2, _ := om.SendNewOrder(types.Sell, 5810, 1, 0, inst, types.Quote, types.HitStandard, nil)
+
+	om.OrdMap[oid1].Status = types.StatusNewConfirm
+	om.OrdMap[oid2].Status = types.StatusNewConfirm
+
+	// 设置 oid1 的冷却
+	om.LastCancelRejectSet = 1
+	om.LastCancelRejectOrderID = oid1
+	om.LastCancelRejectTime = 1000
+
+	// oid2 不受冷却影响
+	ok := om.SendCancelOrderByID(inst, oid2)
+	if !ok {
+		t.Error("cancel of different orderID should not be blocked by cooldown")
+	}
+}
+
+func TestFillOnCxlReject(t *testing.T) {
+	// 测试 fillOnCxlReject 安全机制
+	// C++ 参考: ExecutionStrategy.cpp:1874-1880
+	state := &ExecutionState{}
+	om := NewOrderManager(nil, state)
+	om.FillOnCxlReject = true
+
+	inst := &instrument.Instrument{PriceMultiplier: 15.0, TickSize: 1.0, LotSize: 15}
+	inst.BidPx[0] = 5810
+	inst.AskPx[0] = 5811
+
+	// 下一个买单
+	oid, _ := om.SendNewOrder(types.Buy, 5800, 2, 0, inst, types.Quote, types.HitStandard, nil)
+	ord := om.OrdMap[oid]
+	ord.Status = types.StatusCancelOrder // 已发送撤单请求
+
+	// 模拟撤单拒绝，Quantity=0 表示订单已完全成交
+	resp := &shm.ResponseMsg{
+		OrderID:       oid,
+		Response_Type: shm.CANCEL_ORDER_REJECT,
+		Quantity:      0, // 关键：量为0表示已成交
+	}
+
+	om.processCancelReject(resp, ord, inst)
+
+	// 应该合成了成交：netpos 更新
+	if state.Netpos != 2 {
+		t.Errorf("Netpos = %d, want 2 (synthetic fill)", state.Netpos)
+	}
+	if state.BuyTotalQty != 2 {
+		t.Errorf("BuyTotalQty = %f, want 2", state.BuyTotalQty)
+	}
+	if state.TradeCount != 1 {
+		t.Errorf("TradeCount = %d, want 1", state.TradeCount)
+	}
+}
+
+func TestFillOnCxlReject_Disabled(t *testing.T) {
+	// fillOnCxlReject 关闭时不合成成交
+	state := &ExecutionState{}
+	om := NewOrderManager(nil, state)
+	om.FillOnCxlReject = false // 关闭
+
+	inst := &instrument.Instrument{PriceMultiplier: 15.0, TickSize: 1.0}
+
+	oid, _ := om.SendNewOrder(types.Buy, 5800, 2, 0, inst, types.Quote, types.HitStandard, nil)
+	ord := om.OrdMap[oid]
+	ord.Status = types.StatusCancelOrder
+
+	resp := &shm.ResponseMsg{
+		OrderID:       oid,
+		Response_Type: shm.CANCEL_ORDER_REJECT,
+		Quantity:      0,
+	}
+
+	om.processCancelReject(resp, ord, inst)
+
+	// 不应合成成交
+	if state.Netpos != 0 {
+		t.Errorf("Netpos = %d, want 0 (no synthetic fill when disabled)", state.Netpos)
+	}
+	// status 应恢复到 NewConfirm
+	if ord.Status != types.StatusNewConfirm {
+		t.Errorf("Status = %d, want NewConfirm", ord.Status)
+	}
+}
+
+func TestFillOnCxlReject_NonZeroQty(t *testing.T) {
+	// Quantity 非 0 时不合成成交（正常的撤单拒绝）
+	state := &ExecutionState{}
+	om := NewOrderManager(nil, state)
+	om.FillOnCxlReject = true
+
+	inst := &instrument.Instrument{PriceMultiplier: 15.0, TickSize: 1.0}
+
+	oid, _ := om.SendNewOrder(types.Buy, 5800, 2, 0, inst, types.Quote, types.HitStandard, nil)
+	ord := om.OrdMap[oid]
+	ord.Status = types.StatusCancelOrder
+
+	resp := &shm.ResponseMsg{
+		OrderID:       oid,
+		Response_Type: shm.CANCEL_ORDER_REJECT,
+		Quantity:      1, // 非零，普通拒绝
+	}
+
+	om.processCancelReject(resp, ord, inst)
+
+	// 不应合成成交
+	if state.Netpos != 0 {
+		t.Errorf("Netpos = %d, want 0 (non-zero qty should not trigger fill)", state.Netpos)
+	}
+}
+
+func TestCheckSquareoff_TimeLimitTrigger(t *testing.T) {
+	// 测试渐进式时间平仓触发
+	s := &ExecutionState{
+		SqrOffTimeEpoch: 1000000,
+	}
+
+	s.CheckSquareoff(999999, 0, nil, nil)
+	if s.OnTimeSqOff {
+		t.Error("should not trigger time squareoff before SqrOffTimeEpoch")
+	}
+
+	s.CheckSquareoff(1000001, 0, nil, nil)
+	if !s.OnTimeSqOff {
+		t.Error("should trigger time squareoff after SqrOffTimeEpoch")
+	}
+	// OnTimeSqOff 不设置 OnExit（策略继续运行）
+	if s.OnExit {
+		t.Error("OnExit should NOT be set for time-limit squareoff (gradual exit)")
+	}
+}
+
+func TestHandleTimeLimitSquareoff_GradualExit(t *testing.T) {
+	// 测试渐进式平仓数量限制
+	state := &ExecutionState{
+		Netpos:        10,
+		TholdBeginPos: 3, // 每次最多平 3 手
+		OnTimeSqOff:   true,
+	}
+	om := NewOrderManager(nil, state)
+	inst := &instrument.Instrument{TickSize: 1.0, LotSize: 15}
+	inst.BidPx[0] = 5810
+	inst.AskPx[0] = 5811
+
+	lm := &LegManager{
+		State:  state,
+		Orders: om,
+		Inst:   inst,
+	}
+
+	// 被动定价 (sqrOffAgg=0)
+	lm.HandleTimeLimitSquareoff(0)
+
+	// 应该下了一个卖单，数量限制为 TholdBeginPos=3
+	if len(om.AskMap) != 1 {
+		t.Errorf("AskMap size = %d, want 1", len(om.AskMap))
+	}
+	for _, ord := range om.AskMap {
+		if ord.Qty != 3 {
+			t.Errorf("order qty = %d, want 3 (TholdBeginPos)", ord.Qty)
+		}
+		if ord.Price != 5811 { // 被动：askPx[0]
+			t.Errorf("order price = %.2f, want 5811 (passive ask)", ord.Price)
+		}
+	}
+}
+
+func TestHandleTimeLimitSquareoff_Aggressive(t *testing.T) {
+	// 测试激进定价
+	state := &ExecutionState{
+		Netpos:        5,
+		TholdBeginPos: 10, // 大于 netpos，使用全部
+		OnTimeSqOff:   true,
+	}
+	om := NewOrderManager(nil, state)
+	inst := &instrument.Instrument{TickSize: 1.0, LotSize: 15}
+	inst.BidPx[0] = 5810
+	inst.AskPx[0] = 5811
+
+	lm := &LegManager{
+		State:  state,
+		Orders: om,
+		Inst:   inst,
+	}
+
+	// 激进定价 (sqrOffAgg=1)
+	lm.HandleTimeLimitSquareoff(1)
+
+	if len(om.AskMap) != 1 {
+		t.Errorf("AskMap size = %d, want 1", len(om.AskMap))
+	}
+	for _, ord := range om.AskMap {
+		if ord.Qty != 5 {
+			t.Errorf("order qty = %d, want 5 (full netpos)", ord.Qty)
+		}
+		if ord.Price != 5810 { // 激进：bidPx[0]
+			t.Errorf("order price = %.2f, want 5810 (aggressive bid)", ord.Price)
+		}
+	}
+}
+
+func TestHandleTimeLimitSquareoff_Short(t *testing.T) {
+	// 测试空头渐进平仓
+	state := &ExecutionState{
+		Netpos:        -8,
+		TholdBeginPos: 5,
+		OnTimeSqOff:   true,
+	}
+	om := NewOrderManager(nil, state)
+	inst := &instrument.Instrument{TickSize: 1.0, LotSize: 15}
+	inst.BidPx[0] = 5810
+	inst.AskPx[0] = 5811
+
+	lm := &LegManager{
+		State:  state,
+		Orders: om,
+		Inst:   inst,
+	}
+
+	lm.HandleTimeLimitSquareoff(0)
+
+	if len(om.BidMap) != 1 {
+		t.Errorf("BidMap size = %d, want 1", len(om.BidMap))
+	}
+	for _, ord := range om.BidMap {
+		if ord.Qty != 5 {
+			t.Errorf("order qty = %d, want 5 (TholdBeginPos)", ord.Qty)
+		}
+		if ord.Price != 5810 { // 被动：bidPx[0]
+			t.Errorf("order price = %.2f, want 5810 (passive bid)", ord.Price)
+		}
+	}
+}
+
+func TestHandleTimeLimitSquareoff_Flat(t *testing.T) {
+	// 已平仓不下单
+	state := &ExecutionState{
+		Netpos:      0,
+		OnTimeSqOff: true,
+	}
+	om := NewOrderManager(nil, state)
+	inst := &instrument.Instrument{TickSize: 1.0}
+	inst.BidPx[0] = 5810
+	inst.AskPx[0] = 5811
+
+	lm := &LegManager{
+		State:  state,
+		Orders: om,
+		Inst:   inst,
+	}
+
+	lm.HandleTimeLimitSquareoff(0)
+
+	if len(om.BidMap) != 0 || len(om.AskMap) != 0 {
+		t.Error("should not place orders when flat")
 	}
 }

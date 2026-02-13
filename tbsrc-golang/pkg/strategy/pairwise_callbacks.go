@@ -93,6 +93,19 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 		return
 	}
 
+	// C++: 渐进式时间平仓（OnTimeSqOff 触发后每次行情回调执行一次）
+	// 参考: ExecutionStrategy.cpp:2442-2498
+	if pas.Leg1.State.OnTimeSqOff || pas.Leg2.State.OnTimeSqOff {
+		sqrOffAgg := pas.Thold1.SqrOffAgg
+		if pas.Leg1.State.OnTimeSqOff {
+			pas.Leg1.HandleTimeLimitSquareoff(sqrOffAgg)
+		}
+		if pas.Leg2.State.OnTimeSqOff {
+			pas.Leg2.HandleTimeLimitSquareoff(sqrOffAgg)
+		}
+		return
+	}
+
 	// C++: 如果策略激活，调用 SendOrder
 	if pas.Active {
 		pas.SendOrder()

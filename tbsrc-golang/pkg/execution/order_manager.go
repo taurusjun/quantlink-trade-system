@@ -18,6 +18,17 @@ type OrderManager struct {
 	Client      *client.Client
 	State       *ExecutionState
 	nextTestOID uint32 // used only when Client is nil (testing)
+
+	// C++: CANCELREQ_PAUSE 撤单冷却跟踪
+	// 参考: ExecutionStrategy.cpp:1764-1770
+	LastCancelRejectSet     int    // m_lastCancelReqRejectSet (0 or 1)
+	LastCancelRejectOrderID uint32 // m_lastCancelRejectOrderID
+	LastCancelRejectTime    uint64 // m_lastCancelRejectTime (nanoseconds)
+	CancelReqPause          int64  // CANCELREQ_PAUSE threshold (nanoseconds, from config)
+
+	// C++: fillOnCxlReject — 撤单拒绝时量为 0 表示已成交
+	// 参考: ExecutionStrategy.cpp:1874-1880
+	FillOnCxlReject bool // m_configParams->m_fillOnCxlReject
 }
 
 // NewOrderManager 创建 OrderManager
@@ -202,6 +213,15 @@ func (om *OrderManager) sendCancelOrderInternal(inst *instrument.Instrument, ord
 		ord.Status != types.StatusModifyConfirm &&
 		ord.Status != types.StatusModifyReject {
 		return false
+	}
+
+	// C++: CANCELREQ_PAUSE 冷却 — 防止对同一订单反复撤单造成交易所限流
+	// 参考: ExecutionStrategy.cpp:1764-1770
+	if om.LastCancelRejectSet == 1 && om.LastCancelRejectOrderID == orderID {
+		if om.CancelReqPause > 0 && om.State.ExchTS > 0 &&
+			om.State.ExchTS-om.LastCancelRejectTime < uint64(om.CancelReqPause) {
+			return false
+		}
 	}
 
 	ord.Status = types.StatusCancelOrder

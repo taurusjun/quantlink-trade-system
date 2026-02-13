@@ -44,7 +44,7 @@ func (om *OrderManager) ProcessORSResponse(resp *shm.ResponseMsg, inst *instrume
 		om.processModifyReject(resp, ord)
 
 	case shm.CANCEL_ORDER_REJECT:
-		om.processCancelReject(resp, ord)
+		om.processCancelReject(resp, ord, inst)
 
 	default:
 		log.Printf("[ORS] unhandled responseType=%d orderID=%d", resp.Response_Type, resp.OrderID)
@@ -335,10 +335,34 @@ func (om *OrderManager) processModifyReject(_ *shm.ResponseMsg, ord *types.Order
 }
 
 // processCancelReject 处理撤单拒绝
-// 参考: ExecutionStrategy.cpp:1100-1120
+// 参考: ExecutionStrategy.cpp:1100-1120, 1870-1880
 //
-// C++ 逻辑: 恢复 status 到 NEW_CONFIRM（订单仍然活跃）
-func (om *OrderManager) processCancelReject(resp *shm.ResponseMsg, ord *types.OrderStats) {
+// C++ 逻辑:
+//   1. 记录撤单拒绝信息（用于 CANCELREQ_PAUSE 冷却）
+//   2. 如果 fillOnCxlReject 且 resp.Quantity==0，合成成交事件
+//   3. 恢复 status 到 NEW_CONFIRM（订单仍然活跃）
+func (om *OrderManager) processCancelReject(resp *shm.ResponseMsg, ord *types.OrderStats, inst *instrument.Instrument) {
+	// C++: 记录撤单拒绝信息，用于 CANCELREQ_PAUSE 冷却
+	// 参考: ExecutionStrategy.cpp:1870-1872
+	om.LastCancelRejectSet = 1
+	om.LastCancelRejectOrderID = resp.OrderID
+	om.LastCancelRejectTime = om.State.ExchTS
+
+	// C++: fillOnCxlReject — 撤单拒绝且量为 0 表示订单已完全成交
+	// 参考: ExecutionStrategy.cpp:1874-1880
+	if resp.Quantity == 0 && om.FillOnCxlReject {
+		log.Printf("[ORS] ALERT: TRADE ON CANCEL REJECT orderID=%d, synthesizing fill price=%.2f qty=%d",
+			resp.OrderID, ord.Price, ord.Qty)
+		// 合成成交事件
+		synthResp := &shm.ResponseMsg{
+			OrderID:  resp.OrderID,
+			Price:    ord.Price,
+			Quantity: ord.Qty,
+		}
+		om.processTrade(synthResp, ord, inst)
+		return
+	}
+
 	if ord.Status != types.StatusTraded {
 		ord.Status = types.StatusNewConfirm
 	}

@@ -298,6 +298,73 @@ func (lm *LegManager) HandleSquareoff() {
 	}
 }
 
+// HandleTimeLimitSquareoff 渐进式时间平仓
+// 参考: tbsrc/Strategies/ExecutionStrategy.cpp:2442-2506
+//
+// C++ 逻辑:
+//   1. 如果已平，返回
+//   2. 根据 SqrOffAgg 决定激进/被动定价
+//   3. 撤销价格不匹配的挂单
+//   4. 所有挂单撤完后，发送平仓单（数量 = min(abs(netpos), tholdBeginPos)）
+//
+// 与 HandleSquareoff 的区别：
+//   - 使用 TholdBeginPos 限制每笔平仓量（渐进退出，减少市场冲击）
+//   - 不设置 OnExit（策略继续运行，只是逐步减仓）
+//   - 定价由 SqrOffAgg 配置控制
+func (lm *LegManager) HandleTimeLimitSquareoff(sqrOffAgg int) {
+	inst := lm.Inst
+	state := lm.State
+
+	if state.Netpos == 0 {
+		return
+	}
+
+	// C++: 根据 SQROFF_AGG 决定定价策略
+	// 参考: ExecutionStrategy.cpp:2449-2455
+	var sellPrice, buyPrice float64
+	if sqrOffAgg != 0 {
+		// 激进定价：穿越 BBO
+		sellPrice = inst.BidPx[0]
+		buyPrice = inst.AskPx[0]
+	} else {
+		// 被动定价：挂在 BBO
+		sellPrice = inst.AskPx[0]
+		buyPrice = inst.BidPx[0]
+	}
+
+	// C++: 撤销不匹配的挂单
+	// 参考: ExecutionStrategy.cpp:2460-2478
+	for _, ord := range lm.Orders.AskMap {
+		if sellPrice < ord.Price || state.Netpos == 0 {
+			lm.Orders.SendCancelOrderByID(inst, ord.OrderID)
+		}
+	}
+	for _, ord := range lm.Orders.BidMap {
+		if buyPrice > ord.Price || state.Netpos == 0 {
+			lm.Orders.SendCancelOrderByID(inst, ord.OrderID)
+		}
+	}
+
+	// C++: 渐进退出 — 使用 TholdBeginPos 限制单笔平仓量
+	// 参考: ExecutionStrategy.cpp:2480-2492
+	qty := int32(math.Abs(float64(state.Netpos)))
+	if state.TholdBeginPos > 0 && qty > state.TholdBeginPos {
+		qty = state.TholdBeginPos
+	}
+
+	// C++: 所有挂单撤完后发送平仓单
+	// 参考: ExecutionStrategy.cpp:2494-2505
+	if len(lm.Orders.AskMap) == 0 && len(lm.Orders.BidMap) == 0 {
+		if state.Netpos > 0 {
+			lm.Orders.SendNewOrder(types.Sell, sellPrice, qty, 0, inst,
+				types.Quote, types.HitStandard, lm)
+		} else if state.Netpos < 0 {
+			lm.Orders.SendNewOrder(types.Buy, buyPrice, qty, 0, inst,
+				types.Quote, types.HitStandard, lm)
+		}
+	}
+}
+
 // Reset 重置 LegManager 状态
 func (lm *LegManager) Reset() {
 	lm.State.Reset()

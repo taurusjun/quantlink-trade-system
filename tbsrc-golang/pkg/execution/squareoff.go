@@ -12,6 +12,7 @@ import (
 //
 // C++ 逻辑:
 //   阶段 1: 检查激进平仓时间 → m_aggFlat = true
+//   阶段 1.5: 检查渐进式平仓时间 → m_onTimeSqOff = true
 //   阶段 2: 检查标准退出条件（时间/亏损/订单数/成交量）→ m_onExit = true
 //   阶段 3: UPNL_LOSS / STOP_LOSS 检查
 //   阶段 4: Auto-resume（15 分钟冷却后恢复）
@@ -27,6 +28,13 @@ func (s *ExecutionState) CheckSquareoff(currentTimeNs uint64, maxLoss float64, u
 		s.OnCancel = true
 		s.OnFlat = true
 		log.Printf("[Squareoff] aggressive flat triggered at time=%d", currentTimeNs)
+	}
+
+	// C++: Phase 1.5 — 渐进式时间平仓
+	// 参考: ExecutionStrategy.cpp:2442-2498
+	if s.SqrOffTimeEpoch > 0 && currentTimeNs >= s.SqrOffTimeEpoch && !s.OnTimeSqOff {
+		s.OnTimeSqOff = true
+		log.Printf("[Squareoff] time-limit squareoff triggered at time=%d", currentTimeNs)
 	}
 
 	// C++: Phase 4 — auto-resume after 15 minutes of stop loss
