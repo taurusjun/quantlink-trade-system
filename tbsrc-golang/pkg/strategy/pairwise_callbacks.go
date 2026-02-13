@@ -19,6 +19,12 @@ import (
 //  5. AVG_SPREAD_AWAY 安全检查
 //  6. 调用 SendOrder()
 func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.MarketUpdateNew) {
+	// C++: 加载 tValue（tvar SHM）
+	// 参考: PairwiseArbStrategy.cpp:482-486
+	if pas.TVar != nil {
+		pas.Spread.SetTValue(pas.TVar.Load())
+	}
+
 	// 识别是哪条腿
 	isLeg1 := inst == pas.Inst1
 

@@ -6,6 +6,7 @@ import (
 	"tbsrc-golang/pkg/client"
 	"tbsrc-golang/pkg/execution"
 	"tbsrc-golang/pkg/instrument"
+	"tbsrc-golang/pkg/shm"
 	"tbsrc-golang/pkg/types"
 )
 
@@ -45,6 +46,9 @@ type PairwiseArbStrategy struct {
 	LastAggTS   uint64                 // C++: nanoseconds timestamp of last agg order
 	BuyAggOrder  int32                 // C++: m_secondStrat->buyAggOrder
 	SellAggOrder int32                 // C++: m_secondStrat->sellAggOrder
+
+	// tvar SHM — 外部调整值
+	TVar *shm.TVar // C++: m_tvar — 如果为 nil 则不使用
 
 	// 监控
 	LastMonitorTS uint64

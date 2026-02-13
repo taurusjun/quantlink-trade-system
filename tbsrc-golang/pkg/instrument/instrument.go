@@ -41,6 +41,22 @@ type Instrument struct {
 	LastTradeQty float64 // lastTradeqty
 }
 
+// NewFromConfig 从配置创建 Instrument
+func NewFromConfig(symbol string, exchange string, tickSize, lotSize, contractFactor, priceMultiplier, priceFactor float64, sendInLots bool, token, expiryDate int32) *Instrument {
+	return &Instrument{
+		Symbol:          symbol,
+		Exchange:        exchange,
+		TickSize:        tickSize,
+		LotSize:         lotSize,
+		ContractFactor:  contractFactor,
+		PriceMultiplier: priceMultiplier,
+		PriceFactor:     priceFactor,
+		SendInLots:      sendInLots,
+		Token:           token,
+		ExpiryDate:      expiryDate,
+	}
+}
+
 // UpdateFromMD 从 SHM MarketUpdateNew 更新行情簿
 // 参考: tbsrc/common/include/Instrument.h FillOrderBook()
 func (inst *Instrument) UpdateFromMD(md *shm.MarketUpdateNew) {

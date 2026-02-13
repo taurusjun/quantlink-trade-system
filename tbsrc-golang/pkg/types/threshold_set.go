@@ -148,6 +148,265 @@ type ThresholdSet struct {
 	TCacheKey int32 // TCACHE_KEY
 }
 
+// LoadFromMap 从 YAML 配置 map[string]float64 填充字段
+// YAML key 使用 snake_case，对应 C++ 配置文件格式
+// 参考: tbsrc/main/include/TradeBotUtils.h:LoadParams()
+func (ts *ThresholdSet) LoadFromMap(m map[string]float64) {
+	for k, v := range m {
+		switch k {
+		// 布尔标志
+		case "use_notional":
+			ts.UseNotional = v != 0
+		case "use_percent":
+			ts.UsePercent = v != 0
+		case "use_price_limit":
+			ts.UsePriceLimit = v != 0
+		case "use_ahead_percent":
+			ts.UseAheadPercent = v != 0
+		case "use_close_cross":
+			ts.UseCloseCross = v != 0
+		case "use_passive_thold":
+			ts.UsePassiveThold = v != 0
+		case "use_linear_thold":
+			ts.UseLinearThold = v != 0
+		case "quote_max_qty":
+			ts.QuoteMaxQty = v != 0
+		case "close_pnl":
+			ts.ClosePNL = v != 0
+		case "check_pnl":
+			ts.CheckPNL = v != 0
+		case "news_flat":
+			ts.NewsFlat = v != 0
+
+		// 入场/出场阈值
+		case "begin_place":
+			ts.BeginPlace = v
+		case "begin_remove":
+			ts.BeginRemove = v
+		case "long_place":
+			ts.LongPlace = v
+		case "long_remove":
+			ts.LongRemove = v
+		case "short_place":
+			ts.ShortPlace = v
+		case "short_remove":
+			ts.ShortRemove = v
+		case "long_inc":
+			ts.LongInc = v
+
+		// 高波动变体
+		case "begin_place_high":
+			ts.BeginPlaceHigh = v
+		case "long_place_high":
+			ts.LongPlaceHigh = v
+
+		// 仓位大小
+		case "size":
+			ts.Size = int32(v)
+		case "ta_size":
+			ts.TASize = int32(v)
+		case "begin_size":
+			ts.BeginSize = int32(v)
+		case "max_size":
+			ts.MaxSize = int32(v)
+		case "percent_size":
+			ts.PercentSize = int32(v)
+		case "percent_level":
+			ts.PercentLevel = int32(v)
+		case "notional_size":
+			ts.NotionalSize = int32(v)
+		case "notional_max_size":
+			ts.NotionalMaxSz = int32(v)
+		case "sms_ratio":
+			ts.SMSRatio = int32(v)
+		case "max_os_order":
+			ts.MaxOSOrder = int32(v)
+		case "bid_size":
+			ts.BidSize = int32(v)
+		case "bid_max_size":
+			ts.BidMaxSize = int32(v)
+		case "ask_size":
+			ts.AskSize = int32(v)
+		case "ask_max_size":
+			ts.AskMaxSize = int32(v)
+
+		// 激进单
+		case "cross":
+			ts.Cross = v
+		case "close_cross":
+			ts.CloseCross = v
+		case "close_improve":
+			ts.CloseImprove = v
+		case "improve":
+			ts.Improve = v
+		case "max_cross":
+			ts.MaxCross = int32(v)
+		case "max_long_cross":
+			ts.MaxLongCross = int32(v)
+		case "max_short_cross":
+			ts.MaxShortCross = int32(v)
+		case "cross_target":
+			ts.CrossTarget = int32(v)
+		case "cross_ticks":
+			ts.CrossTicks = int32(v)
+		case "agg_cool_off":
+			ts.AggCoolOff = int64(v)
+		case "place_spread":
+			ts.PlaceSpread = v
+		case "pil_factor":
+			ts.PILFactor = v
+
+		// 风控
+		case "stop_loss":
+			ts.StopLoss = v
+		case "max_loss":
+			ts.MaxLoss = v
+		case "upnl_loss":
+			ts.UPNLLoss = v
+		case "pt_profit":
+			ts.PTProft = v
+		case "pt_loss":
+			ts.PTLoss = v
+		case "max_price":
+			ts.MaxPrice = v
+		case "min_price":
+			ts.MinPrice = v
+
+		// 队列与大小
+		case "opp_qty":
+			ts.OppQty = v
+		case "supp_tolerance":
+			ts.SuppTolerance = int(v)
+		case "ahead_percent":
+			ts.AheadPercent = v
+		case "ahead_size":
+			ts.AheadSize = v
+		case "szahead_nocxl":
+			ts.SzAheadNoCxl = int(v)
+		case "booksz_nocxl":
+			ts.BookSzNoCxl = int(v)
+		case "aggflat_booksize":
+			ts.AggFlatBookSz = int(v)
+		case "aggflat_bookfrac":
+			ts.AggFlatBookFr = v
+
+		// 套利
+		case "alpha":
+			ts.Alpha = v
+		case "spread_ewa":
+			ts.SpreadEWA = v
+		case "avg_spread_away":
+			ts.AvgSpreadAway = int(v)
+		case "hedge_ratio":
+			ts.HedgeRatio = v
+		case "hedge_thres":
+			ts.HedgeThres = v
+		case "hedge_size_ratio":
+			ts.HedgeSzRatio = v
+		case "const":
+			ts.Const = v
+		case "price_ratio":
+			ts.PriceRatio = v
+
+		// Slop
+		case "slop":
+			ts.Slop = int(v)
+
+		// 时间
+		case "pause":
+			ts.Pause = int64(v)
+		case "cancelreq_pause":
+			ts.CancelReqPause = int64(v)
+		case "sqroff_time":
+			ts.SqrOffTime = int64(v)
+		case "sqroff_agg":
+			ts.SqrOffAgg = int(v)
+
+		// Quote 相关
+		case "quote_skew":
+			ts.QuoteSkew = v
+		case "max_quote_spread":
+			ts.MaxQuoteSpread = int32(v)
+		case "max_quote_level":
+			ts.MaxQuoteLevel = int(v)
+		case "quote_signal":
+			ts.QuoteSignal = int(v)
+
+		// 统计
+		case "stat_duration_small":
+			ts.StatDurationSmall = int64(v)
+		case "stat_duration_long":
+			ts.StatDurationLong = int64(v)
+		case "stat_trade_thresh":
+			ts.StatTradeThresh = v
+		case "stat_decay":
+			ts.StatDecay = int(v)
+
+		// Delta
+		case "delta_hedge":
+			ts.DeltaHedge = v
+		case "target_delta":
+			ts.TargetDelta = v
+		case "max_delta_value":
+			ts.MaxDeltaValue = v
+		case "min_delta_value":
+			ts.MinDeltaValue = v
+		case "max_delta_change":
+			ts.MaxDeltaChange = v
+
+		// VWAP
+		case "vwap_ratio":
+			ts.VWAPRatio = v
+		case "vwap_count":
+			ts.VWAPCount = v
+		case "vwap_depth":
+			ts.VWAPDepth = v
+		case "bidask_ratio":
+			ts.BidAskRatio = v
+
+		// 支撑/拖尾
+		case "supporting_orders":
+			ts.SupportingOrders = int32(v)
+		case "tailing_orders":
+			ts.TailingOrders = int32(v)
+		case "max_orders":
+			ts.MaxOrders = int32(v)
+
+		// PCA
+		case "pca_coeff1":
+			ts.PCACoeff1 = v
+		case "pca_coeff2":
+			ts.PCACoeff2 = v
+		case "pca_coeff3":
+			ts.PCACoeff3 = v
+
+		// 杂项
+		case "min_extr_ind":
+			ts.MinExtrInd = int(v)
+		case "target_std_dev":
+			ts.TargetStdDev = v
+		case "price_cooloff":
+			ts.PriceCooloff = int(v)
+
+		// Sweep
+		case "sweep_place":
+			ts.SweepPlace = int32(v)
+		case "sweep_close":
+			ts.SweepClose = int32(v)
+		case "sweep_place_level":
+			ts.SweepPlaceLevel = int32(v)
+		case "sweep_close_level":
+			ts.SweepCloseLevel = int32(v)
+
+		// tvar/tcache
+		case "tvar_key":
+			ts.TVarKey = int32(v)
+		case "tcache_key":
+			ts.TCacheKey = int32(v)
+		}
+	}
+}
+
 // NewThresholdSet 创建带 C++ 默认值的 ThresholdSet
 // 参考: tbsrc/main/include/TradeBotUtils.h 构造函数 (lines 237-320)
 func NewThresholdSet() *ThresholdSet {

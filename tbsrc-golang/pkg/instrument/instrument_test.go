@@ -154,6 +154,45 @@ func TestUpdateFromMD_20Levels(t *testing.T) {
 	}
 }
 
+func TestNewFromConfig(t *testing.T) {
+	inst := NewFromConfig("ag2506", "SHFE", 1.0, 15.0, 15.0, 15.0, 1.0, true, 12345, 20260630)
+
+	if inst.Symbol != "ag2506" {
+		t.Errorf("Symbol = %s, want ag2506", inst.Symbol)
+	}
+	if inst.Exchange != "SHFE" {
+		t.Errorf("Exchange = %s, want SHFE", inst.Exchange)
+	}
+	if inst.TickSize != 1.0 {
+		t.Errorf("TickSize = %f, want 1.0", inst.TickSize)
+	}
+	if inst.LotSize != 15.0 {
+		t.Errorf("LotSize = %f, want 15.0", inst.LotSize)
+	}
+	if inst.ContractFactor != 15.0 {
+		t.Errorf("ContractFactor = %f, want 15.0", inst.ContractFactor)
+	}
+	if inst.PriceMultiplier != 15.0 {
+		t.Errorf("PriceMultiplier = %f, want 15.0", inst.PriceMultiplier)
+	}
+	if inst.PriceFactor != 1.0 {
+		t.Errorf("PriceFactor = %f, want 1.0", inst.PriceFactor)
+	}
+	if !inst.SendInLots {
+		t.Error("SendInLots should be true")
+	}
+	if inst.Token != 12345 {
+		t.Errorf("Token = %d, want 12345", inst.Token)
+	}
+	if inst.ExpiryDate != 20260630 {
+		t.Errorf("ExpiryDate = %d, want 20260630", inst.ExpiryDate)
+	}
+	// Should have zero book data
+	if inst.ValidBids != 0 || inst.ValidAsks != 0 {
+		t.Error("new instrument should have zero book data")
+	}
+}
+
 func abs(x float64) float64 {
 	if x < 0 {
 		return -x
