@@ -1,0 +1,20 @@
+# tbsrc-golang 初始配置模板
+# SHM key 值需与 hftbase ORS 侧配置一致
+
+ors:
+  md_shm_key: 0x1001          # 行情 SHM 队列 key
+  md_queue_size: 65536         # 行情队列大小 (会向上取整到 2 的幂)
+  req_shm_key: 0x2001          # 请求 SHM 队列 key
+  req_queue_size: 4096         # 请求队列大小
+  resp_shm_key: 0x3001         # 回报 SHM 队列 key
+  resp_queue_size: 4096        # 回报队列大小
+  client_store_shm_key: 0x4001 # ClientStore SHM key
+
+strategy:
+  strategy_id: 92201
+  symbols:
+    - ag2506
+    - ag2512
+
+system:
+  log_level: info
