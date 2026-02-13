@@ -47,7 +47,7 @@ func (pas *PairwiseArbStrategy) SendAggressiveOrder() {
 			if pas.AggRepeat > 3 {
 				// C++: 超过最大重试次数 → 平仓
 				log.Printf("[PairwiseArb] aggressive retry exceeded (repeat=%d), squareoff", pas.AggRepeat)
-				pas.HandleSquareoff()
+				pas.handleSquareoffLocked()
 			} else {
 				// C++: 计算激进价格
 				var aggPrice float64
@@ -83,7 +83,7 @@ func (pas *PairwiseArbStrategy) SendAggressiveOrder() {
 			// C++: 重试阶梯
 			if pas.AggRepeat > 3 {
 				log.Printf("[PairwiseArb] aggressive retry exceeded (repeat=%d), squareoff", pas.AggRepeat)
-				pas.HandleSquareoff()
+				pas.handleSquareoffLocked()
 			} else {
 				var aggPrice float64
 				tickSize := inst2.TickSize

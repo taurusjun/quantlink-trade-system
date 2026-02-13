@@ -19,6 +19,9 @@ import (
 //  5. AVG_SPREAD_AWAY 安全检查
 //  6. 调用 SendOrder()
 func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.MarketUpdateNew) {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
 	// C++: 加载 tValue（tvar SHM）
 	// 参考: PairwiseArbStrategy.cpp:482-486
 	if pas.TVar != nil {
@@ -54,7 +57,7 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 		log.Printf("[PairwiseArb] AVG_SPREAD_AWAY exceeded: curr=%.4f avg=%.4f tick=%.2f limit=%d",
 			pas.Spread.CurrSpread, pas.Spread.AvgSpread, pas.Spread.TickSize, pas.Spread.AvgSpreadAway)
 		if pas.Active {
-			pas.HandleSquareoff()
+			pas.handleSquareoffLocked()
 		}
 		return
 	}
@@ -68,7 +71,7 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 			log.Printf("[PairwiseArb] MaxLoss breached: combinedPNL=%.2f maxLoss=%.2f",
 				combinedPNL, maxLoss)
 			if pas.Active {
-				pas.HandleSquareoff()
+				pas.handleSquareoffLocked()
 			}
 			return
 		}
@@ -90,6 +93,9 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 //  4. Leg1 TRADE_CONFIRM: 重置 aggRepeat
 //  5. 如果活跃且有未对冲头寸，调用 SendAggressiveOrder
 func (pas *PairwiseArbStrategy) ORSCallBack(resp *shm.ResponseMsg) {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
 	orderID := resp.OrderID
 
 	// C++: 查找属于哪条腿
@@ -97,8 +103,8 @@ func (pas *PairwiseArbStrategy) ORSCallBack(resp *shm.ResponseMsg) {
 	_, inLeg2 := pas.Leg2.Orders.OrdMap[orderID]
 
 	if inLeg1 {
-		// C++: 委托给 leg1
-		pas.Leg1.ORSCallBack(resp)
+		// C++: 委托给 leg1（直接处理，绕过 override 避免递归）
+		pas.Leg1.ProcessORSDirectly(resp)
 
 		// C++: TRADE_CONFIRM 时重置 agg_repeat
 		if resp.Response_Type == shm.TRADE_CONFIRM {
@@ -110,8 +116,8 @@ func (pas *PairwiseArbStrategy) ORSCallBack(resp *shm.ResponseMsg) {
 		// C++: 先处理 aggressive order 计数器
 		pas.handleAggOrder(resp)
 
-		// C++: 委托给 leg2
-		pas.Leg2.ORSCallBack(resp)
+		// C++: 委托给 leg2（直接处理，绕过 override 避免递归）
+		pas.Leg2.ProcessORSDirectly(resp)
 
 		// C++: TRADE_CONFIRM 时重置 agg_repeat
 		if resp.Response_Type == shm.TRADE_CONFIRM {

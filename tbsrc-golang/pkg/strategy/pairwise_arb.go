@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"log"
+	"sync"
 
 	"tbsrc-golang/pkg/client"
 	"tbsrc-golang/pkg/config"
@@ -56,6 +57,10 @@ type PairwiseArbStrategy struct {
 
 	// daily_init 文件路径（用于 HandleSquareoff 时保存状态）
 	DailyInitPath string
+
+	// mu 保护所有策略状态，防止 pollMD 和 pollORS 两个 goroutine 并发修改
+	// C++ 中 SHM 回调在同一线程中序列化，Go 需要显式加锁
+	mu sync.Mutex
 }
 
 // NewPairwiseArbStrategy 创建配对套利策略
@@ -94,6 +99,12 @@ func NewPairwiseArbStrategy(
 		AggRepeat:     1,
 	}
 
+	// C++: ORS 回调需要先经过 PairwiseArbStrategy.ORSCallBack
+	// （handleAggOrder + SendAggressiveOrder），再委托给各腿处理。
+	// 设置 override 使 client.orderIDMap → LegManager → PairwiseArbStrategy
+	leg1.ORSCallbackOverride = pas
+	leg2.ORSCallbackOverride = pas
+
 	return pas
 }
 
@@ -118,6 +129,12 @@ func (pas *PairwiseArbStrategy) Init(avgSpreadOri float64, netposYtd1, netpos2da
 
 // SetActive 设置策略激活状态
 func (pas *PairwiseArbStrategy) SetActive(active bool) {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+	pas.setActiveLocked(active)
+}
+
+func (pas *PairwiseArbStrategy) setActiveLocked(active bool) {
 	pas.Active = active
 	pas.Leg1.State.Active = active
 	pas.Leg2.State.Active = active
@@ -137,7 +154,15 @@ func (pas *PairwiseArbStrategy) NetExposure() int32 {
 
 // HandleSquareoff 平仓退出
 // 参考: PairwiseArbStrategy.cpp:586-626
+// 注意：可能从外部 goroutine（如 SIGINT handler）调用，需要加锁
 func (pas *PairwiseArbStrategy) HandleSquareoff() {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+	pas.handleSquareoffLocked()
+}
+
+// handleSquareoffLocked 平仓退出的内部实现（调用者已持有锁）
+func (pas *PairwiseArbStrategy) handleSquareoffLocked() {
 	log.Printf("[PairwiseArb] HandleSquareoff triggered")
 
 	// C++: set exit flags on both legs
@@ -153,7 +178,7 @@ func (pas *PairwiseArbStrategy) HandleSquareoff() {
 	pas.Leg2.HandleSquareoff()
 
 	// C++: deactivate
-	pas.SetActive(false)
+	pas.setActiveLocked(false)
 
 	// 保存 daily_init 状态（参考 SaveMatrix2）
 	if pas.DailyInitPath != "" {
@@ -174,6 +199,8 @@ func (pas *PairwiseArbStrategy) HandleSquareoff() {
 // HandleSquareON 恢复策略
 // 参考: PairwiseArbStrategy.cpp:571-584
 func (pas *PairwiseArbStrategy) HandleSquareON() {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
 	pas.Leg1.State.OnExit = false
 	pas.Leg1.State.OnCancel = false
 	pas.Leg1.State.OnFlat = false
@@ -181,7 +208,7 @@ func (pas *PairwiseArbStrategy) HandleSquareON() {
 	pas.Leg2.State.OnCancel = false
 	pas.Leg2.State.OnFlat = false
 	pas.AggRepeat = 1
-	pas.SetActive(true)
+	pas.setActiveLocked(true)
 
 	log.Printf("[PairwiseArb] HandleSquareON: strategy reactivated")
 }

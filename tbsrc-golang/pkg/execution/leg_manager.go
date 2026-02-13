@@ -21,6 +21,12 @@ type LegManager struct {
 	Client     *client.Client
 	StrategyID int32
 	Account    string
+
+	// ORSCallbackOverride 允许父策略拦截 ORS 回调
+	// C++ 中 PairwiseArbStrategy::ORSCallBack 先处理 handleAggOrder/SendAggressiveOrder，
+	// 再委托给 ExtraStrategy。Go 中 client.orderIDMap 注册的是 LegManager，
+	// 设置此字段后 LegManager.ORSCallBack 会转发到父策略而非直接处理。
+	ORSCallbackOverride client.StrategyCallback
 }
 
 // NewLegManager 创建 LegManager
@@ -184,8 +190,19 @@ func (lm *LegManager) MDCallBack(inst *instrument.Instrument, md *shm.MarketUpda
 	}
 }
 
-// ORSCallBack ORS 回调，委托给 OrderManager
+// ORSCallBack ORS 回调
+// 如果设置了 ORSCallbackOverride（父策略），转发给它处理；
+// 否则直接委托给 OrderManager。
 func (lm *LegManager) ORSCallBack(resp *shm.ResponseMsg) {
+	if lm.ORSCallbackOverride != nil {
+		lm.ORSCallbackOverride.ORSCallBack(resp)
+		return
+	}
+	lm.Orders.ProcessORSResponse(resp, lm.Inst)
+}
+
+// ProcessORSDirectly 由父策略调用，直接处理 ORS 响应（不经过 override）
+func (lm *LegManager) ProcessORSDirectly(resp *shm.ResponseMsg) {
 	lm.Orders.ProcessORSResponse(resp, lm.Inst)
 }
 
