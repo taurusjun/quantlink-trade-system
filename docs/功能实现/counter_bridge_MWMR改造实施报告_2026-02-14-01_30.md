@@ -108,9 +108,11 @@ SHFE/INE 区分平今/平昨，其他交易所统一使用 CLOSE_YESTD。
 
 | 参数 | SysV Key | 默认大小 |
 |------|---------|---------|
-| 请求队列 | 0x0F20 (3872) | 4096 |
-| 响应队列 | 0x1308 (4872) | 4096 |
-| ClientStore | 0x16F0 (5872) | — |
+| 请求队列 | 0x2001 | 4096 |
+| 响应队列 | 0x3001 | 4096 |
+| ClientStore | 0x4001 | — |
+
+与 Go `trader.tbsrc.yaml` 中的 `req_shm_key`/`resp_shm_key`/`client_store_shm_key` 一致。
 
 ### 4. CMakeLists.txt 更新
 

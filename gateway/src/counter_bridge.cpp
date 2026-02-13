@@ -90,11 +90,11 @@ struct CachedOrderInfo {
 // SHM configuration
 // ============================================================
 struct SHMConfig {
-    int request_key      = 0x0F20; // 3872
+    int request_key      = 0x2001; // must match Go trader.tbsrc.yaml req_shm_key
     int request_size     = 4096;
-    int response_key     = 0x1308; // 4872
+    int response_key     = 0x3001; // must match Go trader.tbsrc.yaml resp_shm_key
     int response_size    = 4096;
-    int client_store_key = 0x16F0; // 5872
+    int client_store_key = 0x4001; // must match Go trader.tbsrc.yaml client_store_shm_key
 };
 
 // ============================================================
