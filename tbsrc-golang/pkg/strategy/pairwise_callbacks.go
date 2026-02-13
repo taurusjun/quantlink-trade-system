@@ -62,9 +62,18 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 		return
 	}
 
+	// C++: Phase 7 — 时间/亏损/止损检查（每腿独立）
+	// 参考: ExecutionStrategy.cpp:2150-2186, 2279-2339
+	currentTimeNs := pas.Leg1.State.ExchTS
+	maxLoss := pas.Thold1.MaxLoss
+	upnlLoss := pas.Thold1.UPNLLoss
+	stopLoss := pas.Thold1.StopLoss
+
+	pas.Leg1.State.CheckSquareoff(currentTimeNs, maxLoss, upnlLoss, stopLoss)
+	pas.Leg2.State.CheckSquareoff(currentTimeNs, 0, upnlLoss, stopLoss) // maxLoss handled at cross-leg level below
+
 	// C++: 检查跨腿 maxLoss
 	// 参考: PairwiseArbStrategy.cpp:487-492
-	maxLoss := pas.Thold1.MaxLoss
 	if maxLoss > 0 {
 		combinedPNL := pas.Leg1.State.NetPNL + pas.Leg2.State.NetPNL
 		if combinedPNL < -maxLoss {
@@ -75,6 +84,14 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 			}
 			return
 		}
+	}
+
+	// C++: 如果任一腿触发退出/平仓，执行策略级平仓
+	if pas.Leg1.State.OnExit || pas.Leg2.State.OnExit {
+		if pas.Active {
+			pas.handleSquareoffLocked()
+		}
+		return
 	}
 
 	// C++: 如果策略激活，调用 SendOrder
@@ -128,6 +145,27 @@ func (pas *PairwiseArbStrategy) ORSCallBack(resp *shm.ResponseMsg) {
 	} else {
 		log.Printf("[PairwiseArb] unknown orderID=%d responseType=%d",
 			orderID, resp.Response_Type)
+		return
+	}
+
+	// C++: Phase 7 — RMS 拒绝处理
+	// 参考: ExecutionStrategy.cpp:1069-1080
+	if resp.Response_Type == shm.RMS_REJECT {
+		if inLeg1 {
+			pas.Leg1.State.HandleRMSReject(pas.Inst1)
+		} else if inLeg2 {
+			pas.Leg2.State.HandleRMSReject(pas.Inst2)
+		}
+	}
+
+	// C++: Phase 7 — 拒绝次数检查
+	// 参考: ExecutionStrategy.cpp:432-481
+	if pas.Leg1.State.CheckRejectLimit() || pas.Leg2.State.CheckRejectLimit() {
+		log.Printf("[PairwiseArb] reject limit exceeded: leg1=%d leg2=%d",
+			pas.Leg1.State.RejectCount, pas.Leg2.State.RejectCount)
+		if pas.Active {
+			pas.handleSquareoffLocked()
+		}
 		return
 	}
 

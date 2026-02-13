@@ -124,6 +124,9 @@ type ExecutionState struct {
 	// 结束时间
 	EndTimeEpoch    uint64 // m_endTimeEpoch
 	EndTimeAggEpoch uint64 // m_endTimeAggEpoch
+
+	// 止损时间戳（用于 auto-resume 冷却）
+	StopLossTS uint64 // 触发 stop loss 时的纳秒时间戳
 }
 
 // Reset 将所有状态字段归零
@@ -221,4 +224,7 @@ func (s *ExecutionState) Reset() {
 	s.TholdBidMaxPos = 0
 	s.TholdAskSize = 0
 	s.TholdAskMaxPos = 0
+
+	// 止损时间戳
+	s.StopLossTS = 0
 }
