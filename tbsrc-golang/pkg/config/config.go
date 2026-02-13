@@ -16,8 +16,34 @@ type Config struct {
 
 // StrategyConfig holds strategy-level parameters.
 type StrategyConfig struct {
-	StrategyID int      `yaml:"strategy_id"`
-	Symbols    []string `yaml:"symbols"`
+	StrategyID  int                          `yaml:"strategy_id"`
+	Account     string                       `yaml:"account"`
+	Product     string                       `yaml:"product"`
+	Symbols     []string                     `yaml:"symbols"`
+	Instruments map[string]InstrumentConfig   `yaml:"instruments"`
+	Thresholds  map[string]map[string]float64 `yaml:"thresholds"`
+	ExchCosts   ExchangeCostsConfig          `yaml:"exchange_costs"`
+}
+
+// InstrumentConfig holds per-instrument configuration.
+type InstrumentConfig struct {
+	Exchange        string  `yaml:"exchange"`
+	TickSize        float64 `yaml:"tick_size"`
+	LotSize         float64 `yaml:"lot_size"`
+	ContractFactor  float64 `yaml:"contract_factor"`
+	PriceMultiplier float64 `yaml:"price_multiplier"`
+	PriceFactor     float64 `yaml:"price_factor"`
+	SendInLots      bool    `yaml:"send_in_lots"`
+	Token           int32   `yaml:"token"`
+	ExpiryDate      int32   `yaml:"expiry_date"`
+}
+
+// ExchangeCostsConfig holds exchange transaction cost rates.
+type ExchangeCostsConfig struct {
+	BuyExchTx         float64 `yaml:"buy_exch_tx"`
+	SellExchTx        float64 `yaml:"sell_exch_tx"`
+	BuyExchContractTx float64 `yaml:"buy_exch_contract_tx"`
+	SellExchContractTx float64 `yaml:"sell_exch_contract_tx"`
 }
 
 // SystemConfig holds system-level parameters.
