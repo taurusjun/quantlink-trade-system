@@ -381,6 +381,12 @@ type MarketUpdateNew struct {
 
 // --- Queue element wrappers (used in MWMRQueue SHM layout) ---
 
+// ReqQueueElemSize is the C++ sizeof(QueueElem<RequestMsg>) = 320 bytes.
+// C++: RequestMsg has __attribute__((aligned(64))), which causes the compiler
+// to pad QueueElem<RequestMsg> from 264 (=256+8) to 320 (=5*64) bytes.
+// This must be passed as elemSizeOverride when creating/opening the request queue.
+const ReqQueueElemSize uintptr = 320
+
 // QueueElemMD is QueueElem<MarketUpdateNew>: data + seqNo
 type QueueElemMD struct {
 	Data  MarketUpdateNew
@@ -388,9 +394,14 @@ type QueueElemMD struct {
 }
 
 // QueueElemReq is QueueElem<RequestMsg>: data + seqNo
+// C++: RequestMsg has __attribute__((aligned(64))), so QueueElem<RequestMsg>
+// is padded to 320 bytes (= next multiple of 64 after 256+8=264).
+// The seqNo is at offset 256 (sizeof(RequestMsg)), and the remaining
+// 56 bytes (320-264) are tail padding for alignment.
 type QueueElemReq struct {
 	Data  RequestMsg
 	SeqNo uint64
+	_pad  [56]byte // pad to 320 bytes to match C++ aligned(64) on RequestMsg
 }
 
 // QueueElemResp is QueueElem<ResponseMsg>: data + seqNo

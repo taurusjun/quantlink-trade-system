@@ -125,7 +125,8 @@ func TestMarketUpdateNew(t *testing.T) {
 // TestQueueElements verifies queue element wrapper sizes.
 func TestQueueElements(t *testing.T) {
 	assertSize(t, "QueueElemMD", unsafe.Sizeof(QueueElemMD{}), 824)
-	assertSize(t, "QueueElemReq", unsafe.Sizeof(QueueElemReq{}), 264)
+	// C++: QueueElem<RequestMsg> = 320 bytes due to __attribute__((aligned(64)))
+	assertSize(t, "QueueElemReq", unsafe.Sizeof(QueueElemReq{}), 320)
 	assertSize(t, "QueueElemResp", unsafe.Sizeof(QueueElemResp{}), 184)
 
 	var qmd QueueElemMD

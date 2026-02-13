@@ -106,6 +106,21 @@ func (pas *PairwiseArbStrategy) MDCallBack(inst *instrument.Instrument, md *shm.
 		return
 	}
 
+	// C++: 定期日志（每秒1次）
+	// 参考: PairwiseArbStrategy.cpp:527-543
+	nowNs := pas.Leg1.State.ExchTS
+	gap := uint64(1_000_000_000) // 1秒
+	if nowNs-pas.LastMonitorTS > gap {
+		logSpread := pas.Inst1.BidPx[0] - pas.Inst2.BidPx[0]
+		logShort := pas.Inst1.AskPx[0] - pas.Inst2.AskPx[0]
+		log.Printf("[PairwiseArb] [L/S]%.2f/%.2f [avg]%.4f [B/L/S]%.2f/%.2f/%.2f [Sz/MaxSz]%d/%d netpos=%d",
+			logSpread, logShort, pas.Spread.AvgSpread,
+			pas.Thold1.BeginPlace, pas.Thold1.LongPlace, pas.Thold1.ShortPlace,
+			pas.Thold1.Size, pas.Thold1.MaxSize,
+			pas.Leg1.State.NetposPass+pas.Leg2.State.NetposAgg)
+		pas.LastMonitorTS = nowNs
+	}
+
 	// C++: 如果策略激活，调用 SendOrder
 	if pas.Active {
 		pas.SendOrder()

@@ -159,20 +159,28 @@ void RunSimulator(const std::vector<std::string>& symbols, int rate_hz) {
                   << " exchange=" << (int)inst.exchange << std::endl;
     }
 
-    // Random engine
+    // Random engine — correlated price generation for pair trading
+    // All instruments of the same product share a common price shock (rho=0.95)
+    // plus a small idiosyncratic component, simulating same-commodity different-expiry
     std::mt19937 rng(42);
     std::normal_distribution<double> price_move(0.0, 1.0);
     std::uniform_int_distribution<int> qty_jitter(-3, 10);
+    const double correlation = 0.95;  // inter-contract correlation
+    const double idio_scale = std::sqrt(1.0 - correlation * correlation);
 
     auto sleep_us = std::chrono::microseconds(1000000 / rate_hz);
     uint64_t seq = 1;
 
     while (g_running.load()) {
+        // Generate common shock shared by all instruments this tick
+        double common_shock = price_move(rng);
+
         for (auto& inst : instruments) {
             if (!g_running.load()) break;
 
-            // Random walk the mid price
-            double move = price_move(rng) * inst.volatility;
+            // Correlated random walk: rho * common + sqrt(1-rho^2) * idiosyncratic
+            double idio_shock = price_move(rng);
+            double move = (correlation * common_shock + idio_scale * idio_shock) * inst.volatility;
             inst.mid_price += move;
             // Round to tick size
             inst.mid_price = std::round(inst.mid_price / inst.tick_size) * inst.tick_size;
@@ -430,9 +438,10 @@ int main(int argc, char** argv) {
         std::cerr << "  ctp:config.yaml      Receive CTP market data" << std::endl;
         std::cerr << "\nOptions:" << std::endl;
         std::cerr << "  --rate N             Ticks per second per symbol (simulator, default 2)" << std::endl;
+        std::cerr << "  --queue-size N       MWMR queue size (default 65536, use 2048 on macOS)" << std::endl;
         std::cerr << "\nExamples:" << std::endl;
         std::cerr << "  " << argv[0] << " simulator:ag2506,ag2512" << std::endl;
-        std::cerr << "  " << argv[0] << " simulator:ag2506,ag2512 --rate 5" << std::endl;
+        std::cerr << "  " << argv[0] << " simulator:ag2506,ag2512 --rate 5 --queue-size 2048" << std::endl;
         std::cerr << "  " << argv[0] << " ctp:config/ctp/ctp_md.secret.yaml" << std::endl;
         return 1;
     }
@@ -451,12 +460,16 @@ int main(int argc, char** argv) {
     std::string mode = mode_config.substr(0, colon);
     std::string config = mode_config.substr(colon + 1);
 
-    // Parse optional --rate
+    // Parse optional flags
     int rate_hz = 2;
+    int queue_size_override = 0;
     for (int i = 2; i < argc; i++) {
-        if (std::string(argv[i]) == "--rate" && i + 1 < argc) {
+        std::string arg(argv[i]);
+        if (arg == "--rate" && i + 1 < argc) {
             rate_hz = std::atoi(argv[++i]);
             if (rate_hz <= 0) rate_hz = 2;
+        } else if (arg == "--queue-size" && i + 1 < argc) {
+            queue_size_override = std::atoi(argv[++i]);
         }
     }
 
@@ -473,6 +486,9 @@ int main(int argc, char** argv) {
 
     // 1. Create SysV MWMR MD queue
     MDFeederConfig cfg;
+    if (queue_size_override > 0) {
+        cfg.md_queue_size = queue_size_override;
+    }
     std::cout << "[MDFeeder] Creating SysV MWMR MD queue..." << std::endl;
     std::cout << "[MDFeeder]   Key: 0x" << std::hex << cfg.md_shm_key << std::dec << std::endl;
     std::cout << "[MDFeeder]   Size: " << cfg.md_queue_size << " elements" << std::endl;

@@ -57,7 +57,9 @@ func New(cfg Config, mdCb MDCallback, orsCb ORSCallback) (*Connector, error) {
 		return nil, fmt.Errorf("connector: MD queue: %w", err)
 	}
 
-	reqQ, err := shm.NewMWMRQueue[shm.RequestMsg](cfg.ReqShmKey, cfg.ReqQueueSz)
+	// C++: RequestMsg has __attribute__((aligned(64))), so QueueElem<RequestMsg>
+	// is 320 bytes (not 264). Must pass elemSizeOverride to match C++ layout.
+	reqQ, err := shm.NewMWMRQueue[shm.RequestMsg](cfg.ReqShmKey, cfg.ReqQueueSz, shm.ReqQueueElemSize)
 	if err != nil {
 		mdQ.Close()
 		return nil, fmt.Errorf("connector: Req queue: %w", err)
@@ -101,7 +103,9 @@ func NewForTest(cfg Config, mdCb MDCallback, orsCb ORSCallback) (*Connector, err
 		return nil, fmt.Errorf("connector: MD queue: %w", err)
 	}
 
-	reqQ, err := shm.NewMWMRQueueCreate[shm.RequestMsg](cfg.ReqShmKey, cfg.ReqQueueSz)
+	// C++: RequestMsg has __attribute__((aligned(64))), so QueueElem<RequestMsg>
+	// is 320 bytes (not 264). Must pass elemSizeOverride to match C++ layout.
+	reqQ, err := shm.NewMWMRQueueCreate[shm.RequestMsg](cfg.ReqShmKey, cfg.ReqQueueSz, shm.ReqQueueElemSize)
 	if err != nil {
 		mdQ.Destroy()
 		return nil, fmt.Errorf("connector: Req queue: %w", err)

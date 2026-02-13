@@ -1,0 +1,99 @@
+# tbsrc-golang 测试配置
+# macOS SysV SHM 限制：所有 SHM 段总共 4MB
+# 生产环境 (Linux) 使用 trader.tbsrc.yaml 的 65536 队列大小
+
+ors:
+  md_shm_key: 0x1001
+  md_queue_size: 2048            # macOS: 2048*824=1.6MB (生产用 65536)
+  req_shm_key: 0x2001
+  req_queue_size: 4096
+  resp_shm_key: 0x3001
+  resp_queue_size: 4096
+  client_store_shm_key: 0x4001
+
+strategy:
+  strategy_id: 92201
+  account: "PRP05"
+  product: "AG"
+  symbols:
+    - ag2606
+    - ag2612
+
+  instruments:
+    ag2606:
+      exchange: "SHFE"
+      tick_size: 1.0
+      lot_size: 15
+      contract_factor: 15.0
+      price_multiplier: 15.0
+      price_factor: 1.0
+      send_in_lots: true
+      token: 0
+      expiry_date: 20260615
+    ag2612:
+      exchange: "SHFE"
+      tick_size: 1.0
+      lot_size: 15
+      contract_factor: 15.0
+      price_multiplier: 15.0
+      price_factor: 1.0
+      send_in_lots: true
+      token: 0
+      expiry_date: 20261215
+
+  thresholds:
+    first:
+      begin_place: 0.35
+      begin_remove: 0.15
+      long_place: 0.55
+      long_remove: 0.30
+      short_place: 0.20
+      short_remove: 0.10
+      size: 1
+      max_size: 5
+      begin_size: 1
+      max_os_order: 5
+      bid_size: 1
+      bid_max_size: 5
+      ask_size: 1
+      ask_max_size: 5
+      supporting_orders: 1
+      max_quote_level: 1
+      cross: 1000000000
+      close_cross: 100000000000
+      stop_loss: 10000000000
+      max_loss: 100000000000
+      upnl_loss: 10000000000
+      alpha: 0.05
+      spread_ewa: 0.6
+      avg_spread_away: 100
+      slop: 20
+      const: 0.0
+      hedge_ratio: 1.0
+      pause: 0
+      sqroff_time: 0
+    second:
+      begin_place: 0.35
+      begin_remove: 0.15
+      long_place: 0.55
+      long_remove: 0.30
+      short_place: 0.20
+      short_remove: 0.10
+      size: 1
+      max_size: 10
+      begin_size: 1
+      max_os_order: 5
+      bid_size: 1
+      bid_max_size: 10
+      ask_size: 1
+      ask_max_size: 10
+      supporting_orders: 1
+
+  exchange_costs:
+    buy_exch_tx: 0.0
+    sell_exch_tx: 0.0
+    buy_exch_contract_tx: 0.0
+    sell_exch_contract_tx: 0.0
+
+system:
+  log_level: debug

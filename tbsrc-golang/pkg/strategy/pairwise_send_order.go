@@ -204,10 +204,11 @@ func (pas *PairwiseArbStrategy) cancelOutOfRangeOrders(avgSpread, bidRemove, ask
 // 参考: PairwiseArbStrategy.cpp:348-385
 //
 // C++ 逻辑:
-//   1. 计算 net exposure = netpos_pass + netpos_agg + pendingNetposAgg
-//   2. 检查 agg order 数量限制 (SUPPORTING_ORDERS)
-//   3. 检查 last_agg_side + 100ms 冷却时间
-//   4. 发送 SendAskOrder2/SendBidOrder2 with CROSS ordType
+//
+//	1. 计算 net exposure = netpos_pass + netpos_agg + pendingNetposAgg
+//	2. 检查 agg order 数量限制 (SUPPORTING_ORDERS)
+//	3. 检查 last_agg_side + 100ms 冷却时间
+//	4. 发送 SendAskOrder2/SendBidOrder2 with CROSS ordType
 func (pas *PairwiseArbStrategy) hedgeLeg2() {
 	pendingAgg := pas.CalcPendingNetposAgg()
 	exposure := pas.Leg1.State.NetposPass + pas.Leg2.State.NetposAgg + pendingAgg

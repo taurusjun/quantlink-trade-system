@@ -30,12 +30,22 @@ type MWMRQueue[T any] struct {
 // shmKey: SysV SHM key
 // queueSize: number of elements (will be rounded to next power of 2)
 // The type parameter T determines the element size.
-func NewMWMRQueue[T any](shmKey int, queueSize int) (*MWMRQueue[T], error) {
+// elemSizeOverride: if > 0, use this as the queue element size instead of
+// computing sizeof(T)+8. This is needed when the C++ struct has alignment
+// attributes (e.g. __attribute__((aligned(64)))) that cause the C++ compiler
+// to pad QueueElem<T> beyond sizeof(T)+8.
+func NewMWMRQueue[T any](shmKey int, queueSize int, elemSizeOverride ...uintptr) (*MWMRQueue[T], error) {
 	size := nextPowerOf2(int64(queueSize))
 
 	var zero T
 	dataSize := unsafe.Sizeof(zero)
 	elemSize := dataSize + 8 // sizeof(T) + sizeof(uint64 seqNo)
+
+	// Allow override for C++ alignment-padded structs
+	if len(elemSizeOverride) > 0 && elemSizeOverride[0] > 0 {
+		elemSize = elemSizeOverride[0]
+	}
+
 	headerSize := uintptr(8) // sizeof(MWMRHeader) = sizeof(atomic<int64_t>)
 
 	totalBytes := int(headerSize + uintptr(size)*elemSize)
@@ -62,12 +72,18 @@ func NewMWMRQueue[T any](shmKey int, queueSize int) (*MWMRQueue[T], error) {
 }
 
 // NewMWMRQueueCreate creates a new SHM segment for a MWMR queue (for tests).
-func NewMWMRQueueCreate[T any](shmKey int, queueSize int) (*MWMRQueue[T], error) {
+func NewMWMRQueueCreate[T any](shmKey int, queueSize int, elemSizeOverride ...uintptr) (*MWMRQueue[T], error) {
 	size := nextPowerOf2(int64(queueSize))
 
 	var zero T
 	dataSize := unsafe.Sizeof(zero)
 	elemSize := dataSize + 8
+
+	// Allow override for C++ alignment-padded structs
+	if len(elemSizeOverride) > 0 && elemSizeOverride[0] > 0 {
+		elemSize = elemSizeOverride[0]
+	}
+
 	headerSize := uintptr(8)
 
 	totalBytes := int(headerSize + uintptr(size)*elemSize)
