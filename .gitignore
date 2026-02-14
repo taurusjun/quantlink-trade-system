@@ -12,7 +12,11 @@ bin/
 golang/bin/
 golang/pkg/proto/
 golang/trader
+tbsrc-golang/trader
 *.exe
+
+# C++ temporary build artifacts
+a.out
 
 # IDE
 .vscode/

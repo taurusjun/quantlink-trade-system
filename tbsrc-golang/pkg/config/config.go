@@ -49,6 +49,7 @@ type ExchangeCostsConfig struct {
 // SystemConfig holds system-level parameters.
 type SystemConfig struct {
 	LogLevel string `yaml:"log_level"`
+	APIPort  int    `yaml:"api_port"` // Web UI / REST API 端口，默认 9201
 }
 
 // Load reads a YAML config file and returns a Config.

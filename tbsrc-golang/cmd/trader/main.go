@@ -3,11 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
+	"tbsrc-golang/pkg/api"
 	"tbsrc-golang/pkg/client"
 	"tbsrc-golang/pkg/config"
 	"tbsrc-golang/pkg/connector"
@@ -51,10 +55,6 @@ func main() {
 
 	// Client 和 Connector 需要互相引用:
 	// Connector 需要 Client 的 OnMDUpdate/OnORSUpdate 作为回调
-	// 先创建 Client（conn=nil），然后创建 Connector，最后设置 conn
-	// 但 NewClient 需要 conn，所以用两步创建
-
-	// 创建占位回调（后面会被 Client 替代）
 	var cli *client.Client
 
 	exchangeType := exchangeTypeFromString(cfg.Strategy.Instruments[sym1].Exchange)
@@ -147,6 +147,32 @@ func main() {
 		}
 	}
 
+	// ---- 启动 API Server ----
+	apiPort := cfg.System.APIPort
+	if apiPort == 0 {
+		apiPort = 9201
+	}
+	// 从可执行文件相对路径加载 web/ 静态文件
+	var webFS fs.FS
+	exe, _ := os.Executable()
+	webDir := filepath.Join(filepath.Dir(exe), "web")
+	if info, err := os.Stat(webDir); err == nil && info.IsDir() {
+		webFS = os.DirFS(webDir)
+		log.Printf("[main] Web 静态文件目录: %s", webDir)
+	} else {
+		// 尝试当前工作目录下的 web/
+		if info, err := os.Stat("web"); err == nil && info.IsDir() {
+			webFS = os.DirFS("web")
+			log.Printf("[main] Web 静态文件目录: web/ (当前目录)")
+		} else {
+			log.Printf("[main] Web 静态文件目录未找到 (仅 REST API 可用)")
+		}
+	}
+	apiServer := api.NewServer(apiPort, webFS)
+	apiServer.Start()
+	defer apiServer.Stop()
+	log.Printf("[main] API Server 已启动: http://localhost:%d/", apiPort)
+
 	// ---- 启动 Connector ----
 	conn.Start()
 	log.Printf("[main] Connector 已启动，开始接收行情和回报")
@@ -155,12 +181,78 @@ func main() {
 	pas.SetActive(true)
 	log.Printf("[main] 策略已激活: strategy_id=%d", cfg.Strategy.StrategyID)
 
-	// ---- 等待信号 ----
+	// ---- 信号注册（对应 C++ sigfillset + sigwait）----
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Printf("[main] 收到信号 %v，开始关闭...", sig)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM,
+		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTSTP)
 
+	// ---- 快照 ticker (1秒) ----
+	snapshotTicker := time.NewTicker(1 * time.Second)
+	defer snapshotTicker.Stop()
+
+	// ---- 阈值热加载函数 ----
+	reloadThresholds := func() {
+		newCfg, err := config.Load(*configPath)
+		if err != nil {
+			log.Printf("[main] 阈值重载失败: %v", err)
+			return
+		}
+		if m, ok := newCfg.Strategy.Thresholds["first"]; ok {
+			thold1.LoadFromMap(m)
+		}
+		if m, ok := newCfg.Strategy.Thresholds["second"]; ok {
+			thold2.LoadFromMap(m)
+		}
+		log.Printf("[main] 阈值已热加载")
+	}
+
+	// ---- 主事件循环 ----
+	log.Printf("[main] 进入主事件循环 (信号 + Web UI + 快照)")
+	for {
+		select {
+		case sig := <-sigCh:
+			switch sig {
+			case syscall.SIGUSR1:
+				// C++: Strategy->m_Active = true; HandleSquareON()
+				log.Printf("[main] 收到 SIGUSR1，激活策略")
+				pas.HandleSquareON()
+			case syscall.SIGUSR2:
+				// C++: LoadThresholds(simConfig)
+				log.Printf("[main] 收到 SIGUSR2，热加载阈值")
+				reloadThresholds()
+			case syscall.SIGTSTP:
+				// C++: HandleSquareoff()
+				log.Printf("[main] 收到 SIGTSTP，平仓退出")
+				pas.HandleSquareoff()
+			default:
+				// SIGINT / SIGTERM → 关闭进程
+				log.Printf("[main] 收到 %v，关闭进程", sig)
+				goto shutdown
+			}
+
+		case <-snapshotTicker.C:
+			snap := api.CollectSnapshot(pas)
+			apiServer.UpdateSnapshot(snap)
+
+		case cmd := <-apiServer.CommandChan():
+			switch cmd.Type {
+			case "activate":
+				log.Printf("[main] Web UI: 激活策略")
+				pas.HandleSquareON()
+			case "deactivate":
+				log.Printf("[main] Web UI: 停用策略")
+				pas.SetActive(false)
+			case "squareoff":
+				log.Printf("[main] Web UI: 平仓退出")
+				pas.HandleSquareoff()
+			case "reload_thresholds":
+				log.Printf("[main] Web UI: 热加载阈值")
+				reloadThresholds()
+			}
+		}
+	}
+
+shutdown:
 	// ---- 优雅关闭 ----
 	// 1. 停止策略
 	if pas.IsActive() {
