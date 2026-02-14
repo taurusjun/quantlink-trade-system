@@ -660,26 +660,26 @@ func (se *StrategyEngine) PrintStatistics() {
 	se.mu.RLock()
 	defer se.mu.RUnlock()
 
-	fmt.Println("\n════════════════════════════════════════════════════════════")
-	fmt.Println("Strategy Engine Statistics")
-	fmt.Println("════════════════════════════════════════════════════════════")
+	log.Printf("[StrategyEngine] ============================================================")
+	log.Printf("[StrategyEngine] Strategy Engine Statistics")
+	log.Printf("[StrategyEngine] ============================================================")
 
 	for _, strategy := range se.strategies {
 		status := strategy.GetStatus()
 		position := strategy.GetEstimatedPosition()
 		pnl := strategy.GetPNL()
 
-		fmt.Printf("\nStrategy: %s (Type: %s)\n", status.StrategyID, strategy.GetType())
-		fmt.Printf("  Running: %v\n", status.IsRunning)
-		fmt.Printf("  Estimated Position: %d (Long: %d, Short: %d)\n",
+		log.Printf("[StrategyEngine] Strategy: %s (Type: %s)", status.StrategyID, strategy.GetType())
+		log.Printf("[StrategyEngine]   Running: %v", status.IsRunning)
+		log.Printf("[StrategyEngine]   Estimated Position: %d (Long: %d, Short: %d)",
 			position.NetQty, position.LongQty, position.ShortQty)
-		fmt.Printf("  P&L: %.2f (Realized: %.2f, Unrealized: %.2f)\n",
+		log.Printf("[StrategyEngine]   P&L: %.2f (Realized: %.2f, Unrealized: %.2f)",
 			pnl.TotalPnL, pnl.RealizedPnL, pnl.UnrealizedPnL)
-		fmt.Printf("  Orders: Signals=%d, Sent=%d, Fills=%d, Rejects=%d\n",
+		log.Printf("[StrategyEngine]   Orders: Signals=%d, Sent=%d, Fills=%d, Rejects=%d",
 			status.SignalCount, status.OrderCount, status.FillCount, status.RejectCount)
 	}
 
-	fmt.Println("════════════════════════════════════════════════════════════")
+	log.Printf("[StrategyEngine] ============================================================")
 }
 
 // GetORSClient returns the ORS client instance
