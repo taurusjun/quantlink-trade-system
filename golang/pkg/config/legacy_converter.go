@@ -28,6 +28,15 @@ func ConvertLegacyToTraderConfig(
 	// 转换为策略参数
 	strategyParams := ConvertModelToStrategyParams(modelParams)
 
+	// 注入 strategy_id 到参数中（供 PairwiseArbStrategy.Initialize 读取）
+	// C++: m_strategyID 用于 daily_init 文件名（如 daily_init.92201）
+	sid, err := fmt.Sscanf(strategyID, "%d", new(int))
+	if err == nil && sid > 0 {
+		var numID int
+		fmt.Sscanf(strategyID, "%d", &numID)
+		strategyParams["strategy_id"] = float64(numID)
+	}
+
 	// 创建新配置
 	cfg := &TraderConfig{
 		System: SystemConfig{
@@ -66,6 +75,7 @@ func ConvertLegacyToTraderConfig(
 		Engine: EngineConfig{
 			ORSGatewayAddr:      "localhost:50051",
 			NATSAddr:            "nats://localhost:4222",
+			CounterBridgeAddr:   "localhost:8080",
 			OrderQueueSize:      100,
 			TimerInterval:       5 * time.Second,
 			MaxConcurrentOrders: 10,

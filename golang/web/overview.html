@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantlinkTrader Overview</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #667eea;
+            --primary-dark: #764ba2;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107;
+            --info-color: #17a2b8;
+            --text-color: #212529;
+            --text-muted: #6c757d;
+            --bg-light: #f8f9fa;
+            --border-color: #dee2e6;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-light);
+            min-height: 100vh;
+            color: var(--text-color);
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .header-title h1 {
+            font-size: 22px;
+            font-weight: 600;
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 14px;
+        }
+
+        .scan-info {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+
+        /* Aggregate Stats Bar */
+        .agg-stats {
+            display: flex;
+            gap: 15px;
+            padding: 15px 30px;
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .agg-stat {
+            display: flex;
+            flex-direction: column;
+            min-width: 120px;
+        }
+
+        .agg-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .agg-stat-value {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .agg-stat-value.positive { color: var(--success-color); }
+        .agg-stat-value.negative { color: var(--danger-color); }
+
+        .agg-actions {
+            margin-left: auto;
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Trader Cards Grid */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 20px;
+            padding: 20px 30px;
+        }
+
+        @media (max-width: 768px) {
+            .cards-grid {
+                grid-template-columns: 1fr;
+                padding: 15px;
+            }
+        }
+
+        /* Trader Card */
+        .trader-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .trader-card:hover {
+            box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+        }
+
+        .trader-card.active {
+            border-color: var(--success-color);
+        }
+
+        .trader-card.inactive {
+            border-color: var(--info-color);
+        }
+
+        .card-top {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .card-title-area {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .card-symbols {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .card-port {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .card-badges {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        /* Card Body */
+        .card-body {
+            padding: 15px 20px;
+        }
+
+        .card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+        }
+
+        .card-row-label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .card-row-value {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .card-row-value.positive { color: var(--success-color); }
+        .card-row-value.negative { color: var(--danger-color); }
+
+        .card-divider {
+            border-top: 1px solid var(--border-color);
+            margin: 8px 0;
+        }
+
+        /* Connection indicator */
+        .conn-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+
+        .conn-dot.on { background: var(--success-color); }
+        .conn-dot.off { background: var(--danger-color); }
+
+        /* Card Actions */
+        .card-actions {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-secondary { background: #e2e3e5; color: #383d41; }
+
+        /* Buttons */
+        .btn {
+            padding: 7px 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 11px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #218838;
+        }
+
+        .btn-danger {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #c82333;
+        }
+
+        .btn-outline {
+            background: white;
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-outline:hover:not(:disabled) {
+            background: var(--bg-light);
+        }
+
+        .btn-link {
+            background: none;
+            border: none;
+            color: var(--primary-color);
+            padding: 7px 8px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .toast {
+            padding: 10px 18px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            animation: slideIn 0.3s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-size: 13px;
+            max-width: 400px;
+        }
+
+        .toast-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .toast-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Empty / scanning state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state p {
+            margin-top: 10px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-title">
+                <h1>QuantlinkTrader Overview</h1>
+                <span class="scan-info">
+                    <span v-if="scanning" class="spinner"></span>
+                    Ports {{ portStart }}-{{ portEnd }}
+                </span>
+            </div>
+            <div class="header-status">
+                <span>{{ connectedCount }} Trader{{ connectedCount !== 1 ? 's' : '' }}</span>
+                <span>{{ activeStrategyCount }}/{{ totalStrategyCount }} Active</span>
+                <span style="font-size: 12px; opacity: 0.8;">{{ currentTime }}</span>
+            </div>
+        </header>
+
+        <!-- Toast Container -->
+        <div class="toast-container">
+            <div v-for="(toast, index) in toasts" :key="index"
+                 class="toast" :class="'toast-' + toast.type">
+                {{ toast.message }}
+            </div>
+        </div>
+
+        <!-- Aggregate Stats -->
+        <div class="agg-stats" v-if="allStrategies.length > 0">
+            <div class="agg-stat">
+                <span class="agg-stat-label">Total PNL</span>
+                <span class="agg-stat-value" :class="totalPnl >= 0 ? 'positive' : 'negative'">
+                    {{ formatPnL(totalPnl) }}
+                </span>
+            </div>
+            <div class="agg-stat">
+                <span class="agg-stat-label">Realised</span>
+                <span class="agg-stat-value" :class="totalRealised >= 0 ? 'positive' : 'negative'">
+                    {{ formatPnL(totalRealised) }}
+                </span>
+            </div>
+            <div class="agg-stat">
+                <span class="agg-stat-label">Unrealised</span>
+                <span class="agg-stat-value" :class="totalUnrealised >= 0 ? 'positive' : 'negative'">
+                    {{ formatPnL(totalUnrealised) }}
+                </span>
+            </div>
+            <div class="agg-stat">
+                <span class="agg-stat-label">Orders</span>
+                <span class="agg-stat-value">{{ totalOrders }}</span>
+            </div>
+
+            <div class="agg-actions">
+                <button class="btn btn-success btn-sm" @click="activateAll" :disabled="connectedCount === 0">
+                    Activate All
+                </button>
+                <button class="btn btn-danger btn-sm" @click="deactivateAll" :disabled="connectedCount === 0">
+                    Deactivate All
+                </button>
+            </div>
+        </div>
+
+        <!-- Strategy Cards -->
+        <div class="cards-grid" v-if="allStrategies.length > 0">
+            <div v-for="s in allStrategies" :key="s.port + '/' + s.id"
+                 class="trader-card"
+                 :class="s.active ? 'active' : 'inactive'">
+
+                <!-- Card Top -->
+                <div class="card-top">
+                    <div class="card-title-area">
+                        <span class="card-title">{{ s.id }}</span>
+                        <span class="card-symbols">{{ s.symbols.join(' / ') }}</span>
+                        <span class="card-port">:{{ s.port }} &middot; {{ s.lastUpdate || '--' }}</span>
+                    </div>
+                    <div class="card-badges">
+                        <span class="badge" :class="s.active ? 'badge-success' : 'badge-secondary'">
+                            {{ s.active ? 'Active' : 'Inactive' }}
+                        </span>
+                        <span class="badge badge-info">{{ s.type }}</span>
+                    </div>
+                </div>
+
+                <!-- Card Body -->
+                <div class="card-body">
+                    <div class="card-row">
+                        <span class="card-row-label">Net PNL</span>
+                        <span class="card-row-value" :class="(s.realized_pnl + s.unrealized_pnl) >= 0 ? 'positive' : 'negative'">
+                            {{ formatPnL(s.realized_pnl + s.unrealized_pnl) }}
+                        </span>
+                    </div>
+                    <div class="card-row">
+                        <span class="card-row-label">Realised</span>
+                        <span class="card-row-value" :class="s.realized_pnl >= 0 ? 'positive' : 'negative'">
+                            {{ formatPnL(s.realized_pnl) }}
+                        </span>
+                    </div>
+                    <div class="card-row">
+                        <span class="card-row-label">Unrealised</span>
+                        <span class="card-row-value" :class="s.unrealized_pnl >= 0 ? 'positive' : 'negative'">
+                            {{ formatPnL(s.unrealized_pnl) }}
+                        </span>
+                    </div>
+
+                    <div class="card-divider"></div>
+
+                    <!-- Indicators (from realtime strategies data) -->
+                    <template v-if="s.indicators && Object.keys(s.indicators).length > 0">
+                        <div class="card-row" v-for="(val, key) in filterIndicators(s.indicators)" :key="key">
+                            <span class="card-row-label">{{ formatIndicatorName(key) }}</span>
+                            <span class="card-row-value">{{ formatNum(val) }}</span>
+                        </div>
+                        <div class="card-divider"></div>
+                    </template>
+
+                    <!-- Positions for this strategy -->
+                    <div class="card-row">
+                        <span class="card-row-label">Positions</span>
+                        <span class="card-row-value">{{ strategyPositionSummary(s) }}</span>
+                    </div>
+
+                    <!-- Orders for this strategy -->
+                    <div class="card-row">
+                        <span class="card-row-label">Orders</span>
+                        <span class="card-row-value">{{ strategyOrderCount(s) }}</span>
+                    </div>
+                </div>
+
+                <!-- Card Actions -->
+                <div class="card-actions">
+                    <button class="btn btn-success btn-sm"
+                            @click="activateStrategy(s)"
+                            :disabled="s.active || s.processing">
+                        Activate
+                    </button>
+                    <button class="btn btn-danger btn-sm"
+                            @click="deactivateStrategy(s)"
+                            :disabled="!s.active || s.processing">
+                        Deactivate
+                    </button>
+                    <button class="btn btn-outline btn-sm"
+                            @click="reloadModel(s)"
+                            :disabled="s.processing">
+                        Reload Model
+                    </button>
+                    <a class="btn-link" :href="'http://localhost:' + s.port + '/dashboard'" target="_blank">
+                        Detail &#9654;
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div v-else class="empty-state">
+            <p style="font-size: 20px;">
+                <span v-if="scanning">Scanning for traders...</span>
+                <span v-else>No Traders Found</span>
+            </p>
+            <p>Scanning ports {{ portStart }}-{{ portEnd }} on localhost</p>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
+
+        // Auto-scan port range
+        const PORT_START = 9201;
+        const PORT_END = 9210;
+        const RECONNECT_INTERVAL = 3000;
+        const SCAN_INTERVAL = 5000;
+
+        createApp({
+            setup() {
+                // --- State ---
+                // connections keyed by port number
+                const connections = reactive({});
+                const toasts = ref([]);
+                const currentTime = ref('');
+                const scanning = ref(false);
+                const portStart = ref(PORT_START);
+                const portEnd = ref(PORT_END);
+                const processing = reactive({}); // keyed by "port/strategyId"
+
+                let clockTimer = null;
+                let scanTimer = null;
+
+                const updateClock = () => {
+                    currentTime.value = new Date().toLocaleTimeString();
+                };
+
+                // --- Toast ---
+                const showToast = (message, type = 'success') => {
+                    const toast = { message, type };
+                    toasts.value.push(toast);
+                    setTimeout(() => {
+                        const idx = toasts.value.indexOf(toast);
+                        if (idx > -1) toasts.value.splice(idx, 1);
+                    }, 3000);
+                };
+
+                // --- Connection Management ---
+                const getConn = (port) => {
+                    if (!connections[port]) {
+                        connections[port] = {
+                            ws: null,
+                            connected: false,
+                            snapshot: null,
+                            lastUpdate: null,
+                            reconnectTimer: null,
+                        };
+                    }
+                    return connections[port];
+                };
+
+                const connectPort = (port) => {
+                    const conn = getConn(port);
+
+                    // Already connected or connecting
+                    if (conn.ws && (conn.ws.readyState === WebSocket.CONNECTING || conn.ws.readyState === WebSocket.OPEN)) {
+                        return;
+                    }
+
+                    // Clean up existing
+                    if (conn.ws) {
+                        try { conn.ws.close(); } catch {}
+                        conn.ws = null;
+                    }
+                    if (conn.reconnectTimer) {
+                        clearTimeout(conn.reconnectTimer);
+                        conn.reconnectTimer = null;
+                    }
+
+                    try {
+                        const ws = new WebSocket(`ws://localhost:${port}/api/v1/ws/dashboard`);
+
+                        ws.onopen = () => {
+                            conn.connected = true;
+                            if (conn.reconnectTimer) {
+                                clearTimeout(conn.reconnectTimer);
+                                conn.reconnectTimer = null;
+                            }
+                        };
+
+                        ws.onmessage = (event) => {
+                            try {
+                                const msg = JSON.parse(event.data);
+                                if (msg.type === 'dashboard_update') {
+                                    conn.snapshot = msg.data;
+                                    conn.lastUpdate = new Date().toLocaleTimeString();
+                                } else if (msg.type === 'ping') {
+                                    if (ws.readyState === WebSocket.OPEN) {
+                                        ws.send(JSON.stringify({ type: 'pong' }));
+                                    }
+                                }
+                            } catch (e) {
+                                console.error(`[${port}] Parse error:`, e);
+                            }
+                        };
+
+                        ws.onerror = () => {
+                            conn.connected = false;
+                        };
+
+                        ws.onclose = () => {
+                            conn.connected = false;
+                            conn.ws = null;
+                            // Reconnect only if we previously had data (known trader)
+                            if (conn.snapshot) {
+                                conn.reconnectTimer = setTimeout(() => connectPort(port), RECONNECT_INTERVAL);
+                            }
+                        };
+
+                        conn.ws = ws;
+                    } catch {
+                        conn.connected = false;
+                    }
+                };
+
+                const disconnectAll = () => {
+                    for (let port = PORT_START; port <= PORT_END; port++) {
+                        const conn = connections[port];
+                        if (!conn) continue;
+                        if (conn.reconnectTimer) {
+                            clearTimeout(conn.reconnectTimer);
+                            conn.reconnectTimer = null;
+                        }
+                        if (conn.ws) {
+                            try { conn.ws.close(); } catch {}
+                            conn.ws = null;
+                        }
+                        conn.connected = false;
+                    }
+                };
+
+                // --- Port Scanning ---
+                const scanPorts = () => {
+                    scanning.value = true;
+                    for (let port = PORT_START; port <= PORT_END; port++) {
+                        connectPort(port);
+                    }
+                    // Reset scanning indicator after a brief delay
+                    setTimeout(() => { scanning.value = false; }, 2000);
+                };
+
+                // --- Flatten all strategies across all connected traders ---
+                const allStrategies = computed(() => {
+                    const result = [];
+                    for (let port = PORT_START; port <= PORT_END; port++) {
+                        const conn = connections[port];
+                        if (!conn || !conn.connected || !conn.snapshot) continue;
+
+                        const snap = conn.snapshot;
+                        const overview = snap.overview;
+                        const realtimeStrategies = snap.strategies || {};
+
+                        if (!overview || !overview.strategies) continue;
+
+                        for (const strat of overview.strategies) {
+                            const rt = realtimeStrategies[strat.id] || {};
+                            result.push({
+                                // identity
+                                port: port,
+                                id: strat.id,
+                                type: strat.type || '',
+                                symbols: strat.symbols || [],
+                                // state
+                                running: strat.running,
+                                active: strat.active,
+                                conditions_met: strat.conditions_met,
+                                eligible: strat.eligible,
+                                allocation: strat.allocation || 0,
+                                // pnl
+                                realized_pnl: strat.realized_pnl || 0,
+                                unrealized_pnl: strat.unrealized_pnl || 0,
+                                // realtime indicators
+                                indicators: rt.indicators || {},
+                                thresholds: rt.thresholds || {},
+                                // positions & orders from snapshot
+                                positions: (snap.positions || []).filter(p => p.strategy_id === strat.id),
+                                orders: (snap.orders || []).filter(o => o.strategy_id === strat.id),
+                                // ui state
+                                lastUpdate: conn.lastUpdate,
+                                processing: !!processing[port + '/' + strat.id],
+                            });
+                        }
+                    }
+                    return result;
+                });
+
+                // --- Aggregated computed ---
+                const connectedCount = computed(() => {
+                    let count = 0;
+                    for (let port = PORT_START; port <= PORT_END; port++) {
+                        const conn = connections[port];
+                        if (conn && conn.connected && conn.snapshot) count++;
+                    }
+                    return count;
+                });
+
+                const totalStrategyCount = computed(() => allStrategies.value.length);
+                const activeStrategyCount = computed(() => allStrategies.value.filter(s => s.active).length);
+
+                const totalRealised = computed(() =>
+                    allStrategies.value.reduce((sum, s) => sum + s.realized_pnl, 0)
+                );
+                const totalUnrealised = computed(() =>
+                    allStrategies.value.reduce((sum, s) => sum + s.unrealized_pnl, 0)
+                );
+                const totalPnl = computed(() => totalRealised.value + totalUnrealised.value);
+                const totalOrders = computed(() =>
+                    allStrategies.value.reduce((sum, s) => sum + s.orders.length, 0)
+                );
+
+                // --- Per-strategy helpers ---
+                const strategyPositionSummary = (s) => {
+                    if (!s.positions || s.positions.length === 0) return 'Flat';
+                    return s.positions.map(p => {
+                        const dir = p.volume > 0 ? (p.direction === 'LONG' ? '+' : '-') : '';
+                        return `${p.symbol}: ${dir}${p.volume}`;
+                    }).join(' / ');
+                };
+
+                const strategyOrderCount = (s) => s.orders ? s.orders.length : 0;
+
+                const filterIndicators = (indicators) => {
+                    const exclude = ['leg1_price', 'leg2_price', 'leg1_position', 'leg2_position',
+                                     'entry_threshold', 'exit_threshold', 'entry_zscore', 'exit_zscore',
+                                     'min_correlation', 'min_spread'];
+                    const result = {};
+                    for (const [k, v] of Object.entries(indicators)) {
+                        if (!exclude.includes(k)) result[k] = v;
+                    }
+                    return result;
+                };
+
+                // --- Formatting ---
+                const formatPnL = (value) => {
+                    if (value === undefined || value === null || isNaN(value)) return '0.00';
+                    const prefix = value >= 0 ? '+' : '';
+                    return `${prefix}${value.toFixed(2)}`;
+                };
+
+                const formatNum = (value) => {
+                    if (typeof value !== 'number') return value;
+                    return Math.abs(value) < 10 ? value.toFixed(4) : value.toFixed(2);
+                };
+
+                const formatIndicatorName = (key) => {
+                    const names = {
+                        'z_score': 'Z-Score',
+                        'correlation': 'Correlation',
+                        'spread': 'Spread',
+                        'spread_mean': 'Spread Mean',
+                        'spread_std': 'Spread Std',
+                        'hedge_ratio': 'Hedge Ratio'
+                    };
+                    return names[key] || key;
+                };
+
+                // --- Commands ---
+                const sendCommand = async (port, strategyId, endpoint) => {
+                    const pkey = port + '/' + strategyId;
+                    if (processing[pkey]) return;
+                    processing[pkey] = true;
+
+                    try {
+                        const url = `http://localhost:${port}/api/v1/strategies/${strategyId}/${endpoint}`;
+                        const res = await fetch(url, { method: 'POST' });
+                        const data = await res.json();
+                        if (!data.success) {
+                            throw new Error(data.error || 'Unknown error');
+                        }
+                        return data;
+                    } catch (e) {
+                        showToast(`:${port} ${strategyId} - ${e.message}`, 'error');
+                        throw e;
+                    } finally {
+                        processing[pkey] = false;
+                    }
+                };
+
+                const activateStrategy = async (s) => {
+                    try {
+                        await sendCommand(s.port, s.id, 'activate');
+                        showToast(`${s.id} activated`);
+                    } catch {}
+                };
+
+                const deactivateStrategy = async (s) => {
+                    if (!confirm(`Deactivate ${s.id}?`)) return;
+                    try {
+                        await sendCommand(s.port, s.id, 'deactivate');
+                        showToast(`${s.id} deactivated`);
+                    } catch {}
+                };
+
+                const reloadModel = async (s) => {
+                    try {
+                        await sendCommand(s.port, s.id, 'model/reload');
+                        showToast(`${s.id} model reloaded`);
+                    } catch {}
+                };
+
+                const activateAll = async () => {
+                    for (const s of allStrategies.value) {
+                        if (!s.active) {
+                            try { await sendCommand(s.port, s.id, 'activate'); } catch {}
+                        }
+                    }
+                    showToast('All strategies activated');
+                };
+
+                const deactivateAll = async () => {
+                    if (!confirm('Deactivate ALL strategies?')) return;
+                    for (const s of allStrategies.value) {
+                        if (s.active) {
+                            try { await sendCommand(s.port, s.id, 'deactivate'); } catch {}
+                        }
+                    }
+                    showToast('All strategies deactivated');
+                };
+
+                // --- Lifecycle ---
+                onMounted(() => {
+                    updateClock();
+                    clockTimer = setInterval(updateClock, 1000);
+
+                    // Initial scan
+                    scanPorts();
+
+                    // Periodic re-scan for new traders
+                    scanTimer = setInterval(scanPorts, SCAN_INTERVAL);
+                });
+
+                onUnmounted(() => {
+                    disconnectAll();
+                    if (clockTimer) clearInterval(clockTimer);
+                    if (scanTimer) clearInterval(scanTimer);
+                });
+
+                return {
+                    toasts,
+                    currentTime,
+                    scanning,
+                    portStart,
+                    portEnd,
+
+                    allStrategies,
+                    connectedCount,
+                    totalStrategyCount,
+                    activeStrategyCount,
+                    totalPnl,
+                    totalRealised,
+                    totalUnrealised,
+                    totalOrders,
+
+                    strategyPositionSummary,
+                    strategyOrderCount,
+                    filterIndicators,
+
+                    formatPnL,
+                    formatNum,
+                    formatIndicatorName,
+
+                    activateStrategy,
+                    deactivateStrategy,
+                    reloadModel,
+                    activateAll,
+                    deactivateAll,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

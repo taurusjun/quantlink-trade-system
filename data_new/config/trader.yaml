@@ -1,0 +1,33 @@
+# QuantLink Trader - 基础配置
+# 此文件作为 --controlFile 模式下的引擎默认配置
+# 策略参数由 control + model 文件决定，此处仅配置引擎/网络/日志
+
+system:
+  mode: "live"
+
+engine:
+  ors_gateway_addr: "localhost:50051"
+  nats_addr: "nats://localhost:4222"
+  order_queue_size: 100
+  timer_interval: 5s
+  max_concurrent_orders: 10
+
+risk:
+  stop_loss: 100000
+  max_loss: 100000
+  daily_loss_limit: 0
+  max_reject_count: 10
+  check_interval_ms: 5000
+
+api:
+  enabled: true
+  host: "0.0.0.0"
+
+logging:
+  level: "info"
+  max_size_mb: 100
+  max_backups: 10
+  max_age_days: 30
+  compress: false
+  console: true
+  json_format: false

@@ -111,9 +111,12 @@ func NewAPIServer(trader *Trader, port int) *APIServer {
 	// WebSocket endpoint for real-time dashboard
 	mux.Handle("/api/v1/ws/dashboard", websocket.Handler(api.wsHub.HandleWebSocket))
 
-	// Serve dashboard HTML (static file)
+	// Serve dashboard HTML (static files)
 	mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "golang/web/dashboard.html")
+	})
+	mux.HandleFunc("/overview", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "golang/web/overview.html")
 	})
 
 	api.server = &http.Server{

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ControlFile control文件结构
@@ -85,8 +86,8 @@ func convertInternalSymbol(internal string) string {
 			return internal
 		}
 
-		// 推算年份（简化：使用25年）
-		year := "25"
+		// 从当前年份推算（2026 -> "26"）
+		year := fmt.Sprintf("%02d", time.Now().Year()%100)
 		monthStr := fmt.Sprintf("%02d", monthInt)
 
 		return symbol + year + monthStr

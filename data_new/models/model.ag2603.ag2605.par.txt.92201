@@ -1,0 +1,36 @@
+# Model file for strategy 92201 - ag2603/ag2605 pair trading
+# Format: C++ TradeBot_China .par.txt format
+
+# Symbol definitions
+ag_F_3_SFE FUTCOM Dependant 0 MID_PX
+ag_F_5_SFE FUTCOM Dependant 0 MID_PX
+
+# Order size parameters
+MAX_QUOTE_LEVEL 3
+SIZE 4
+MAX_SIZE 16
+
+# Entry/Exit thresholds (z-score)
+BEGIN_PLACE 5.006894
+LONG_PLACE 7.510341
+SHORT_PLACE 2.503447
+BEGIN_REMOVE 2.0027576
+
+# Supporting orders (aggressive order limit)
+SUPPORTING_ORDERS 2
+
+# Mean reversion parameters
+ALPHA 0.0000240672
+AVG_SPREAD_AWAY 20
+
+# Risk control parameters
+STOP_LOSS 100000
+MAX_LOSS 100000
+UPNL_LOSS 50000
+
+# Additional parameters
+PIL_FACTOR 1.0
+OPP_QTY 0
+PRICE_RATIO 1.0
+HEDGE_THRES 0.0
+HEDGE_SIZE_RATIO 1.0
