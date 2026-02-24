@@ -444,6 +444,18 @@ void StopHTTPServer() {
 void OnBrokerOrderCallback(const hft::plugin::OrderInfo& order_info) {
     if (!g_response_queue) return;
 
+    // C++ ORS (China/ORSServer.cpp:2263-2268): 对 CTP 中间状态不推送 response
+    // CTP OnRtnOrder 的第一个回调通常是 OrderStatus=Unknown（已提交待确认），
+    // 不应转发给策略层，否则会被误判为 ORDER_ERROR
+    if (order_info.status == hft::plugin::OrderStatus::UNKNOWN ||
+        order_info.status == hft::plugin::OrderStatus::SUBMITTING) {
+        std::cout << "[Bridge] Filtered intermediate status: OID="
+                  << order_info.order_id
+                  << " status=" << static_cast<int>(order_info.status)
+                  << " (not forwarded)" << std::endl;
+        return;
+    }
+
     ResponseMsg resp;
     std::memset(&resp, 0, sizeof(resp));
 

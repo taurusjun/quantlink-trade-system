@@ -294,21 +294,28 @@ func (om *OrderManager) processReject(resp *shm.ResponseMsg, ord *types.OrderSta
 }
 
 // processNewReject 处理新订单拒绝
-// 参考: ExecutionStrategy.cpp:1020-1040
-func (om *OrderManager) processNewReject(_ *shm.ResponseMsg, ord *types.OrderStats) {
-	ord.Status = types.StatusNewReject
-	om.State.RejectCount++
-
-	// C++: RemoveOrder — 回退 openQty 和 openOrders
+// 参考: ExecutionStrategy.cpp:1803-1829 ProcessNewReject()
+//
+// C++ 逻辑:
+//   1. 减少 buyOpenQty/sellOpenQty
+//   2. 设置 status = NEW_REJECT
+//   3. 调用 RemoveOrder（从 ordMap、priceMap、orderIDMap 中完全删除）
+func (om *OrderManager) processNewReject(resp *shm.ResponseMsg, ord *types.OrderStats) {
+	// C++: m_buyOpenQty -= iter->second->m_Qty (line 1809)
 	if ord.Side == types.Buy {
 		om.State.BuyOpenQty -= float64(ord.OpenQty)
 	} else {
 		om.State.SellOpenQty -= float64(ord.OpenQty)
 	}
 
-	om.RemoveOrder(ord.OrderID)
+	ord.Status = types.StatusNewReject
+	om.State.RejectCount++
 
-	log.Printf("[ORS] NEW_REJECT orderID=%d", ord.OrderID)
+	// C++: RemoveOrder(iter) (line 1823) — 从所有 map 中完全删除
+	om.RemoveOrder(resp.OrderID)
+
+	log.Printf("[ORS] NEW_REJECT orderID=%d side=%d price=%.2f",
+		ord.OrderID, ord.Side, ord.Price)
 }
 
 // processModifyReject 处理改单拒绝

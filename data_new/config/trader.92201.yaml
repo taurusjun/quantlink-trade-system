@@ -59,7 +59,7 @@ strategy:
       upnl_loss: 50000
       alpha: 0.0000240672
       spread_ewa: 0.6
-      avg_spread_away: 20
+      avg_spread_away: 50
       slop: 20
       const: 0.0
       hedge_ratio: 1.0
