@@ -6,10 +6,9 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 
 **关键文档**:
 - 文档索引中心: @docs/README.md
-- 系统架构: @docs/核心文档/CURRENT_ARCHITECTURE_FLOW.md
-- 构建指南: @docs/核心文档/BUILD_GUIDE.md
-- 使用说明: @docs/核心文档/USAGE.md
-- 最新实盘报告: @docs/实盘/Phase2-5_完整持仓管理功能实施报告_2026-01-30-11_35.md
+- 部署指南: @docs/核心文档/DEPLOY_GUIDE_2026-02-24.md
+- 架构设计: @docs/系统分析/tbsrc-golang_v2_架构更新_2026-02-13-16_00.md
+- MWMR 技术规格: @docs/系统分析/hftbase_MWMR_Go复刻技术规格_2026-02-13-16_00.md
 
 ---
 
@@ -111,26 +110,27 @@ grep -r "m_netpos_pass_ytd" /Users/user/PWorks/RD/quantlink-trade-system/
 ### 核心组件
 
 1. **C++ 网关层** (`gateway/`)
-   - `md_simulator`: 模拟行情数据生成器
-   - `md_gateway`: 行情网关（共享内存 → NATS）
-   - `ors_gateway`: 订单路由服务（gRPC → 共享内存）
-   - `counter_bridge`: 统一成交网关（支持 CTP/Simulator 插件）
+   - `md_shm_feeder`: 行情 SHM 注入器（支持 simulator / CTP 模式），写入 SysV MWMR SHM
+   - `counter_bridge`: 统一成交网关（支持 CTP/Simulator 插件），读取订单 SHM、写入回报 SHM
 
 2. **Golang 策略层** (`tbsrc-golang/`)
-   - `pkg/trader/`: 交易主程序
-   - `pkg/strategy/`: 策略引擎
-   - `pkg/portfolio/`: 组合管理
-   - `pkg/risk/`: 风控模块
+   - `cmd/trader/`: 策略引擎主程序（直接读写 SysV SHM）
+   - `pkg/shm/`: SysV SHM + MWMR Queue 封装
+   - `pkg/connector/`: Connector（SHM 轮询 + 发单/撤单）
+   - `pkg/common/`: CommonClient（回调分发）
+   - `pkg/strategy/`: 策略实现（ExecutionStrategy、PairwiseArbStrategy 等）
+   - `pkg/indicator/`: 技术指标库
+   - `pkg/config/`: 配置加载
 
 3. **通信机制**
-   - POSIX 共享内存: C++ 网关间通信（低延迟）
-   - NATS: 行情数据分发（md_gateway → trader）
-   - gRPC: 订单路由（trader → ors_gateway）
+   - SysV MWMR 共享内存: 所有进程间通信（行情、订单、回报）
+   - SHM Key 分配: `0x1001`（行情）、`0x2001`（订单请求）、`0x3001`（订单回报）、`0x4001`（ClientStore）
 
 ### 数据流向
 
 ```
-md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
+md_shm_feeder → [SysV MWMR SHM 0x1001] → Go trader → [SysV MWMR SHM 0x2001] → counter_bridge → CTP/Simulator
+                                                    ← [SysV MWMR SHM 0x3001] ← (回报)
 ```
 
 ---
@@ -149,8 +149,8 @@ md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_g
   - 使用 `#pragma once` 而不是 include guards
   - 头文件包含顺序: 标准库 → 第三方库 → 项目头文件
 - **共享内存**:
-  - 使用 POSIX `shm_open` / `mmap`
-  - 队列名格式: `ors_request`, `ors_response`, `md_queue`
+  - 使用 SysV `shmget` / `shmat`（整数 key）
+  - MWMR 队列格式: 与 hftbase 二进制兼容
 
 ### Golang 代码 (`tbsrc-golang/`)
 
@@ -168,13 +168,15 @@ md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_g
 
 - **格式**: YAML
 - **命名**:
-  - 生产配置: `trader.yaml`
-  - 测试配置: `trader.test.yaml`
+  - 每策略配置: `trader.{strategy_id}.yaml`（如 `trader.92201.yaml`）
+  - 模拟器配置: `simulator.yaml`
+  - CTP 配置: `ctp/ctp_md.secret.yaml`, `ctp/ctp_td.secret.yaml`
 - **必填字段**:
   - `system.strategy_id`: 策略唯一标识
   - `strategy.symbols`: 交易品种列表
-  - `engine.ors_gateway_addr`: ORS 网关地址
-  - `engine.nats_addr`: NATS 服务地址
+  - `shm.request_key`: 订单请求 SHM key
+  - `shm.response_key`: 订单回报 SHM key
+  - `shm.md_key`: 行情 SHM key
 
 ---
 
@@ -307,65 +309,51 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 
 ### 文档存放位置
 
-**规则 1: 文档目录结构（2026-01-30 重组）**
+**规则 1: 文档目录结构（2026-02-24 更新）**
 
-文档已按主题分类到10个目录，根目录仅保留 `README.md` 索引文件。
+文档已按主题分类，根目录仅保留 `README.md` 索引文件。
 
-**主题目录**:
-- `docs/核心文档/`: 系统架构、构建指南、使用说明等核心文档（4个）
-- `docs/实盘/`: 实盘部署、参数配置、持仓管理相关（5个）
-- `docs/回测/`: 回测系统使用、参数优化相关（7个）
-- `docs/测试报告/`: 端到端测试、功能测试报告（8个）
-- `docs/功能实现/`: 新功能实施报告和指南（10个）
-- `docs/系统分析/`: 系统架构分析、配置说明（6个）
-- `docs/golang/`: Golang模块技术文档（35个）
-- `docs/gateway/`: Gateway模块文档（4个）
-- `docs/archive/`: 已归档的旧文档（35个）
+**活跃目录**:
+- `docs/核心文档/`: 部署指南等核心文档
+- `docs/实盘/`: 实盘部署、CTP 相关
+- `docs/回测/`: 回测系统使用、参数优化
+- `docs/功能实现/`: Phase2-9 实施计划、C++ 对照等
+- `docs/系统分析/`: 架构分析、MWMR 技术规格、代码对比
+- `docs/gateway/`: Gateway 模块文档
+
+**已清空/归档目录**:
+- `docs/golang/`: 已全部归档（旧 `golang/` 代码库文档）
+- `docs/测试报告/`: 已全部归档（旧架构测试报告）
+- `docs/archive/`: 已归档旧文档（131 个）
 
 **IMPORTANT: 创建新文档时的放置规则**:
 1. **实盘部署、问题修复** → `docs/实盘/`
 2. **回测系统、参数优化** → `docs/回测/`
-3. **测试报告、验证结果** → `docs/测试报告/`
-4. **新功能实施** → `docs/功能实现/`
-5. **系统分析、架构设计** → `docs/系统分析/`
-6. **Golang技术细节** → `docs/golang/`
-7. **Gateway实现** → `docs/gateway/`
-8. **过时文档** → `docs/archive/`
-9. **核心文档更新** → 谨慎操作，这些是长期维护的基础文档
+3. **新功能实施** → `docs/功能实现/`
+4. **系统分析、架构设计** → `docs/系统分析/`
+5. **Gateway实现** → `docs/gateway/`
+6. **过时文档** → `docs/archive/`
+7. **核心文档更新** → 谨慎操作，这些是长期维护的基础文档
 
 **目录结构**:
 ```
 quantlink-trade-system/
 ├── docs/                                    # 文档根目录
 │   ├── README.md                            # 文档索引中心（必看）
-│   │
 │   ├── 核心文档/                            # 系统核心文档
-│   │   ├── CURRENT_ARCHITECTURE_FLOW.md
-│   │   ├── BUILD_GUIDE.md
-│   │   ├── PROJECT_OVERVIEW.md
-│   │   └── USAGE.md
-│   │
+│   │   └── DEPLOY_GUIDE_2026-02-24.md       # 部署指南（SysV MWMR SHM 架构）
 │   ├── 实盘/                                # 实盘交易相关
-│   │   ├── Phase2-5_完整持仓管理功能实施报告_2026-01-30-11_35.md
-│   │   ├── 参数加载修复报告_2026-01-30-11_05.md
-│   │   └── ...
-│   │
 │   ├── 回测/                                # 回测系统文档
-│   │   ├── 回测_使用指南_2026-01-24-19_00.md
-│   │   └── ...
-│   │
-│   ├── 测试报告/                            # 各类测试报告
-│   ├── 功能实现/                            # 功能实施文档
-│   ├── 系统分析/                            # 系统分析文档
-│   ├── golang/                              # Golang模块文档
+│   ├── 功能实现/                            # Phase2-9 实施计划等
+│   ├── 系统分析/                            # 架构分析、MWMR 规格、代码对比
 │   ├── gateway/                             # Gateway模块文档
-│   └── archive/                             # 已归档文档
+│   └── archive/                             # 已归档文档（131个）
 │
-├── gateway/                                 # C++ 网关代码
+├── gateway/                                 # C++ 网关代码（md_shm_feeder, counter_bridge 等）
 │   └── src/
-├── tbsrc-golang/                            # Golang 策略代码（活跃）
+├── tbsrc-golang/                            # Golang 策略代码（活跃，SysV SHM 直连）
 │   └── pkg/
-└── golang/                                  # Golang 策略代码（已弃用）
+└── deploy_new/                              # 编译部署产物（由 build_deploy_new.sh 生成）
 ```
 
 **查找文档**:
@@ -1068,81 +1056,65 @@ cat CROSS_REFERENCE.md | grep -A 20 "脚本出错"
 ### 构建系统
 
 ```bash
-# C++ 网关编译
-cd gateway
-mkdir -p build && cd build
-cmake ..
-make -j4
+# 一键编译部署（推荐）
+./scripts/build_deploy_new.sh           # 完整编译 → deploy_new/
+./scripts/build_deploy_new.sh --go      # 仅 Go
+./scripts/build_deploy_new.sh --cpp     # 仅 C++
+./scripts/build_deploy_new.sh --clean   # 清理后重编译
 
-# Golang 编译（输出到项目根目录 bin/）
+# 手动编译 C++ 网关
+cd gateway && mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j4 md_shm_feeder counter_bridge
+
+# 手动编译 Go 策略
 cd tbsrc-golang
 go build -o ../bin/trader ./cmd/trader/main.go
-
-# 或者从项目根目录构建
-go build -C tbsrc-golang -o bin/trader ./cmd/trader/main.go
+go build -o ../bin/webserver ./cmd/webserver/main.go
 ```
 
 ### 运行测试
 
 **端到端测试** (推荐):
 ```bash
-# 1. 启动 NATS
-nats-server &
+# 1. 编译部署
+./scripts/build_deploy_new.sh
 
-# 2. 运行完整链路测试
-./scripts/test/e2e/test_full_chain.sh
+# 2. 启动网关（模拟模式）
+cd deploy_new
+./scripts/start_gateway.sh sim
 
-# 3. 激活策略（等待 5 秒启动完成）
-sleep 5
-curl -X POST http://localhost:9201/api/v1/strategy/activate \
-  -H "Content-Type: application/json" \
-  -d '{"strategy_id": "test_92201"}'
+# 3. 启动策略
+./scripts/start_strategy.sh 92201
 
-# 4. 监控订单生成
-tail -f log/trader.test.log | grep "Order sent"
+# 4. 查看日志
+tail -f nohup.out.92201
 
-# 5. 停止测试
-pkill -f md_simulator
-pkill -f md_gateway
-pkill -f ors_gateway
-pkill -f counter_bridge
-pkill -f "trader -config"
-
-# 6. 清理共享内存
-ipcs -m | grep user | awk '{print $2}' | xargs ipcrm -m
+# 5. 停止所有
+./scripts/stop_all.sh
 ```
 
 **单元测试**:
 ```bash
-# Golang 单元测试
 cd tbsrc-golang
 go test ./pkg/...
-
-# C++ 单元测试（如果有）
-cd gateway/build
-ctest
 ```
 
 ### 调试方法
 
 **查看日志**:
 ```bash
-# 主日志
-tail -f log/trader.test.log
+# 策略日志
+tail -f deploy_new/nohup.out.92201
 
-# 订单记录
-grep "Order sent" log/trader.test.log
-
-# 策略统计
-grep "Stats:" log/trader.test.log | tail -20
-
-# 市场数据接收
-grep "Received market data" log/trader.test.log
+# 网关日志
+tail -f deploy_new/log/md_shm_feeder.$(date +%Y%m%d).log
+tail -f deploy_new/log/counter_bridge.$(date +%Y%m%d).log
 ```
 
 **检查进程状态**:
 ```bash
-ps aux | grep -E "md_simulator|md_gateway|ors_gateway|counter_bridge|trader"
+ps aux | grep -E "md_shm_feeder|counter_bridge|trader|webserver"
 ```
 
 **检查共享内存**:
@@ -1150,137 +1122,113 @@ ps aux | grep -E "md_simulator|md_gateway|ors_gateway|counter_bridge|trader"
 ipcs -m
 ```
 
-**检查 NATS 消息**:
-```bash
-nats sub "md.>"
-```
-
 ---
 
 ## 配置管理
 
-### 测试配置 vs 生产配置
+### 每策略配置
 
-**测试配置** (`config/trader.test.yaml`):
+每个策略一个配置文件：`config/trader.{strategy_id}.yaml`
+
 ```yaml
-session:
-  start_time: "00:00:00"        # 全天运行
-  end_time: "23:59:59"
-  auto_activate: false           # 需要手动激活
+# config/trader.92201.yaml
+system:
+  strategy_id: 92201
+  strategy_type: "TB_PAIR_STRAT"
+
+shm:
+  request_key: 0x2001
+  response_key: 0x3001
+  md_key: 0x1001
+  client_store_key: 0x4001
 
 strategy:
+  symbols:
+    - ag2603
+    - ag2605
   parameters:
-    entry_zscore: 0.5            # 降低阈值便于测试
-    exit_zscore: 0.2
-```
-
-**生产配置** (`config/trader.yaml`):
-```yaml
-session:
-  start_time: "09:00:00"        # 实际交易时段
-  end_time: "15:00:00"
-  auto_activate: false           # 推荐手动激活
-
-strategy:
-  parameters:
-    entry_zscore: 2.0            # 更保守的阈值
-    exit_zscore: 0.5
+    begin_place: 0.5          # 测试用低阈值
+    long_place: 2.0
+    short_place: -2.0
+    size: 1
+    max_size: 10
 ```
 
 ### 关键配置项说明
 
-- **entry_zscore**: Z-Score 入场阈值
-  - 测试环境: 0.5（容易触发）
-  - 生产环境: 2.0（更保守）
-
-- **auto_activate**: 自动激活策略
-  - 推荐设置为 `false`，手动激活更安全
-
-- **max_position_size**: 最大持仓
-  - 根据账户资金和风险承受能力设置
+- **shm.request_key / response_key / md_key**: SysV SHM 队列 key，必须与 counter_bridge / md_shm_feeder 一致
+- **begin_place**: 开始挂单阈值（测试用低值，生产用保守值）
+- **max_size**: 最大持仓，根据账户资金和风险承受能力设置
 
 ---
 
 ## 重要约定
 
-### NATS 主题格式
+### SysV SHM Key 分配
 
-- **发布格式**: `md.{exchange}.{symbol}`
-  - 例如: `md.SHFE.ag2502`, `md.SHFE.ag2504`
-
-- **订阅格式**: `md.*.{symbol}`
-  - 使用通配符支持多交易所
+| Key | 十进制 | 用途 | 写入方 | 读取方 |
+|-----|--------|------|--------|--------|
+| `0x1001` | 4097 | 行情队列（MarketUpdateNew） | md_shm_feeder | trader |
+| `0x2001` | 8193 | 订单请求队列（RequestMsg） | trader | counter_bridge |
+| `0x3001` | 12289 | 订单回报队列（ResponseMsg） | counter_bridge | trader |
+| `0x4001` | 16385 | ClientStore（客户端 ID 分配） | trader / counter_bridge | trader / counter_bridge |
 
 ### 订单 ID 格式
 
-- 格式: `ORD_{timestamp_nano}`
-- 例如: `ORD_1769239216860813000`
+- 格式: `clientId * 1_000_000 + seq`（与 hftbase Connector 一致）
+- 回报过滤: `OrderID / ORDERID_RANGE` 匹配 clientId
 
-### 共享内存队列命名
+### 消息结构体
 
-- 请求队列: `ors_request`
-- 响应队列: `ors_response`
-- 行情队列: `md_queue`
+- `MarketUpdateNew`: ~900+ bytes（含 `bookElement_t[20] x 2`），来自 `hftbase/CommonUtils/include/marketupdateNew.h`
+- `RequestMsg`: `__attribute__((aligned(64)))`，Go 需手动补 padding
+- `ResponseMsg`: `ResponseType` 19 种枚举（NEW_ORDER_CONFIRM=0, TRADE_CONFIRM=4, ORDER_ERROR=5 等）
 
 ---
 
 ## 常见问题排查
 
+### 问题：无行情数据
+
+```bash
+# 检查 md_shm_feeder 进程
+ps aux | grep md_shm_feeder
+
+# 检查 SHM 是否创建
+ipcs -m
+
+# 检查日志
+tail -f deploy_new/log/md_shm_feeder.*.log
+```
+
 ### 问题：无订单生成
 
 **检查清单**:
-1. 策略是否已激活？
+1. trader 是否在运行？
    ```bash
-   curl http://localhost:9201/api/v1/strategy/status
+   ps aux | grep trader
    ```
 
-2. 是否接收到市场数据？
+2. counter_bridge 是否在运行？
    ```bash
-   grep "Received market data" log/trader.test.log
+   ps aux | grep counter_bridge
    ```
 
-3. 相关系数是否达标？
+3. 策略参数是否正确？
    ```bash
-   grep "corr=" log/trader.test.log | tail -5
+   grep -i "begin_place\|threshold" deploy_new/nohup.out.*
    ```
-
-4. Z-Score 是否超过阈值？
-   ```bash
-   grep "zscore=" log/trader.test.log | tail -5
-   ```
-
-5. 阈值是否过高？
-   - 测试环境建议 `entry_zscore: 0.5`
 
 ### 问题：共享内存错误
 
 ```bash
-# 清理所有共享内存段
-ipcs -m | grep user | awk '{print $2}' | xargs ipcrm -m
+# 清理所有 SysV 共享内存段
+ipcs -m | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {}
 
-# 重启相关进程
-./test_full_chain.sh
-```
-
-### 问题：NATS 连接失败
-
-```bash
-# 检查 NATS 是否运行
-ps aux | grep nats-server
-
-# 重启 NATS
-pkill nats-server
-nats-server &
-```
-
-### 问题：gRPC 连接超时
-
-```bash
-# 检查 ORS Gateway 是否运行
-ps aux | grep ors_gateway
-
-# 检查端口是否监听
-lsof -i :50052
+# 重启
+cd deploy_new
+./scripts/stop_all.sh
+./scripts/start_gateway.sh sim
 ```
 
 ---
@@ -1309,46 +1257,27 @@ lsof -i :50052
 
 ```
 quantlink-trade-system/
-├── gateway/              # C++ 网关代码
+├── gateway/              # C++ 网关代码（md_shm_feeder, counter_bridge 等）
 │   ├── src/             # 源文件
 │   ├── include/         # 头文件
 │   └── build/           # 编译产物（不提交）
-├── tbsrc-golang/        # Golang 策略代码（活跃）
-│   ├── cmd/             # 主程序入口
-│   ├── pkg/             # 业务逻辑包
+├── tbsrc-golang/        # Golang 策略代码（活跃，SysV SHM 直连）
+│   ├── cmd/             # 主程序入口（trader, webserver, backtest）
+│   ├── pkg/             # 业务逻辑包（shm, connector, common, strategy, indicator, config）
 │   └── web/             # Web 资源
-├── golang/              # Golang 策略代码（已弃用，迁移到 tbsrc-golang/）
-├── config/              # 配置文件
-│   ├── trader.yaml      # 生产配置
-│   └── trader.test.yaml # 测试配置
-├── bin/                 # 可执行文件（不提交）
-├── log/                 # 日志文件（不提交）
-├── test_logs/           # 测试日志（不提交）
+├── deploy_new/          # 编译部署产物（由 build_deploy_new.sh 生成，不提交）
+├── data_new/            # 持久配置模板（config, controls, models）
 ├── scripts/             # 脚本文件（按功能分类）
-│   ├── README.md        # 脚本使用指南
-│   ├── build_*.sh       # 构建脚本
-│   ├── install_*.sh     # 依赖安装脚本
+│   ├── build_deploy_new.sh  # 一键编译部署
 │   ├── test/            # 测试脚本
-│   │   ├── e2e/        # 端到端测试
-│   │   ├── integration/ # 集成测试
-│   │   ├── unit/       # 单元测试
-│   │   └── feature/    # 功能测试
 │   ├── live/            # 实盘脚本
-│   ├── trading/         # 交易操作脚本
 │   └── backtest/        # 回测脚本
 ├── docs/                # 文档（按主题分类）
 │   ├── README.md        # 文档索引中心
-│   ├── 核心文档/        # 系统核心文档
-│   ├── 实盘/            # 实盘交易相关
-│   ├── 回测/            # 回测系统文档
-│   ├── 测试报告/        # 各类测试报告
-│   ├── 功能实现/        # 功能实施文档
-│   ├── 系统分析/        # 系统分析文档
-│   ├── golang/          # Golang模块文档
-│   ├── gateway/         # Gateway模块文档
-│   └── archive/         # 已归档文档
-├── data/                # 数据目录
-│   └── positions/       # 持仓快照文件
+│   ├── 核心文档/        # 部署指南
+│   ├── 功能实现/        # Phase2-9 实施计划
+│   ├── 系统分析/        # 架构分析、MWMR 规格
+│   └── archive/         # 已归档文档（131个）
 └── .claude/             # Claude Code 规则
 ```
 
@@ -1382,11 +1311,9 @@ config/*.local.yaml
 
 ### 延迟指标
 
-- 共享内存读写: < 1ms
-- NATS 消息传输: < 5ms
+- SysV SHM 读写: < 1us（微秒级）
 - 策略计算: < 10ms
-- 订单发送: < 20ms
-- **端到端延迟**: < 50ms
+- **端到端延迟（行情 → 订单）**: < 20ms
 
 ### 资源限制
 
@@ -1457,66 +1384,51 @@ chore: 更新依赖版本
 
 **端到端测试的完整流程是：编译 → 部署 → 测试**
 
-如果修改了代码，必须先重新编译并部署到 `deploy/` 目录，否则测试的是旧代码！
+如果修改了代码，必须先重新编译并部署到 `deploy_new/` 目录，否则测试的是旧代码！
 
 ```bash
-# 1. 编译（根据修改的模块选择）
-# 编译 Go trader
-cd tbsrc-golang && go build -o ../bin/trader ./cmd/trader/main.go
-
-# 编译 C++ gateway（如果修改了 gateway 代码）
-cd gateway/build && make -j4
-
-# 2. 部署到 deploy 目录
+# 1. 编译部署
 ./scripts/build_deploy_new.sh --go      # 只部署 Go
 ./scripts/build_deploy_new.sh --cpp     # 只部署 C++
 ./scripts/build_deploy_new.sh           # 全部部署
 
-# 3. 运行测试
-cd deploy
-./scripts/test/e2e/test_simulator_e2e.sh      # 模拟测试
-./scripts/test/e2e/test_ctp_live_e2e.sh       # CTP 实盘测试
+# 2. 运行测试
+cd deploy_new
+./scripts/start_gateway.sh sim          # 模拟测试
+./scripts/start_strategy.sh 92201
+# 观察日志确认正常后停止
+./scripts/stop_all.sh
 ```
 
-### 核心测试脚本
-
-所有脚本统一使用 `--run` 参数控制行为：
-- **无参数**: 运行测试后自动退出
-- **--run**: 启动系统并保持运行
-
-#### 1. 模拟测试
+### 模拟测试
 
 ```bash
-# 运行测试（验证后退出）
-./scripts/test/e2e/test_simulator_e2e.sh
-
-# 启动系统并保持运行
-./scripts/test/e2e/test_simulator_e2e.sh --run
+cd deploy_new
+./scripts/start_gateway.sh sim
+./scripts/start_strategy.sh 92201
 ```
 
 **架构**:
 ```
-md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
+md_shm_feeder (simulator) → [SysV SHM 0x1001] → trader → [SysV SHM 0x2001] → counter_bridge (simulator)
 ```
 
-#### 2. CTP实盘测试
+### CTP 实盘测试
 
 ```bash
-# 运行测试（验证后退出）
-./scripts/test/e2e/test_ctp_live_e2e.sh
-
-# 启动系统并保持运行
-./scripts/test/e2e/test_ctp_live_e2e.sh --run
+cd deploy_new
+./scripts/start_gateway.sh ctp
+./scripts/start_strategy.sh 92201
 ```
 
 **架构**:
 ```
-CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → counter_bridge(CTP) → CTP交易服务器
+md_shm_feeder (CTP) → [SysV SHM 0x1001] → trader → [SysV SHM 0x2001] → counter_bridge (CTP) → CTP交易服务器
 ```
 
 ### 测试前置条件
 
-**模拟测试**: 无需额外配置，使用 `config/trader.test.yaml`
+**模拟测试**: 无需额外配置，使用 `config/trader.{id}.yaml`
 
 **CTP实盘测试**:
 - 需要 `config/ctp/ctp_md.secret.yaml` (行情账号)
@@ -1526,7 +1438,8 @@ CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → tr
 ### 停止服务
 
 ```bash
-./scripts/live/stop_all.sh
+cd deploy_new
+./scripts/stop_all.sh
 ```
 
 ---
@@ -1540,6 +1453,12 @@ CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → tr
 ---
 
 ## 📋 项目重组历史
+
+**2026-02-24**: 文档归档 + 架构更新
+- 归档 94 个过时文档到 archive/（golang/ 35个、测试报告/ 8个、核心文档/ 4个、实盘/ 27个、功能实现/ 15个、系统分析/ 5个）
+- 新建部署指南 `docs/核心文档/DEPLOY_GUIDE_2026-02-24.md`（SysV MWMR SHM 直连架构）
+- 更新 CLAUDE.md：移除 NATS/gRPC/ors_gateway/md_gateway 旧架构引用，替换为 SysV MWMR SHM 描述
+- 更新 docs/README.md 文档索引
 
 **2026-02-09**: 合并简化测试脚本
 - 统一使用 `--run` 参数控制运行模式
@@ -1575,5 +1494,5 @@ CTP行情服务器 → ctp_md_gateway → [SHM] → md_gateway → [NATS] → tr
 
 ---
 
-**最后更新**: 2026-02-09
-**文档版本**: v1.5
+**最后更新**: 2026-02-24
+**文档版本**: v2.0
