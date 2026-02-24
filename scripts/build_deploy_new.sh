@@ -99,16 +99,16 @@ fi
 # ==================== 创建 deploy_new 目录结构 ====================
 log_section "创建 deploy_new 目录结构"
 mkdir -p "${DEPLOY_DIR}/bin"
-mkdir -p "${DEPLOY_DIR}/golang/web"
+mkdir -p "${DEPLOY_DIR}/web"
 mkdir -p "${DEPLOY_DIR}/scripts"
 mkdir -p "${DEPLOY_DIR}/lib"
 mkdir -p "${DEPLOY_DIR}/log"
 log_info "目录结构创建完成"
 
 # ==================== 复制 Web 资源 ====================
-if [ -d "${PROJECT_ROOT}/golang/web" ]; then
-    cp "${PROJECT_ROOT}/golang/web/"*.html "${DEPLOY_DIR}/golang/web/" 2>/dev/null || true
-    log_info "  Web 资源: $(ls "${DEPLOY_DIR}/golang/web/" 2>/dev/null | wc -l | tr -d ' ') 个 HTML 文件"
+if [ -d "${PROJECT_ROOT}/tbsrc-golang/web" ]; then
+    cp "${PROJECT_ROOT}/tbsrc-golang/web/"*.html "${DEPLOY_DIR}/web/" 2>/dev/null || true
+    log_info "  Web 资源: $(ls "${DEPLOY_DIR}/web/" 2>/dev/null | wc -l | tr -d ' ') 个 HTML 文件"
 fi
 
 # ==================== 编译 C++ ====================
@@ -166,7 +166,7 @@ fi
 if [ "$BUILD_GO" = true ]; then
     log_section "编译 Go 策略组件"
 
-    cd "${PROJECT_ROOT}/golang"
+    cd "${PROJECT_ROOT}/tbsrc-golang"
 
     log_info "编译 trader..."
     go build -o "${DEPLOY_DIR}/bin/trader" ./cmd/trader/main.go
@@ -644,8 +644,8 @@ echo ""
     ls "${DEPLOY_DIR}/scripts/" 2>/dev/null | while read f; do
         echo "  │   ├── $f"
     done
-    echo "  ├── golang/web/"
-    ls "${DEPLOY_DIR}/golang/web/" 2>/dev/null | while read f; do
+    echo "  ├── web/"
+    ls "${DEPLOY_DIR}/web/" 2>/dev/null | while read f; do
         echo "  │   ├── $f"
     done
     echo "  ├── lib/"

@@ -45,7 +45,7 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 | 项目 | 路径 | 说明 |
 |------|------|------|
 | **quantlink-trade-system** | `/Users/user/PWorks/RD/quantlink-trade-system/` | 新系统（迁移目标） |
-| Golang 策略 | `golang/pkg/strategy/` | Go 策略实现 |
+| Golang 策略 | `tbsrc-golang/pkg/strategy/` | Go 策略实现 |
 | C++ 网关（新写） | `gateway/` | 新写的 C++ 网关代码 |
 
 **注意**: `quantlink-trade-system/gateway/` 下的 C++ 代码是**新写的网关代码**，**不是原代码**！
@@ -54,9 +54,9 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 
 | C++ 原代码 (tbsrc) | Go 新代码 (quantlink-trade-system) |
 |-------------------|-----------------------------------|
-| `tbsrc/Strategies/PairwiseArbStrategy.cpp` | `golang/pkg/strategy/pairwise_arb_strategy.go` |
-| `tbsrc/Strategies/ExecutionStrategy.cpp` | `golang/pkg/strategy/base_strategy.go` |
-| `tbsrc/Strategies/include/ExecutionStrategy.h` | `golang/pkg/strategy/types.go` |
+| `tbsrc/Strategies/PairwiseArbStrategy.cpp` | `tbsrc-golang/pkg/strategy/pairwise_arb_strategy.go` |
+| `tbsrc/Strategies/ExecutionStrategy.cpp` | `tbsrc-golang/pkg/strategy/base_strategy.go` |
+| `tbsrc/Strategies/include/ExecutionStrategy.h` | `tbsrc-golang/pkg/strategy/types.go` |
 
 ### 搜索原代码的正确方式
 
@@ -87,7 +87,7 @@ grep -r "m_netpos_pass_ytd" /Users/user/PWorks/RD/quantlink-trade-system/
    - `ors_gateway`: 订单路由服务（gRPC → 共享内存）
    - `counter_bridge`: 统一成交网关（支持 CTP/Simulator 插件）
 
-2. **Golang 策略层** (`golang/`)
+2. **Golang 策略层** (`tbsrc-golang/`)
    - `pkg/trader/`: 交易主程序
    - `pkg/strategy/`: 策略引擎
    - `pkg/portfolio/`: 组合管理
@@ -95,13 +95,13 @@ grep -r "m_netpos_pass_ytd" /Users/user/PWorks/RD/quantlink-trade-system/
 
 3. **通信机制**
    - POSIX 共享内存: C++ 网关间通信（低延迟）
-   - NATS: 行情数据分发（md_gateway → golang_trader）
-   - gRPC: 订单路由（golang_trader → ors_gateway）
+   - NATS: 行情数据分发（md_gateway → trader）
+   - gRPC: 订单路由（trader → ors_gateway）
 
 ### 数据流向
 
 ```
-md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
+md_simulator → [SHM] → md_gateway → [NATS] → trader → [gRPC] → ors_gateway → [SHM] → counter_bridge
 ```
 
 ---
@@ -123,7 +123,7 @@ md_simulator → [SHM] → md_gateway → [NATS] → golang_trader → [gRPC] �
   - 使用 POSIX `shm_open` / `mmap`
   - 队列名格式: `ors_request`, `ors_response`, `md_queue`
 
-### Golang 代码 (`golang/`)
+### Golang 代码 (`tbsrc-golang/`)
 
 - **风格指南**: 使用 `gofmt` 自动格式化
 - **包命名**: 全小写，单数形式 (例如: `trader`, `strategy`, `risk`)
@@ -334,8 +334,9 @@ quantlink-trade-system/
 │
 ├── gateway/                                 # C++ 网关代码
 │   └── src/
-└── golang/                                  # Golang 策略代码
-    └── pkg/
+├── tbsrc-golang/                            # Golang 策略代码（活跃）
+│   └── pkg/
+└── golang/                                  # Golang 策略代码（已弃用）
 ```
 
 **查找文档**:
@@ -1045,11 +1046,11 @@ cmake ..
 make -j4
 
 # Golang 编译（输出到项目根目录 bin/）
-cd golang
-go build -o ../bin/trader cmd/trader/main.go
+cd tbsrc-golang
+go build -o ../bin/trader ./cmd/trader/main.go
 
 # 或者从项目根目录构建
-go build -C golang -o bin/trader cmd/trader/main.go
+go build -C tbsrc-golang -o bin/trader ./cmd/trader/main.go
 ```
 
 ### 运行测试
@@ -1085,7 +1086,7 @@ ipcs -m | grep user | awk '{print $2}' | xargs ipcrm -m
 **单元测试**:
 ```bash
 # Golang 单元测试
-cd golang
+cd tbsrc-golang
 go test ./pkg/...
 
 # C++ 单元测试（如果有）
@@ -1283,10 +1284,11 @@ quantlink-trade-system/
 │   ├── src/             # 源文件
 │   ├── include/         # 头文件
 │   └── build/           # 编译产物（不提交）
-├── golang/              # Golang 策略代码
+├── tbsrc-golang/        # Golang 策略代码（活跃）
 │   ├── cmd/             # 主程序入口
 │   ├── pkg/             # 业务逻辑包
-│   └── internal/        # 内部包
+│   └── web/             # Web 资源
+├── golang/              # Golang 策略代码（已弃用，迁移到 tbsrc-golang/）
 ├── config/              # 配置文件
 │   ├── trader.yaml      # 生产配置
 │   └── trader.test.yaml # 测试配置
@@ -1431,15 +1433,15 @@ chore: 更新依赖版本
 ```bash
 # 1. 编译（根据修改的模块选择）
 # 编译 Go trader
-cd golang && go build -o ../bin/trader cmd/trader/main.go
+cd tbsrc-golang && go build -o ../bin/trader ./cmd/trader/main.go
 
 # 编译 C++ gateway（如果修改了 gateway 代码）
 cd gateway/build && make -j4
 
 # 2. 部署到 deploy 目录
-./scripts/build_deploy.sh --go      # 只部署 Go
-./scripts/build_deploy.sh --cpp     # 只部署 C++
-./scripts/build_deploy.sh           # 全部部署
+./scripts/build_deploy_new.sh --go      # 只部署 Go
+./scripts/build_deploy_new.sh --cpp     # 只部署 C++
+./scripts/build_deploy_new.sh           # 全部部署
 
 # 3. 运行测试
 cd deploy
