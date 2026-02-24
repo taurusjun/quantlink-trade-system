@@ -131,11 +131,11 @@ if [ "$BUILD_CPP" = true ]; then
 
     log_info "编译中..."
     make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc) \
-        md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway md_benchmark 2>&1 || true
+        md_shm_feeder md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway md_benchmark 2>&1 || true
 
     # 复制编译产物
     log_info "复制 C++ 可执行文件..."
-    CORE_COMPONENTS="md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway"
+    CORE_COMPONENTS="md_shm_feeder md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway"
     for comp in $CORE_COMPONENTS; do
         if [ -f "$comp" ]; then
             cp "$comp" "${DEPLOY_DIR}/bin/"
@@ -193,11 +193,15 @@ log_section "生成启动脚本"
 cat > "${DEPLOY_DIR}/scripts/start_gateway.sh" << 'SCRIPT_EOF'
 #!/bin/bash
 # ============================================
-# 启动网关层（模拟/CTP 统一入口）
+# 启动网关层（tbsrc-golang 架构：SysV SHM 直连）
 # Usage: ./scripts/start_gateway.sh [sim|ctp]
 #
-# sim  - 模拟环境（md_simulator + counter_bridge simulator）
-# ctp  - CTP实盘（ctp_md_gateway + counter_bridge ctp）
+# sim  - 模拟环境（md_shm_feeder simulator + counter_bridge simulator）
+# ctp  - CTP实盘（md_shm_feeder ctp + counter_bridge ctp）
+#
+# 数据流:
+#   md_shm_feeder → [SysV SHM 0x1001] → trader
+#   trader → [SysV SHM 0x2001/0x3001] → ors_gateway → counter_bridge
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -222,9 +226,9 @@ fi
 echo ""
 echo "════════════════════════════════════════════════════════════"
 if [ "$MODE" = "sim" ]; then
-    echo "  QuantLink Trade System - 模拟环境"
+    echo "  QuantLink Trade System - 模拟环境 (SHM Direct)"
 else
-    echo -e "  QuantLink Trade System - ${RED}CTP 实盘环境${NC}"
+    echo -e "  QuantLink Trade System - ${RED}CTP 实盘环境${NC} (SHM Direct)"
 fi
 echo "════════════════════════════════════════════════════════════"
 echo ""
@@ -249,44 +253,41 @@ fi
 # 清理共享内存
 ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
 
-mkdir -p log
+mkdir -p log ctp_flow
 
-# 1. NATS
-if ! pgrep -f "nats-server" > /dev/null 2>&1; then
-    if command -v nats-server &> /dev/null; then
-        nats-server -p 4222 > log/nats.log 2>&1 &
-        sleep 1
-        echo -e "${GREEN}[INFO]${NC} NATS Server"
-    else
-        echo -e "${RED}[ERROR]${NC} NATS 未安装: brew install nats-server"
-        exit 1
-    fi
-else
-    echo -e "${GREEN}[INFO]${NC} NATS Server (已运行)"
-fi
-
-# 2. 行情源
+# 1. MD SHM Feeder (行情 → SysV SHM 0x1001)
 if [ "$MODE" = "sim" ]; then
-    ./bin/md_simulator > "log/md_simulator.${DATE}.log" 2>&1 &
+    # 获取所有策略的合约列表
+    SYMBOLS=""
+    for config_file in config/trader.*.yaml; do
+        [ -f "$config_file" ] || continue
+        # 从 yaml 中提取 symbols
+        syms=$(grep -A 20 "^  symbols:" "$config_file" | grep "^    - " | sed 's/^    - //' | tr '\n' ',')
+        SYMBOLS="${SYMBOLS}${syms}"
+    done
+    SYMBOLS="${SYMBOLS%,}"  # 去除末尾逗号
+    if [ -z "$SYMBOLS" ]; then
+        SYMBOLS="ag2603,ag2605,au2604,au2606"
+    fi
+    # macOS SHM limit: use smaller queue (4096), Linux can use 65536
+    QUEUE_SIZE=2048
+    if [ "$(uname)" = "Linux" ]; then
+        QUEUE_SIZE=65536
+    fi
+    ./bin/md_shm_feeder "simulator:${SYMBOLS}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
     sleep 1
-    echo -e "${GREEN}[INFO]${NC} MD Simulator"
+    echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (Simulator: ${SYMBOLS}, queue=${QUEUE_SIZE})"
 else
-    ./bin/ctp_md_gateway --config "$CTP_MD_CONFIG" > "log/ctp_md_gateway.${DATE}.log" 2>&1 &
+    QUEUE_SIZE=2048
+    if [ "$(uname)" = "Linux" ]; then
+        QUEUE_SIZE=65536
+    fi
+    ./bin/md_shm_feeder "ctp:${CTP_MD_CONFIG}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
     sleep 2
-    echo -e "${GREEN}[INFO]${NC} CTP MD Gateway"
+    echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (CTP, queue=${QUEUE_SIZE})"
 fi
 
-# 3. MD Gateway
-./bin/md_gateway > "log/md_gateway.${DATE}.log" 2>&1 &
-sleep 1
-echo -e "${GREEN}[INFO]${NC} MD Gateway"
-
-# 4. ORS Gateway
-./bin/ors_gateway > "log/ors_gateway.${DATE}.log" 2>&1 &
-sleep 1
-echo -e "${GREEN}[INFO]${NC} ORS Gateway"
-
-# 5. Counter Bridge
+# 2. Counter Bridge (SysV MWMR 0x2001/0x3001/0x4001)
 if [ "$MODE" = "sim" ]; then
     ./bin/counter_bridge simulator:config/simulator.yaml > "log/counter_bridge.${DATE}.log" 2>&1 &
     sleep 1
@@ -297,7 +298,7 @@ else
     echo -e "${GREEN}[INFO]${NC} Counter Bridge (CTP)"
 fi
 
-# 6. Web Server (Overview Dashboard on port 8080)
+# 4. Web Server (Overview Dashboard on port 8080)
 if [ -f ./bin/webserver ]; then
     pkill -f "webserver.*-port 8080" 2>/dev/null || true
     sleep 0.5
@@ -309,7 +310,7 @@ fi
 echo ""
 echo -e "${GREEN}[INFO]${NC} 网关层启动完成 (${MODE})"
 echo -e "${GREEN}[INFO]${NC} Overview:  http://localhost:8080"
-echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id> <session>"
+echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id>"
 echo ""
 SCRIPT_EOF
 
@@ -317,20 +318,17 @@ SCRIPT_EOF
 cat > "${DEPLOY_DIR}/scripts/start_strategy.sh" << 'SCRIPT_EOF'
 #!/bin/bash
 # ============================================
-# 启动策略（模拟/实盘 统一命令）
+# 启动策略（tbsrc-golang trader）
 #
 # Usage:
-#   ./scripts/start_strategy.sh <strategy_id> [session] [--fg]
+#   ./scripts/start_strategy.sh <strategy_id> [--fg]
 #
 # Examples:
-#   ./scripts/start_strategy.sh 92201 day        # 日盘，后台运行
-#   ./scripts/start_strategy.sh 92201 night      # 夜盘，后台运行
-#   ./scripts/start_strategy.sh 92201 day --fg   # 日盘，前台运行（调试）
-#   ./scripts/start_strategy.sh 92202 night
+#   ./scripts/start_strategy.sh 92201            # 后台运行
+#   ./scripts/start_strategy.sh 92201 --fg       # 前台运行（调试）
+#   ./scripts/start_strategy.sh 92202
 #
-# 自动查找:
-#   controls/{session}/control.*.{strategy_id}
-#   models/model.*.{strategy_id}
+# 自动查找: config/trader.{strategy_id}.yaml
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -343,47 +341,43 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <strategy_id> [session] [--fg]"
+    echo "Usage: $0 <strategy_id> [--fg]"
     echo ""
     echo "  strategy_id  策略ID，如 92201"
-    echo "  session      交易时段: day (默认) 或 night"
     echo "  --fg         前台运行（调试用）"
     echo ""
     echo "Examples:"
-    echo "  $0 92201 day"
-    echo "  $0 92201 night"
-    echo "  $0 92202 day --fg"
+    echo "  $0 92201"
+    echo "  $0 92202 --fg"
     echo ""
     echo "可用策略:"
-    for f in controls/day/control.*.* controls/night/control.*.*; do
+    for f in config/trader.*.yaml; do
         [ -f "$f" ] || continue
-        sid="${f##*.}"
-        session_dir="$(basename "$(dirname "$f")")"
-        symbols="${f#*control.}"
-        symbols="${symbols%.par.txt.*}"
-        echo "  ${sid}  ${symbols}  (${session_dir})"
+        sid="${f#config/trader.}"
+        sid="${sid%.yaml}"
+        [ "$sid" = "yaml" ] && continue
+        echo "  ${sid}  (${f})"
     done
     exit 1
 fi
 
 STRATEGY_ID=$1
-SESSION=${2:-day}
 FOREGROUND=false
 for arg in "$@"; do
     [ "$arg" = "--fg" ] && FOREGROUND=true
 done
 
 DATE=$(date +%Y%m%d)
-CONFIG_FILE="config/trader.yaml"
+CONFIG_FILE="config/trader.${STRATEGY_ID}.yaml"
+DATA_DIR="./data"
 LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
 
-# 查找 control 文件
-CONTROL_FILE=$(ls controls/${SESSION}/control.*.${STRATEGY_ID} 2>/dev/null | head -1)
-if [ -z "$CONTROL_FILE" ]; then
-    echo -e "${RED}[ERROR]${NC} 找不到 control 文件: controls/${SESSION}/control.*.${STRATEGY_ID}"
+# 检查配置文件
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${RED}[ERROR]${NC} 找不到配置文件: ${CONFIG_FILE}"
     echo ""
-    echo "可用文件:"
-    ls controls/day/control.* controls/night/control.* 2>/dev/null || echo "  (无)"
+    echo "可用配置:"
+    ls config/trader.*.yaml 2>/dev/null || echo "  (无)"
     exit 1
 fi
 
@@ -392,36 +386,29 @@ echo "════════════════════════�
 echo "  启动策略 ${STRATEGY_ID}"
 echo "════════════════════════════════════════════════════════════"
 echo -e "${GREEN}[INFO]${NC} Strategy ID:  ${STRATEGY_ID}"
-echo -e "${GREEN}[INFO]${NC} Session:      ${SESSION}"
-echo -e "${GREEN}[INFO]${NC} Control:      ${CONTROL_FILE}"
 echo -e "${GREEN}[INFO]${NC} Config:       ${CONFIG_FILE}"
+echo -e "${GREEN}[INFO]${NC} Data Dir:     ${DATA_DIR}"
 echo -e "${GREEN}[INFO]${NC} Log:          ${LOG_FILE}"
 echo ""
 
-mkdir -p log
+mkdir -p log data
 
 if [ "$FOREGROUND" = true ]; then
     echo -e "${YELLOW}[INFO]${NC} 前台模式 (Ctrl+C 停止)"
     ./bin/trader \
-        --Live \
-        --controlFile "$CONTROL_FILE" \
-        --strategyID "$STRATEGY_ID" \
-        --config "$CONFIG_FILE" \
-        --log-file "$LOG_FILE"
+        -config "$CONFIG_FILE" \
+        -data "$DATA_DIR" \
+        2>&1 | tee "$LOG_FILE"
 else
     ulimit -c unlimited 2>/dev/null || true
     nohup ./bin/trader \
-        --Live \
-        --controlFile "$CONTROL_FILE" \
-        --strategyID "$STRATEGY_ID" \
-        --config "$CONFIG_FILE" \
-        --log-file "$LOG_FILE" \
+        -config "$CONFIG_FILE" \
+        -data "$DATA_DIR" \
         >> "nohup.out.${STRATEGY_ID}" 2>&1 &
 
     PID=$!
     echo -e "${GREEN}[INFO]${NC} 策略已在后台启动 (PID: ${PID})"
-    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f ${LOG_FILE}"
-    echo -e "${GREEN}[INFO]${NC} 查看输出: tail -f nohup.out.${STRATEGY_ID}"
+    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f nohup.out.${STRATEGY_ID}"
 
     # 等待几秒检查进程是否存活
     sleep 2
@@ -442,10 +429,8 @@ cat > "${DEPLOY_DIR}/scripts/start_all.sh" << 'SCRIPT_EOF'
 # 一键启动所有（网关 + 所有策略）
 #
 # Usage:
-#   ./scripts/start_all.sh sim day       # 模拟环境，日盘所有策略
-#   ./scripts/start_all.sh sim night     # 模拟环境，夜盘所有策略
-#   ./scripts/start_all.sh ctp day       # CTP实盘，日盘所有策略
-#   ./scripts/start_all.sh ctp night     # CTP实盘，夜盘所有策略
+#   ./scripts/start_all.sh sim        # 模拟环境，启动所有策略
+#   ./scripts/start_all.sh ctp        # CTP实盘，启动所有策略
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -456,11 +441,10 @@ GREEN='\033[0;32m'
 NC='\033[0m'
 
 MODE=${1:-sim}
-SESSION=${2:-day}
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
-echo "  一键启动: 模式=${MODE}  时段=${SESSION}"
+echo "  一键启动: 模式=${MODE}"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 
@@ -469,20 +453,23 @@ echo ""
 
 sleep 2
 
-# 2. 启动所有策略
-CONTROL_DIR="controls/${SESSION}"
-if [ ! -d "$CONTROL_DIR" ]; then
-    echo -e "${GREEN}[INFO]${NC} 无 ${SESSION} 时段策略"
-    exit 0
-fi
-
-for control_file in ${CONTROL_DIR}/control.*; do
-    [ -f "$control_file" ] || continue
-    STRATEGY_ID="${control_file##*.}"
+# 2. 启动所有策略（遍历 config/trader.*.yaml）
+FOUND=0
+for config_file in config/trader.*.yaml; do
+    [ -f "$config_file" ] || continue
+    # 提取策略ID: config/trader.92201.yaml -> 92201
+    STRATEGY_ID="${config_file#config/trader.}"
+    STRATEGY_ID="${STRATEGY_ID%.yaml}"
+    [ -z "$STRATEGY_ID" ] && continue
+    FOUND=1
     echo -e "${GREEN}[INFO]${NC} 启动策略 ${STRATEGY_ID}..."
-    ./scripts/start_strategy.sh "$STRATEGY_ID" "$SESSION"
+    ./scripts/start_strategy.sh "$STRATEGY_ID"
     sleep 1
 done
+
+if [ "$FOUND" -eq 0 ]; then
+    echo -e "${GREEN}[INFO]${NC} 未找到策略配置文件 (config/trader.*.yaml)"
+fi
 
 echo ""
 echo -e "${GREEN}[INFO]${NC} 所有组件启动完成"
@@ -666,15 +653,15 @@ echo "  cd deploy_new"
 echo ""
 echo "  # 模拟测试"
 echo "  ./scripts/start_gateway.sh sim"
-echo "  ./scripts/start_strategy.sh 92201 day"
-echo "  ./scripts/start_strategy.sh 92202 day"
+echo "  ./scripts/start_strategy.sh 92201"
+echo "  ./scripts/start_strategy.sh 92202"
 echo ""
 echo "  # 或一键启动"
-echo "  ./scripts/start_all.sh sim day"
+echo "  ./scripts/start_all.sh sim"
 echo ""
 echo "  # CTP 实盘"
 echo "  ./scripts/start_gateway.sh ctp"
-echo "  ./scripts/start_strategy.sh 92201 night"
+echo "  ./scripts/start_strategy.sh 92201"
 echo ""
 echo "  # 停止"
 echo "  ./scripts/stop_all.sh"

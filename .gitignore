@@ -15,6 +15,8 @@ golang/trader
 tbsrc-golang/bin/
 tbsrc-golang/pkg/proto/
 tbsrc-golang/trader
+tbsrc-golang/main
+tbsrc-golang/webserver
 *.exe
 
 # C++ temporary build artifacts

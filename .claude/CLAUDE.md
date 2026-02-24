@@ -13,6 +13,35 @@ QuantlinkTrader 是一个高性能量化交易系统，采用 C++ 网关 + Golan
 
 ---
 
+## ⚠️ 变更管理规则（强制）
+
+**所有代码和配置变更必须通过 OpenSpec (opsx) 工作流进行管理。**
+
+### 流程要求
+
+1. **开始变更前**: 使用 `/opsx:new` 创建新的 change
+2. **推进变更**: 使用 `/opsx:continue` 逐步创建 artifacts（proposal → design → specs → tasks）
+3. **实施变更**: 使用 `/opsx:apply` 按 tasks 执行实施
+4. **验证变更**: 使用 `/opsx:verify` 验证实施完整性
+5. **归档变更**: 使用 `/opsx:archive` 归档已完成的 change
+
+### 快速流程（简单变更）
+
+对于明确的小变更，可使用 `/opsx:ff` 一次性生成所有 artifacts，然后直接实施和归档。
+
+### 禁止事项
+
+- ❌ 不经过 opsx 直接修改代码
+- ❌ 实施完成后不归档 change
+- ❌ 跳过 artifact 创建直接写代码
+
+### 豁免情况
+
+- 纯调试操作（查看日志、检查状态等不修改代码的操作）
+- 紧急 hotfix（事后补建 change 并归档）
+
+---
+
 ## ⚠️ 代码库位置定义（重要）
 
 **必须区分以下两个代码库，绝对不可混淆！**

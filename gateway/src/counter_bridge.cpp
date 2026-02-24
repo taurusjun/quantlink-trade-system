@@ -91,9 +91,9 @@ struct CachedOrderInfo {
 // ============================================================
 struct SHMConfig {
     int request_key      = 0x2001; // must match Go trader.tbsrc.yaml req_shm_key
-    int request_size     = 4096;
+    int request_size     = 1024;   // macOS: keep small for shmall limit
     int response_key     = 0x3001; // must match Go trader.tbsrc.yaml resp_shm_key
-    int response_size    = 4096;
+    int response_size    = 1024;   // macOS: keep small for shmall limit
     int client_store_key = 0x4001; // must match Go trader.tbsrc.yaml client_store_shm_key
 };
 
