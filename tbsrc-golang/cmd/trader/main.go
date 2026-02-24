@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -22,18 +23,69 @@ import (
 )
 
 func main() {
-	// ---- CLI 参数 ----
-	configPath := flag.String("config", "config/trader.tbsrc.yaml", "配置文件路径")
-	dataDir := flag.String("data", "../data", "daily_init 文件目录")
+	// ---- CLI 参数（对齐 C++ TradeBot） ----
+	// C++: ./TradeBot --Live --controlFile ./controls/xxx --strategyID 92201 --configFile ./config/xxx.cfg
+	// 参考: tbsrc/main/main.cpp:372-998
+	controlFile := flag.String("controlFile", "", "C++ controlFile 路径")
+	strategyIDStr := flag.String("strategyID", "", "策略 ID")
+	configFile := flag.String("configFile", "", "C++ configFile (.cfg) 路径")
+	adjustLTP := flag.Int("adjustLTP", 0, "调整最后成交价 (C++ --adjustLTP)")
+	printMod := flag.Int("printMod", 0, "打印模式 (C++ --printMod)")
+	updateInterval := flag.Int("updateInterval", 0, "更新间隔 (C++ --updateInterval)")
+	logFile := flag.String("logFile", "", "日志文件路径 (C++ --logFile)")
+	apiPort := flag.Int("apiPort", 9201, "Web UI / REST API 端口")
+	yearPrefix := flag.String("yearPrefix", "", "年份后两位 (e.g. 26)，用于 baseName→symbol 映射")
+
+	// 解析命令行参数
+	// C++: 第一个参数是 --Live/--Sim/--Regress，这里简化处理
 	flag.Parse()
 
-	// ---- 加载配置 ----
-	cfg, err := config.Load(*configPath)
+	// C++ 模式参数 (--Live 等) 在 flag.Args() 中
+	// 兼容 C++ 风格: 第一个非 flag 参数可能是 --Live
+	_ = adjustLTP
+	_ = printMod
+	_ = updateInterval
+
+	// ---- 验证必须参数 ----
+	if *controlFile == "" {
+		log.Fatal("[main] --controlFile 参数必须")
+	}
+	if *strategyIDStr == "" {
+		log.Fatal("[main] --strategyID 参数必须")
+	}
+	if *configFile == "" {
+		log.Fatal("[main] --configFile 参数必须")
+	}
+
+	strategyID, err := strconv.Atoi(*strategyIDStr)
+	if err != nil {
+		log.Fatalf("[main] --strategyID 无效: %v", err)
+	}
+
+	// ---- 设置日志输出 ----
+	if *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Fatalf("[main] 日志文件打开失败: %v", err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+	}
+
+	// ---- 从 C++ 格式文件加载配置 ----
+	buildParams := config.BuildParams{
+		ControlFile: *controlFile,
+		ConfigFile:  *configFile,
+		StrategyID:  strategyID,
+		APIPort:     *apiPort,
+		YearPrefix:  *yearPrefix,
+	}
+	cfg, controlCfg, err := config.BuildFromCppFiles(buildParams)
 	if err != nil {
 		log.Fatalf("[main] 配置加载失败: %v", err)
 	}
-	log.Printf("[main] 配置加载成功: strategy_id=%d symbols=%v",
-		cfg.Strategy.StrategyID, cfg.Strategy.Symbols)
+	log.Printf("[main] 配置加载成功: strategy_id=%d symbols=%v strat=%s",
+		cfg.Strategy.StrategyID, cfg.Strategy.Symbols, controlCfg.ExecStrat)
 
 	// ---- 验证配置 ----
 	if len(cfg.Strategy.Symbols) < 2 {
@@ -125,9 +177,8 @@ func main() {
 
 	// ---- 加载 daily_init ----
 	// C++: PairwiseArbStrategy 构造函数 (PairwiseArbStrategy.cpp:18-28)
-	//   LoadMatrix2 失败或 strategyID 未找到时 exit(-1)
-	//   origBaseName1 == origBaseName2 时 exit(-1)
-	dailyPath := config.DailyInitPath(*dataDir, cfg.Strategy.StrategyID)
+	// C++: 路径硬编码为 ../data/daily_init.<strategyID>
+	dailyPath := config.DailyInitPath("../data", cfg.Strategy.StrategyID)
 	daily, err := config.LoadMatrix2(dailyPath, int32(cfg.Strategy.StrategyID))
 	if err != nil {
 		log.Fatalf("[main] daily_init 加载失败: %v", err)
@@ -156,9 +207,9 @@ func main() {
 	}
 
 	// ---- 启动 API Server ----
-	apiPort := cfg.System.APIPort
-	if apiPort == 0 {
-		apiPort = 9201
+	srvPort := cfg.System.APIPort
+	if srvPort == 0 {
+		srvPort = 9201
 	}
 	// 从可执行文件相对路径加载 web/ 静态文件
 	var webFS fs.FS
@@ -176,10 +227,10 @@ func main() {
 			log.Printf("[main] Web 静态文件目录未找到 (仅 REST API 可用)")
 		}
 	}
-	apiServer := api.NewServer(apiPort, webFS)
+	apiServer := api.NewServer(srvPort, webFS)
 	apiServer.Start()
 	defer apiServer.Stop()
-	log.Printf("[main] API Server 已启动: http://localhost:%d/", apiPort)
+	log.Printf("[main] API Server 已启动: http://localhost:%d/", srvPort)
 
 	// ---- 启动 Connector ----
 	conn.Start()
@@ -199,20 +250,24 @@ func main() {
 	defer snapshotTicker.Stop()
 
 	// ---- 阈值热加载函数 ----
+	// C++: SIGUSR2 触发 LoadThresholds(simConfig) 重新读取 model file
+	modelFilePath := controlCfg.ModelFile
 	reloadThresholds := func() {
-		newCfg, err := config.Load(*configPath)
+		mc, err := config.ParseModelFile(modelFilePath)
 		if err != nil {
 			log.Printf("[main] 阈值重载失败: %v", err)
 			return
 		}
-		var firstMap, secondMap map[string]float64
-		if m, ok := newCfg.Strategy.Thresholds["first"]; ok {
-			firstMap = m
+		tholdMap := make(map[string]float64, len(mc.Thresholds))
+		for k, v := range mc.Thresholds {
+			f, _ := fmt.Sscanf(v, "%f", new(float64))
+			if f > 0 {
+				var val float64
+				fmt.Sscanf(v, "%f", &val)
+				tholdMap[config.UpperToSnake(k)] = val
+			}
 		}
-		if m, ok := newCfg.Strategy.Thresholds["second"]; ok {
-			secondMap = m
-		}
-		pas.ReloadThresholds(firstMap, secondMap)
+		pas.ReloadThresholds(tholdMap, tholdMap)
 	}
 
 	// ---- 主事件循环 ----

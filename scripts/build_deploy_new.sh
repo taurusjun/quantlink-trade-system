@@ -201,7 +201,7 @@ cat > "${DEPLOY_DIR}/scripts/start_gateway.sh" << 'SCRIPT_EOF'
 #
 # 数据流:
 #   md_shm_feeder → [SysV SHM 0x1001] → trader
-#   trader → [SysV SHM 0x2001/0x3001] → ors_gateway → counter_bridge
+#   trader → [SysV SHM 0x2001/0x3001] → counter_bridge
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -257,15 +257,21 @@ mkdir -p log ctp_flow
 
 # 1. MD SHM Feeder (行情 → SysV SHM 0x1001)
 if [ "$MODE" = "sim" ]; then
-    # 获取所有策略的合约列表
+    # 从 control 文件提取合约列表（C++ 格式: token0=baseName, token7=secondName）
+    # baseName 格式: ag_F_3_SFE → 提取 control 文件名中的合约: control.ag2603.ag2605.par.txt.92201
     SYMBOLS=""
-    for config_file in config/trader.*.yaml; do
-        [ -f "$config_file" ] || continue
-        # 从 yaml 中提取 symbols
-        syms=$(grep -A 20 "^  symbols:" "$config_file" | grep "^    - " | sed 's/^    - //' | tr '\n' ',')
+    for ctrl in controls/day/control.*.par.txt.*; do
+        [ -f "$ctrl" ] || continue
+        # 从 control 文件名提取合约: control.<sym1>.<sym2>.par.txt.<id>
+        fname=$(basename "$ctrl")
+        # 去掉 "control." 前缀和 ".par.txt.NNNNN" 后缀
+        syms="${fname#control.}"
+        syms="${syms%.par.txt.*}"
+        # syms = "ag2603.ag2605" → 替换 . 为 ,
+        syms=$(echo "$syms" | tr '.' ',')
+        [ -n "$SYMBOLS" ] && SYMBOLS="${SYMBOLS},"
         SYMBOLS="${SYMBOLS}${syms}"
     done
-    SYMBOLS="${SYMBOLS%,}"  # 去除末尾逗号
     if [ -z "$SYMBOLS" ]; then
         SYMBOLS="ag2603,ag2605,au2604,au2606"
     fi
@@ -310,7 +316,7 @@ fi
 echo ""
 echo -e "${GREEN}[INFO]${NC} 网关层启动完成 (${MODE})"
 echo -e "${GREEN}[INFO]${NC} Overview:  http://localhost:8080"
-echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id>"
+echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id> [day|night]"
 echo ""
 SCRIPT_EOF
 
@@ -318,17 +324,25 @@ SCRIPT_EOF
 cat > "${DEPLOY_DIR}/scripts/start_strategy.sh" << 'SCRIPT_EOF'
 #!/bin/bash
 # ============================================
-# 启动策略（tbsrc-golang trader）
+# 启动策略（对齐 C++ TradeBot 启动方式）
 #
 # Usage:
-#   ./scripts/start_strategy.sh <strategy_id> [--fg]
+#   ./scripts/start_strategy.sh <strategy_id> [day|night] [--fg]
+#
+# C++ 原方式:
+#   ./TradeBot --Live --controlFile ./controls/xxx --strategyID 92201 \
+#              --configFile ./config/config_CHINA.92201.cfg \
+#              --adjustLTP 1 --printMod 1 --updateInterval 300000
 #
 # Examples:
-#   ./scripts/start_strategy.sh 92201            # 后台运行
-#   ./scripts/start_strategy.sh 92201 --fg       # 前台运行（调试）
+#   ./scripts/start_strategy.sh 92201              # 自动检测 day/night
+#   ./scripts/start_strategy.sh 92201 day          # 日盘
+#   ./scripts/start_strategy.sh 92201 night --fg   # 夜盘前台调试
 #   ./scripts/start_strategy.sh 92202
 #
-# 自动查找: config/trader.{strategy_id}.yaml
+# 自动查找:
+#   controlFile: controls/{session}/control.*.par.txt.{strategyID}
+#   configFile:  config/config_CHINA.{strategyID}.cfg
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -341,53 +355,84 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <strategy_id> [--fg]"
+    echo "Usage: $0 <strategy_id> [day|night] [--fg]"
     echo ""
     echo "  strategy_id  策略ID，如 92201"
+    echo "  day|night    交易时段（默认自动检测）"
     echo "  --fg         前台运行（调试用）"
     echo ""
     echo "Examples:"
     echo "  $0 92201"
-    echo "  $0 92202 --fg"
+    echo "  $0 92201 day"
+    echo "  $0 92202 night --fg"
     echo ""
     echo "可用策略:"
-    for f in config/trader.*.yaml; do
+    for f in controls/day/control.*.par.txt.*; do
         [ -f "$f" ] || continue
-        sid="${f#config/trader.}"
-        sid="${sid%.yaml}"
-        [ "$sid" = "yaml" ] && continue
-        echo "  ${sid}  (${f})"
+        sid="${f##*.}"
+        fname=$(basename "$f")
+        echo "  ${sid}  (${fname})"
     done
     exit 1
 fi
 
 STRATEGY_ID=$1
+SESSION=""
 FOREGROUND=false
+shift
 for arg in "$@"; do
-    [ "$arg" = "--fg" ] && FOREGROUND=true
+    case "$arg" in
+        day|night) SESSION="$arg" ;;
+        --fg)      FOREGROUND=true ;;
+    esac
 done
 
-DATE=$(date +%Y%m%d)
-CONFIG_FILE="config/trader.${STRATEGY_ID}.yaml"
-DATA_DIR="./data"
-LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
+# 自动检测 session: 20:00~04:00 → night, 其他 → day
+if [ -z "$SESSION" ]; then
+    HOUR=$(date +%H)
+    if [ "$HOUR" -ge 20 ] || [ "$HOUR" -lt 4 ]; then
+        SESSION="night"
+    else
+        SESSION="day"
+    fi
+fi
 
-# 检查配置文件
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}[ERROR]${NC} 找不到配置文件: ${CONFIG_FILE}"
+DATE=$(date +%Y%m%d)
+# 年份前两位 → yearPrefix (C++ baseName→symbol 映射需要)
+YEAR_PREFIX=$(date +%y)
+
+# 自动查找 controlFile: controls/{session}/control.*.par.txt.{strategyID}
+CONTROL_FILE=""
+for f in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+    [ -f "$f" ] && CONTROL_FILE="$f" && break
+done
+
+if [ -z "$CONTROL_FILE" ]; then
+    echo -e "${RED}[ERROR]${NC} 找不到 controlFile: controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}"
     echo ""
-    echo "可用配置:"
-    ls config/trader.*.yaml 2>/dev/null || echo "  (无)"
+    echo "可用 control 文件 (${SESSION}):"
+    ls controls/${SESSION}/control.*.par.txt.* 2>/dev/null || echo "  (无)"
     exit 1
 fi
 
+# configFile: config/config_CHINA.{strategyID}.cfg
+CONFIG_FILE="config/config_CHINA.${STRATEGY_ID}.cfg"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${RED}[ERROR]${NC} 找不到 configFile: ${CONFIG_FILE}"
+    exit 1
+fi
+
+LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
+
 echo ""
 echo "════════════════════════════════════════════════════════════"
-echo "  启动策略 ${STRATEGY_ID}"
+echo "  启动策略 ${STRATEGY_ID} (${SESSION})"
 echo "════════════════════════════════════════════════════════════"
 echo -e "${GREEN}[INFO]${NC} Strategy ID:  ${STRATEGY_ID}"
-echo -e "${GREEN}[INFO]${NC} Config:       ${CONFIG_FILE}"
-echo -e "${GREEN}[INFO]${NC} Data Dir:     ${DATA_DIR}"
+echo -e "${GREEN}[INFO]${NC} Session:      ${SESSION}"
+echo -e "${GREEN}[INFO]${NC} ControlFile:  ${CONTROL_FILE}"
+echo -e "${GREEN}[INFO]${NC} ConfigFile:   ${CONFIG_FILE}"
+echo -e "${GREEN}[INFO]${NC} YearPrefix:   ${YEAR_PREFIX}"
 echo -e "${GREEN}[INFO]${NC} Log:          ${LOG_FILE}"
 echo ""
 
@@ -396,14 +441,26 @@ mkdir -p log data
 if [ "$FOREGROUND" = true ]; then
     echo -e "${YELLOW}[INFO]${NC} 前台模式 (Ctrl+C 停止)"
     ./bin/trader \
-        -config "$CONFIG_FILE" \
-        -data "$DATA_DIR" \
-        2>&1 | tee "$LOG_FILE"
+        -controlFile "$CONTROL_FILE" \
+        -strategyID "$STRATEGY_ID" \
+        -configFile "$CONFIG_FILE" \
+        -yearPrefix "$YEAR_PREFIX" \
+        -adjustLTP 1 \
+        -printMod 1 \
+        -updateInterval 300000 \
+        -logFile "$LOG_FILE" \
+        2>&1 | tee -a "$LOG_FILE"
 else
     ulimit -c unlimited 2>/dev/null || true
     nohup ./bin/trader \
-        -config "$CONFIG_FILE" \
-        -data "$DATA_DIR" \
+        -controlFile "$CONTROL_FILE" \
+        -strategyID "$STRATEGY_ID" \
+        -configFile "$CONFIG_FILE" \
+        -yearPrefix "$YEAR_PREFIX" \
+        -adjustLTP 1 \
+        -printMod 1 \
+        -updateInterval 300000 \
+        -logFile "$LOG_FILE" \
         >> "nohup.out.${STRATEGY_ID}" 2>&1 &
 
     PID=$!
@@ -429,8 +486,8 @@ cat > "${DEPLOY_DIR}/scripts/start_all.sh" << 'SCRIPT_EOF'
 # 一键启动所有（网关 + 所有策略）
 #
 # Usage:
-#   ./scripts/start_all.sh sim        # 模拟环境，启动所有策略
-#   ./scripts/start_all.sh ctp        # CTP实盘，启动所有策略
+#   ./scripts/start_all.sh sim [day|night]  # 模拟环境，启动所有策略
+#   ./scripts/start_all.sh ctp [day|night]  # CTP实盘，启动所有策略
 # ============================================
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -441,10 +498,21 @@ GREEN='\033[0;32m'
 NC='\033[0m'
 
 MODE=${1:-sim}
+SESSION=${2:-}
+
+# 自动检测 session
+if [ -z "$SESSION" ]; then
+    HOUR=$(date +%H)
+    if [ "$HOUR" -ge 20 ] || [ "$HOUR" -lt 4 ]; then
+        SESSION="night"
+    else
+        SESSION="day"
+    fi
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
-echo "  一键启动: 模式=${MODE}"
+echo "  一键启动: 模式=${MODE}  时段=${SESSION}"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 
@@ -453,22 +521,32 @@ echo ""
 
 sleep 2
 
-# 2. 启动所有策略（遍历 config/trader.*.yaml）
+# 2. 启动所有策略（从 config/config_CHINA.*.cfg 发现策略 ID）
 FOUND=0
-for config_file in config/trader.*.yaml; do
-    [ -f "$config_file" ] || continue
-    # 提取策略ID: config/trader.92201.yaml -> 92201
-    STRATEGY_ID="${config_file#config/trader.}"
-    STRATEGY_ID="${STRATEGY_ID%.yaml}"
+for cfg_file in config/config_CHINA.*.cfg; do
+    [ -f "$cfg_file" ] || continue
+    # 提取策略ID: config/config_CHINA.92201.cfg -> 92201
+    fname=$(basename "$cfg_file")
+    STRATEGY_ID="${fname#config_CHINA.}"
+    STRATEGY_ID="${STRATEGY_ID%.cfg}"
     [ -z "$STRATEGY_ID" ] && continue
+    # 检查对应的 control 文件是否存在
+    CTRL_FOUND=false
+    for ctrl in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+        [ -f "$ctrl" ] && CTRL_FOUND=true && break
+    done
+    if [ "$CTRL_FOUND" = false ]; then
+        echo -e "${GREEN}[INFO]${NC} 跳过策略 ${STRATEGY_ID}（无 ${SESSION} control 文件）"
+        continue
+    fi
     FOUND=1
-    echo -e "${GREEN}[INFO]${NC} 启动策略 ${STRATEGY_ID}..."
-    ./scripts/start_strategy.sh "$STRATEGY_ID"
+    echo -e "${GREEN}[INFO]${NC} 启动策略 ${STRATEGY_ID} (${SESSION})..."
+    ./scripts/start_strategy.sh "$STRATEGY_ID" "$SESSION"
     sleep 1
 done
 
 if [ "$FOUND" -eq 0 ]; then
-    echo -e "${GREEN}[INFO]${NC} 未找到策略配置文件 (config/trader.*.yaml)"
+    echo -e "${GREEN}[INFO]${NC} 未找到策略配置 (config/config_CHINA.*.cfg + controls/${SESSION}/)"
 fi
 
 echo ""
@@ -653,15 +731,15 @@ echo "  cd deploy_new"
 echo ""
 echo "  # 模拟测试"
 echo "  ./scripts/start_gateway.sh sim"
-echo "  ./scripts/start_strategy.sh 92201"
-echo "  ./scripts/start_strategy.sh 92202"
+echo "  ./scripts/start_strategy.sh 92201 day"
+echo "  ./scripts/start_strategy.sh 92202 day"
 echo ""
 echo "  # 或一键启动"
-echo "  ./scripts/start_all.sh sim"
+echo "  ./scripts/start_all.sh sim day"
 echo ""
 echo "  # CTP 实盘"
 echo "  ./scripts/start_gateway.sh ctp"
-echo "  ./scripts/start_strategy.sh 92201"
+echo "  ./scripts/start_strategy.sh 92201 day"
 echo ""
 echo "  # 停止"
 echo "  ./scripts/stop_all.sh"
