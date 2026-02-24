@@ -124,16 +124,24 @@ func main() {
 	cli.RegisterStrategy(sym2, pas)
 
 	// ---- 加载 daily_init ----
+	// C++: PairwiseArbStrategy 构造函数 (PairwiseArbStrategy.cpp:18-28)
+	//   LoadMatrix2 失败或 strategyID 未找到时 exit(-1)
+	//   origBaseName1 == origBaseName2 时 exit(-1)
 	dailyPath := config.DailyInitPath(*dataDir, cfg.Strategy.StrategyID)
-	daily, err := config.LoadDailyInit(dailyPath)
+	daily, err := config.LoadMatrix2(dailyPath, int32(cfg.Strategy.StrategyID))
 	if err != nil {
-		log.Printf("[main] daily_init 加载失败 (使用零值): %v", err)
-		daily = &config.DailyInit{}
+		log.Fatalf("[main] daily_init 加载失败: %v", err)
+	}
+	// C++: PairwiseArbStrategy.cpp:24-28
+	if daily.OrigBaseName1 == daily.OrigBaseName2 {
+		log.Fatalf("[main] daily_init ERROR! m_origbaseName1:%s m_origbaseName2:%s",
+			daily.OrigBaseName1, daily.OrigBaseName2)
 	}
 	pas.DailyInitPath = dailyPath
 	pas.Init(daily.AvgSpreadOri, daily.NetposYtd1, daily.Netpos2day1, daily.NetposAgg2)
-	log.Printf("[main] daily_init: avgSpreadOri=%.4f ytd1=%d 2day1=%d agg2=%d",
-		daily.AvgSpreadOri, daily.NetposYtd1, daily.Netpos2day1, daily.NetposAgg2)
+	log.Printf("[main] daily_init: avgSpreadOri=%.4f ytd1=%d 2day1=%d agg2=%d origBase1=%s origBase2=%s",
+		daily.AvgSpreadOri, daily.NetposYtd1, daily.Netpos2day1, daily.NetposAgg2,
+		daily.OrigBaseName1, daily.OrigBaseName2)
 
 	// ---- 打开 tvar SHM ----
 	var tvar *shm.TVar

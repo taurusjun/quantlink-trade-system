@@ -224,7 +224,7 @@ func TestPairwiseArb_HandleSquareoff_DailyInit(t *testing.T) {
 	}
 
 	// 读取并验证
-	saved, err := config.LoadDailyInit(pas.DailyInitPath)
+	saved, err := config.LoadMatrix2(pas.DailyInitPath, pas.StrategyID)
 	if err != nil {
 		t.Fatalf("读取 daily_init 失败: %v", err)
 	}
@@ -242,6 +242,15 @@ func TestPairwiseArb_HandleSquareoff_DailyInit(t *testing.T) {
 	}
 	if saved.AvgSpreadOri != 10.0 {
 		t.Errorf("AvgSpreadOri = %f, want 10.0", saved.AvgSpreadOri)
+	}
+	if saved.StrategyID != pas.StrategyID {
+		t.Errorf("StrategyID = %d, want %d", saved.StrategyID, pas.StrategyID)
+	}
+	if saved.OrigBaseName1 != pas.Inst1.Symbol {
+		t.Errorf("OrigBaseName1 = %q, want %q", saved.OrigBaseName1, pas.Inst1.Symbol)
+	}
+	if saved.OrigBaseName2 != pas.Inst2.Symbol {
+		t.Errorf("OrigBaseName2 = %q, want %q", saved.OrigBaseName2, pas.Inst2.Symbol)
 	}
 }
 

@@ -187,12 +187,15 @@ func (pas *PairwiseArbStrategy) handleSquareoffLocked() {
 	// ytd1 = total netpos (关机时全部仓位变成"昨仓")，2day = 0
 	if pas.DailyInitPath != "" {
 		saveDaily := &config.DailyInit{
-			AvgSpreadOri: pas.Spread.AvgSpreadOri,
-			NetposYtd1:   pas.Leg1.State.NetposPass, // C++: m_firstStrat->m_netpos_pass (total)
-			Netpos2day1:  0,                           // C++: 固定 "0"
-			NetposAgg2:   pas.Leg2.State.NetposAgg,
+			StrategyID:    pas.StrategyID,
+			AvgSpreadOri:  pas.Spread.AvgSpreadOri,
+			OrigBaseName1: pas.Inst1.Symbol, // C++: m_firstStrat->m_instru->m_origbaseName
+			OrigBaseName2: pas.Inst2.Symbol, // C++: m_secondStrat->m_instru->m_origbaseName
+			NetposYtd1:    pas.Leg1.State.NetposPass, // C++: m_firstStrat->m_netpos_pass (total)
+			Netpos2day1:   0,                          // C++: 固定 "0"
+			NetposAgg2:    pas.Leg2.State.NetposAgg,
 		}
-		if err := config.SaveDailyInit(pas.DailyInitPath, saveDaily); err != nil {
+		if err := config.SaveMatrix2(pas.DailyInitPath, saveDaily); err != nil {
 			log.Printf("[PairwiseArb] daily_init 保存失败: %v", err)
 		} else {
 			log.Printf("[PairwiseArb] daily_init 已保存: %s", pas.DailyInitPath)
