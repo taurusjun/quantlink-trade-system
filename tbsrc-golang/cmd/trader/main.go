@@ -197,13 +197,14 @@ func main() {
 			log.Printf("[main] 阈值重载失败: %v", err)
 			return
 		}
+		var firstMap, secondMap map[string]float64
 		if m, ok := newCfg.Strategy.Thresholds["first"]; ok {
-			thold1.LoadFromMap(m)
+			firstMap = m
 		}
 		if m, ok := newCfg.Strategy.Thresholds["second"]; ok {
-			thold2.LoadFromMap(m)
+			secondMap = m
 		}
-		log.Printf("[main] 阈值已热加载")
+		pas.ReloadThresholds(firstMap, secondMap)
 	}
 
 	// ---- 主事件循环 ----

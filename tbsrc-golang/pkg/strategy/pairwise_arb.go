@@ -196,6 +196,52 @@ func (pas *PairwiseArbStrategy) handleSquareoffLocked() {
 	}
 }
 
+// ReloadThresholds 热加载阈值参数（线程安全）
+// 在持有 pas.mu 的情况下更新 ThresholdSet 并同步 SpreadTracker/MaxQuoteLevel 等副本字段
+// 对应 C++: LoadThresholds(simConfig) — 由 SIGUSR2 触发
+func (pas *PairwiseArbStrategy) ReloadThresholds(firstMap, secondMap map[string]float64) {
+	pas.mu.Lock()
+	defer pas.mu.Unlock()
+
+	// 记录旧值
+	oldBegin := pas.Thold1.BeginPlace
+	oldLong := pas.Thold1.LongPlace
+	oldShort := pas.Thold1.ShortPlace
+	oldSize := pas.Thold1.Size
+	oldMaxSize := pas.Thold1.MaxSize
+	oldAlpha := pas.Spread.Alpha
+
+	// 更新 ThresholdSet
+	if firstMap != nil {
+		pas.Thold1.LoadFromMap(firstMap)
+	}
+	if secondMap != nil {
+		pas.Thold2.LoadFromMap(secondMap)
+	}
+
+	// 同步构造时复制的副本字段
+	// SpreadTracker.Alpha — 构造时从 thold1.Alpha 复制
+	pas.Spread.Alpha = pas.Thold1.Alpha
+	// SpreadTracker.AvgSpreadAway — 构造时从 thold1.AvgSpreadAway 复制
+	if pas.Thold1.AvgSpreadAway > 0 {
+		pas.Spread.AvgSpreadAway = int32(pas.Thold1.AvgSpreadAway)
+	}
+	// MaxQuoteLevel — 构造时从 thold1.MaxQuoteLevel 复制
+	if pas.Thold1.MaxQuoteLevel > 0 {
+		pas.MaxQuoteLevel = int32(pas.Thold1.MaxQuoteLevel)
+	}
+
+	log.Printf("[PairwiseArb] 阈值热加载完成:")
+	log.Printf("[PairwiseArb]   BeginPlace: %.4f → %.4f", oldBegin, pas.Thold1.BeginPlace)
+	log.Printf("[PairwiseArb]   LongPlace:  %.4f → %.4f", oldLong, pas.Thold1.LongPlace)
+	log.Printf("[PairwiseArb]   ShortPlace: %.4f → %.4f", oldShort, pas.Thold1.ShortPlace)
+	log.Printf("[PairwiseArb]   Size:       %d → %d", oldSize, pas.Thold1.Size)
+	log.Printf("[PairwiseArb]   MaxSize:    %d → %d", oldMaxSize, pas.Thold1.MaxSize)
+	log.Printf("[PairwiseArb]   Alpha:      %.10f → %.10f", oldAlpha, pas.Spread.Alpha)
+	log.Printf("[PairwiseArb]   MaxQuoteLevel: %d, AvgSpreadAway: %d",
+		pas.MaxQuoteLevel, pas.Spread.AvgSpreadAway)
+}
+
 // HandleSquareON 恢复策略
 // 参考: PairwiseArbStrategy.cpp:571-584
 func (pas *PairwiseArbStrategy) HandleSquareON() {

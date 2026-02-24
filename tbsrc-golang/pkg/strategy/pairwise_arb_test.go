@@ -215,6 +215,89 @@ func TestPairwiseArb_HandleSquareON(t *testing.T) {
 	}
 }
 
+func TestPairwiseArb_ReloadThresholds(t *testing.T) {
+	pas := newTestPAS()
+
+	// 验证初始值
+	if pas.Thold1.BeginPlace != 2.0 {
+		t.Fatalf("初始 BeginPlace = %f, want 2.0", pas.Thold1.BeginPlace)
+	}
+	if pas.Spread.Alpha != 0.01 {
+		t.Fatalf("初始 Spread.Alpha = %f, want 0.01", pas.Spread.Alpha)
+	}
+	if pas.MaxQuoteLevel != 3 {
+		t.Fatalf("初始 MaxQuoteLevel = %d, want 3", pas.MaxQuoteLevel)
+	}
+
+	// 构造新参数 map
+	firstMap := map[string]float64{
+		"begin_place":      5.0,
+		"long_place":       8.0,
+		"short_place":      -3.0,
+		"size":             2,
+		"max_size":         20,
+		"alpha":            0.005,
+		"max_quote_level":  5,
+		"avg_spread_away":  30,
+	}
+	secondMap := map[string]float64{
+		"max_size": 15,
+	}
+
+	pas.ReloadThresholds(firstMap, secondMap)
+
+	// 验证 ThresholdSet 字段更新
+	if pas.Thold1.BeginPlace != 5.0 {
+		t.Errorf("BeginPlace = %f, want 5.0", pas.Thold1.BeginPlace)
+	}
+	if pas.Thold1.LongPlace != 8.0 {
+		t.Errorf("LongPlace = %f, want 8.0", pas.Thold1.LongPlace)
+	}
+	if pas.Thold1.ShortPlace != -3.0 {
+		t.Errorf("ShortPlace = %f, want -3.0", pas.Thold1.ShortPlace)
+	}
+	if pas.Thold1.Size != 2 {
+		t.Errorf("Size = %d, want 2", pas.Thold1.Size)
+	}
+	if pas.Thold1.MaxSize != 20 {
+		t.Errorf("MaxSize = %d, want 20", pas.Thold1.MaxSize)
+	}
+
+	// 验证过期参数同步
+	if pas.Spread.Alpha != 0.005 {
+		t.Errorf("Spread.Alpha = %f, want 0.005", pas.Spread.Alpha)
+	}
+	if pas.Spread.AvgSpreadAway != 30 {
+		t.Errorf("Spread.AvgSpreadAway = %d, want 30", pas.Spread.AvgSpreadAway)
+	}
+	if pas.MaxQuoteLevel != 5 {
+		t.Errorf("MaxQuoteLevel = %d, want 5", pas.MaxQuoteLevel)
+	}
+
+	// 验证 thold2 更新
+	if pas.Thold2.MaxSize != 15 {
+		t.Errorf("Thold2.MaxSize = %d, want 15", pas.Thold2.MaxSize)
+	}
+
+	// 验证 SpreadTracker 的 AvgSpreadOri 未被破坏
+	if pas.Spread.AvgSpreadOri != 10.0 {
+		t.Errorf("Spread.AvgSpreadOri = %f, want 10.0 (应保持不变)", pas.Spread.AvgSpreadOri)
+	}
+}
+
+func TestPairwiseArb_ReloadThresholds_NilMaps(t *testing.T) {
+	pas := newTestPAS()
+	oldBegin := pas.Thold1.BeginPlace
+
+	// nil map 不应崩溃，也不应改变值
+	pas.ReloadThresholds(nil, nil)
+
+	if pas.Thold1.BeginPlace != oldBegin {
+		t.Errorf("nil reload should not change BeginPlace: got %f, want %f",
+			pas.Thold1.BeginPlace, oldBegin)
+	}
+}
+
 func TestPairwiseArb_CalcPendingNetposAgg(t *testing.T) {
 	pas := newTestPAS()
 
