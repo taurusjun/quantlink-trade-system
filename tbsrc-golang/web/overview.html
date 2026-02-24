@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantlinkTrader Overview</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #667eea; --primary-dark: #764ba2;
+            --success: #28a745; --danger: #dc3545;
+            --warning: #ffc107; --info: #17a2b8;
+            --text: #212529; --muted: #6c757d;
+            --bg: #f8f9fa; --border: #dee2e6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg); min-height: 100vh; color: var(--text); font-size: 13px;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+        .scan-info { font-size: 11px; opacity: 0.7; }
+        .spinner {
+            display: inline-block; width: 12px; height: 12px;
+            border: 2px solid rgba(255,255,255,0.3); border-top-color: white;
+            border-radius: 50%; animation: spin 0.6s linear infinite;
+            vertical-align: middle; margin-right: 4px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Aggregate Stats Bar */
+        .agg-stats {
+            display: flex; gap: 15px; padding: 14px 24px;
+            background: white; border-bottom: 1px solid var(--border);
+            flex-wrap: wrap; align-items: center;
+        }
+        .agg-stat { display: flex; flex-direction: column; min-width: 120px; }
+        .agg-stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+        .agg-stat-value { font-size: 20px; font-weight: 700; }
+        .positive { color: var(--success); }
+        .negative { color: var(--danger); }
+        .agg-actions { margin-left: auto; display: flex; gap: 8px; }
+
+        /* Cards Grid */
+        .cards-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 20px; padding: 20px 24px;
+        }
+        @media (max-width: 768px) { .cards-grid { grid-template-columns: 1fr; padding: 15px; } }
+
+        /* Trader Card */
+        .trader-card {
+            background: white; border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden; border: 2px solid transparent; transition: all 0.3s;
+        }
+        .trader-card:hover { box-shadow: 0 4px 15px rgba(0,0,0,0.12); }
+        .trader-card.active { border-color: var(--success); }
+        .trader-card.inactive { border-color: var(--info); }
+        .trader-card.disconnected { border-color: var(--border); opacity: 0.6; }
+
+        .card-top {
+            padding: 14px 18px; border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: flex-start;
+        }
+        .card-title-area { display: flex; flex-direction: column; gap: 3px; }
+        .card-title { font-size: 15px; font-weight: 600; }
+        .card-subtitle { font-size: 12px; color: var(--muted); }
+        .card-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+
+        .card-body { padding: 14px 18px; }
+        .card-section { font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; margin: 10px 0 6px; }
+        .card-section:first-child { margin-top: 0; }
+        .card-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+        .card-row-label { font-size: 12px; color: var(--muted); }
+        .card-row-value { font-size: 13px; font-weight: 500; }
+        .card-divider { border-top: 1px solid var(--border); margin: 8px 0; }
+
+        /* Card Actions */
+        .card-actions {
+            padding: 12px 18px; border-top: 1px solid var(--border);
+            display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+        }
+
+        /* Badge */
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-secondary { background: #e2e3e5; color: #383d41; }
+
+        /* Buttons */
+        .btn {
+            padding: 6px 12px; border: none; border-radius: 6px;
+            font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.15); }
+        .btn-activate { background: linear-gradient(135deg, var(--success) 0%, #20c997 100%); color: white; }
+        .btn-deactivate { background: var(--muted); color: white; }
+        .btn-squareoff { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; }
+        .btn-reload { background: linear-gradient(135deg, var(--info) 0%, #6f42c1 100%); color: white; }
+        .btn-link {
+            background: none; border: none; color: var(--primary);
+            padding: 6px 8px; text-decoration: none; font-size: 11px; font-weight: 600; cursor: pointer;
+            margin-left: auto;
+        }
+        .btn-link:hover { text-decoration: underline; }
+
+        /* Connection dot */
+        .conn-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px;
+        }
+        .conn-dot.on { background: var(--success); animation: pulse 2s infinite; }
+        .conn-dot.off { background: var(--danger); }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+        /* Toast */
+        .toast-box { position: fixed; top: 60px; right: 16px; z-index: 1000; }
+        .toast {
+            padding: 10px 16px; border-radius: 6px; margin-bottom: 8px;
+            animation: slideIn 0.3s; box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+            font-size: 13px; max-width: 400px;
+        }
+        .toast-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .toast-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        @keyframes slideIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
+
+        /* Empty state */
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+        .empty-state p { margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <!-- Header -->
+    <header class="header">
+        <div style="display:flex;align-items:center;gap:12px">
+            <h1>QuantlinkTrader Overview</h1>
+            <span class="scan-info">
+                <span v-if="scanning" class="spinner"></span>
+                Ports {{ portStart }}-{{ portEnd }}
+            </span>
+        </div>
+        <div class="header-right">
+            <span>{{ connectedCount }} Trader{{ connectedCount !== 1 ? 's' : '' }}</span>
+            <span style="font-size:12px;opacity:0.8">{{ currentTime }}</span>
+        </div>
+    </header>
+
+    <!-- Toast -->
+    <div class="toast-box">
+        <div v-for="(t,i) in toasts" :key="i" class="toast" :class="'toast-'+t.type">{{ t.msg }}</div>
+    </div>
+
+    <!-- Aggregate Stats Bar -->
+    <div class="agg-stats" v-if="traders.length > 0">
+        <div class="agg-stat">
+            <span class="agg-stat-label">Total Net PNL</span>
+            <span class="agg-stat-value" :class="aggNetPnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(aggNetPnl) }}</span>
+        </div>
+        <div class="agg-stat">
+            <span class="agg-stat-label">Realised</span>
+            <span class="agg-stat-value" :class="aggRealised >= 0 ? 'positive' : 'negative'">{{ fmtPnl(aggRealised) }}</span>
+        </div>
+        <div class="agg-stat">
+            <span class="agg-stat-label">Unrealised</span>
+            <span class="agg-stat-value" :class="aggUnrealised >= 0 ? 'positive' : 'negative'">{{ fmtPnl(aggUnrealised) }}</span>
+        </div>
+        <div class="agg-stat">
+            <span class="agg-stat-label">Orders</span>
+            <span class="agg-stat-value">{{ aggOrders }}</span>
+        </div>
+        <div class="agg-actions">
+            <button class="btn btn-activate" @click="activateAll" :disabled="connectedCount === 0">Activate All</button>
+            <button class="btn btn-deactivate" @click="deactivateAll" :disabled="connectedCount === 0">Deactivate All</button>
+        </div>
+    </div>
+
+    <!-- Strategy Cards -->
+    <div class="cards-grid" v-if="traders.length > 0">
+        <div v-for="t in traders" :key="t.port"
+             class="trader-card"
+             :class="!t.connected ? 'disconnected' : (t.snap.active ? 'active' : 'inactive')">
+
+            <!-- Card Top -->
+            <div class="card-top">
+                <div class="card-title-area">
+                    <span class="card-title">{{ t.snap.strategy_id || ('Port ' + t.port) }}</span>
+                    <span class="card-subtitle">
+                        {{ legSymbol(t.snap, 'leg1') }} / {{ legSymbol(t.snap, 'leg2') }}
+                    </span>
+                    <span class="card-subtitle">
+                        <span class="conn-dot" :class="t.connected ? 'on' : 'off'"></span>
+                        :{{ t.port }} &middot; {{ t.lastUpdate || '--' }}
+                    </span>
+                </div>
+                <div class="card-badges">
+                    <span class="badge" :class="t.snap.active ? 'badge-success' : 'badge-secondary'">
+                        {{ t.snap.active ? 'Active' : 'Inactive' }}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Card Body -->
+            <div class="card-body">
+                <!-- PNL -->
+                <div class="card-section">PNL</div>
+                <div class="card-row">
+                    <span class="card-row-label">Net PNL</span>
+                    <span class="card-row-value" :class="netPnl(t.snap) >= 0 ? 'positive' : 'negative'">
+                        {{ fmtPnl(netPnl(t.snap)) }}
+                    </span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Realised</span>
+                    <span class="card-row-value" :class="realisedPnl(t.snap) >= 0 ? 'positive' : 'negative'">
+                        {{ fmtPnl(realisedPnl(t.snap)) }}
+                    </span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Unrealised</span>
+                    <span class="card-row-value" :class="unrealisedPnl(t.snap) >= 0 ? 'positive' : 'negative'">
+                        {{ fmtPnl(unrealisedPnl(t.snap)) }}
+                    </span>
+                </div>
+
+                <div class="card-divider"></div>
+
+                <!-- Spread -->
+                <div class="card-section">Spread</div>
+                <div class="card-row">
+                    <span class="card-row-label">Current</span>
+                    <span class="card-row-value">{{ fmtNum(t.snap.spread.current) }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Deviation</span>
+                    <span class="card-row-value">{{ fmtNum(t.snap.spread.deviation) }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">T-Value</span>
+                    <span class="card-row-value">{{ fmtNum(t.snap.spread.t_value) }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">EWA Mean</span>
+                    <span class="card-row-value">{{ fmtNum(t.snap.spread.avg_spread) }}</span>
+                </div>
+
+                <div class="card-divider"></div>
+
+                <!-- Position & Orders -->
+                <div class="card-section">Position</div>
+                <div class="card-row">
+                    <span class="card-row-label">Leg1 Netpos</span>
+                    <span class="card-row-value">{{ t.snap.leg1.netpos }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Leg2 Netpos</span>
+                    <span class="card-row-value">{{ t.snap.leg2.netpos }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Exposure</span>
+                    <span class="card-row-value">{{ t.snap.exposure }}</span>
+                </div>
+                <div class="card-row">
+                    <span class="card-row-label">Orders</span>
+                    <span class="card-row-value">{{ orderCount(t.snap) }}</span>
+                </div>
+            </div>
+
+            <!-- Card Actions -->
+            <div class="card-actions">
+                <button class="btn btn-activate" @click="sendCmd(t.port, 'activate')" :disabled="t.processing || !t.connected">Activate</button>
+                <button class="btn btn-deactivate" @click="sendCmd(t.port, 'deactivate')" :disabled="t.processing || !t.connected">Deactivate</button>
+                <button class="btn btn-squareoff" @click="confirmCmd(t.port, 'squareoff')" :disabled="t.processing || !t.connected">Squareoff</button>
+                <button class="btn btn-reload" @click="sendCmd(t.port, 'reload-thresholds')" :disabled="t.processing || !t.connected">Reload</button>
+                <a class="btn-link" :href="'http://localhost:' + t.port + '/dashboard.html'" target="_blank">Detail &#9654;</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Empty State -->
+    <div v-else class="empty-state">
+        <p style="font-size:20px">
+            <span v-if="scanning">Scanning for traders...</span>
+            <span v-else>No Traders Found</span>
+        </p>
+        <p>Scanning ports {{ portStart }}-{{ portEnd }} on localhost</p>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
+
+const PORT_START = 9201;
+const PORT_END = 9210;
+const SCAN_INTERVAL = 5000;
+const RECONNECT_INTERVAL = 3000;
+
+const emptyLeg = () => ({
+    symbol: '', exchange: '',
+    bid_px: 0, ask_px: 0, mid_px: 0, bid_qty: 0, ask_qty: 0, last_trade_px: 0,
+    netpos: 0, netpos_pass: 0, netpos_agg: 0,
+    realised_pnl: 0, unrealised_pnl: 0, net_pnl: 0, gross_pnl: 0, max_pnl: 0, drawdown: 0,
+    trade_count: 0, order_count: 0, reject_count: 0, cancel_count: 0,
+    buy_total_qty: 0, sell_total_qty: 0,
+    orders: []
+});
+
+const emptySnap = () => ({
+    timestamp: '', strategy_id: '', active: false, account: '', exposure: 0,
+    spread: { current: 0, avg_spread: 0, avg_ori: 0, t_value: 0, deviation: 0, is_valid: false, alpha: 0 },
+    leg1: emptyLeg(),
+    leg2: emptyLeg()
+});
+
+createApp({
+    setup() {
+        // --- State ---
+        const conns = reactive({}); // keyed by port
+        const toasts = ref([]);
+        const currentTime = ref('');
+        const scanning = ref(false);
+        const portStart = ref(PORT_START);
+        const portEnd = ref(PORT_END);
+
+        let clockTimer = null;
+        let scanTimer = null;
+
+        const updateClock = () => { currentTime.value = new Date().toLocaleTimeString(); };
+
+        // --- Toast ---
+        const showToast = (msg, type = 'success') => {
+            const t = { msg, type };
+            toasts.value.push(t);
+            setTimeout(() => { const i = toasts.value.indexOf(t); if (i > -1) toasts.value.splice(i, 1); }, 3000);
+        };
+
+        // --- Connection Management ---
+        const getConn = (port) => {
+            if (!conns[port]) {
+                conns[port] = {
+                    ws: null,
+                    connected: false,
+                    snap: emptySnap(),
+                    lastUpdate: null,
+                    reconnectTimer: null,
+                    processing: false,
+                };
+            }
+            return conns[port];
+        };
+
+        const connectPort = (port) => {
+            const c = getConn(port);
+            if (c.ws && (c.ws.readyState === WebSocket.CONNECTING || c.ws.readyState === WebSocket.OPEN)) return;
+
+            if (c.ws) { try { c.ws.close(); } catch {} c.ws = null; }
+            if (c.reconnectTimer) { clearTimeout(c.reconnectTimer); c.reconnectTimer = null; }
+
+            try {
+                const ws = new WebSocket(`ws://localhost:${port}/ws`);
+
+                ws.onopen = () => {
+                    c.connected = true;
+                    if (c.reconnectTimer) { clearTimeout(c.reconnectTimer); c.reconnectTimer = null; }
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'dashboard_update' && msg.data) {
+                            c.snap = msg.data;
+                            c.lastUpdate = new Date().toLocaleTimeString();
+                        } else if (msg.type === 'ping') {
+                            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pong' }));
+                        }
+                    } catch (e) { console.error(`[${port}] Parse error:`, e); }
+                };
+
+                ws.onerror = () => { c.connected = false; };
+
+                ws.onclose = () => {
+                    c.connected = false;
+                    c.ws = null;
+                    // Only reconnect if we previously had data from this port
+                    if (c.lastUpdate) {
+                        c.reconnectTimer = setTimeout(() => connectPort(port), RECONNECT_INTERVAL);
+                    }
+                };
+
+                c.ws = ws;
+            } catch { c.connected = false; }
+        };
+
+        const disconnectAll = () => {
+            for (let p = PORT_START; p <= PORT_END; p++) {
+                const c = conns[p];
+                if (!c) continue;
+                if (c.reconnectTimer) { clearTimeout(c.reconnectTimer); c.reconnectTimer = null; }
+                if (c.ws) { try { c.ws.close(); } catch {} c.ws = null; }
+                c.connected = false;
+            }
+        };
+
+        const scanPorts = () => {
+            scanning.value = true;
+            for (let p = PORT_START; p <= PORT_END; p++) connectPort(p);
+            setTimeout(() => { scanning.value = false; }, 2000);
+        };
+
+        // --- Computed ---
+        const traders = computed(() => {
+            const result = [];
+            for (let p = PORT_START; p <= PORT_END; p++) {
+                const c = conns[p];
+                if (!c || !c.lastUpdate) continue; // only show ports that have responded at least once
+                result.push({
+                    port: p,
+                    connected: c.connected,
+                    snap: c.snap || emptySnap(),
+                    lastUpdate: c.lastUpdate,
+                    processing: c.processing,
+                });
+            }
+            return result;
+        });
+
+        const connectedCount = computed(() => traders.value.filter(t => t.connected).length);
+
+        // PNL helpers
+        const realisedPnl = (s) => (s.leg1.realised_pnl || 0) + (s.leg2.realised_pnl || 0);
+        const unrealisedPnl = (s) => (s.leg1.unrealised_pnl || 0) + (s.leg2.unrealised_pnl || 0);
+        const netPnl = (s) => (s.leg1.net_pnl || 0) + (s.leg2.net_pnl || 0);
+        const orderCount = (s) => ((s.leg1.orders || []).length + (s.leg2.orders || []).length);
+        const legSymbol = (s, leg) => (s[leg] && s[leg].symbol) ? s[leg].symbol : '--';
+
+        // Aggregates
+        const aggRealised = computed(() => traders.value.reduce((sum, t) => sum + realisedPnl(t.snap), 0));
+        const aggUnrealised = computed(() => traders.value.reduce((sum, t) => sum + unrealisedPnl(t.snap), 0));
+        const aggNetPnl = computed(() => aggRealised.value + aggUnrealised.value);
+        const aggOrders = computed(() => traders.value.reduce((sum, t) => sum + orderCount(t.snap), 0));
+
+        // --- Formatting ---
+        const fmtPnl = (v) => { if (!v && v !== 0) return '0.00'; return (v >= 0 ? '+' : '') + v.toFixed(2); };
+        const fmtNum = (v) => v !== undefined && v !== null ? (Math.abs(v) < 10 ? v.toFixed(4) : v.toFixed(2)) : '0';
+
+        // --- Commands ---
+        const ENDPOINTS = {
+            activate: '/api/v1/strategy/activate',
+            deactivate: '/api/v1/strategy/deactivate',
+            squareoff: '/api/v1/strategy/squareoff',
+            'reload-thresholds': '/api/v1/strategy/reload-thresholds',
+        };
+
+        const sendCmd = async (port, cmd) => {
+            const c = getConn(port);
+            if (c.processing) return;
+            c.processing = true;
+            try {
+                const res = await fetch(`http://localhost:${port}${ENDPOINTS[cmd]}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) showToast(`:${port} ${cmd} - ${data.message || 'OK'}`);
+                else showToast(`:${port} ${cmd} - ${data.message || 'Failed'}`, 'error');
+            } catch (e) {
+                showToast(`:${port} ${cmd} - ${e.message}`, 'error');
+            } finally {
+                c.processing = false;
+            }
+        };
+
+        const confirmCmd = (port, cmd) => { if (confirm(`Confirm ${cmd} on port ${port}?`)) sendCmd(port, cmd); };
+
+        const activateAll = async () => {
+            for (const t of traders.value) {
+                if (t.connected && !t.snap.active) await sendCmd(t.port, 'activate');
+            }
+        };
+
+        const deactivateAll = async () => {
+            if (!confirm('Deactivate ALL strategies?')) return;
+            for (const t of traders.value) {
+                if (t.connected && t.snap.active) await sendCmd(t.port, 'deactivate');
+            }
+        };
+
+        // --- Lifecycle ---
+        onMounted(() => {
+            updateClock();
+            clockTimer = setInterval(updateClock, 1000);
+            scanPorts();
+            scanTimer = setInterval(scanPorts, SCAN_INTERVAL);
+        });
+
+        onUnmounted(() => {
+            disconnectAll();
+            if (clockTimer) clearInterval(clockTimer);
+            if (scanTimer) clearInterval(scanTimer);
+        });
+
+        return {
+            toasts, currentTime, scanning, portStart, portEnd,
+            traders, connectedCount,
+            aggNetPnl, aggRealised, aggUnrealised, aggOrders,
+            realisedPnl, unrealisedPnl, netPnl, orderCount, legSymbol,
+            fmtPnl, fmtNum,
+            sendCmd, confirmCmd, activateAll, deactivateAll,
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
