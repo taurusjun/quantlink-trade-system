@@ -265,25 +265,14 @@ shutdown:
 	conn.Stop()
 	log.Printf("[main] Connector 已停止")
 
-	// 3. 保存 daily_init
-	saveDaily := &config.DailyInit{
-		AvgSpreadOri: pas.Spread.AvgSpreadOri,
-		NetposYtd1:   pas.Leg1.State.NetposPassYtd,
-		Netpos2day1:  pas.Leg1.State.NetposPass - pas.Leg1.State.NetposPassYtd,
-		NetposAgg2:   pas.Leg2.State.NetposAgg,
-	}
-	if err := config.SaveDailyInit(dailyPath, saveDaily); err != nil {
-		log.Printf("[main] daily_init 保存失败: %v", err)
-	} else {
-		log.Printf("[main] daily_init 已保存: %s", dailyPath)
-	}
-
-	// 4. 关闭 tvar
+	// 3. 关闭 tvar
+	// 注: daily_init 保存已在 HandleSquareoff 内部完成（对齐 C++ SaveMatrix2 语义），
+	// 此处不再重复保存，避免覆盖已手动修正的 daily_init 文件
 	if tvar != nil {
 		tvar.Close()
 	}
 
-	// 5. 关闭 Connector SHM
+	// 4. 关闭 Connector SHM
 	if err := conn.Close(); err != nil {
 		log.Printf("[main] Connector 关闭失败: %v", err)
 	}

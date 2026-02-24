@@ -1,8 +1,11 @@
 package strategy
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"tbsrc-golang/pkg/config"
 	"tbsrc-golang/pkg/execution"
 	"tbsrc-golang/pkg/instrument"
 	"tbsrc-golang/pkg/types"
@@ -195,6 +198,50 @@ func TestPairwiseArb_HandleSquareoff(t *testing.T) {
 	}
 	if !pas.Leg2.State.OnExit {
 		t.Error("Leg2 OnExit should be true")
+	}
+}
+
+// TestPairwiseArb_HandleSquareoff_DailyInit 验证 HandleSquareoff 保存的 daily_init
+// 对齐 C++ SaveMatrix2: ytd1 = NetposPass (total), 2day = 0
+func TestPairwiseArb_HandleSquareoff_DailyInit(t *testing.T) {
+	pas := newTestPAS()
+	pas.SetActive(true)
+
+	// 设置持仓: ytd=2, 今仓使 total=5
+	pas.Leg1.State.NetposPassYtd = 2
+	pas.Leg1.State.NetposPass = 5 // total = ytd + today
+	pas.Leg2.State.NetposAgg = -3
+
+	// 设置 daily_init 保存路径
+	tmpDir := t.TempDir()
+	pas.DailyInitPath = filepath.Join(tmpDir, "daily_init.92201")
+
+	pas.HandleSquareoff()
+
+	// 验证文件已保存
+	if _, err := os.Stat(pas.DailyInitPath); err != nil {
+		t.Fatalf("daily_init 文件未创建: %v", err)
+	}
+
+	// 读取并验证
+	saved, err := config.LoadDailyInit(pas.DailyInitPath)
+	if err != nil {
+		t.Fatalf("读取 daily_init 失败: %v", err)
+	}
+
+	// C++ SaveMatrix2: ytd1 = m_netpos_pass (total), 不是只存昨仓部分
+	if saved.NetposYtd1 != 5 {
+		t.Errorf("NetposYtd1 = %d, want 5 (total NetposPass)", saved.NetposYtd1)
+	}
+	// C++ SaveMatrix2: 2day 固定为 0
+	if saved.Netpos2day1 != 0 {
+		t.Errorf("Netpos2day1 = %d, want 0 (C++ 固定值)", saved.Netpos2day1)
+	}
+	if saved.NetposAgg2 != -3 {
+		t.Errorf("NetposAgg2 = %d, want -3", saved.NetposAgg2)
+	}
+	if saved.AvgSpreadOri != 10.0 {
+		t.Errorf("AvgSpreadOri = %f, want 10.0", saved.AvgSpreadOri)
 	}
 }
 
