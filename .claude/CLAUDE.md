@@ -164,6 +164,74 @@ md_shm_feeder → [SysV MWMR SHM 0x1001] → Go trader → [SysV MWMR SHM 0x2001
   - 使用 `log.Printf` 记录错误，不要 panic（除非初始化失败）
 - **日志格式**: `log.Printf("[模块名] 消息内容")`
 
+### Java 代码 (`tbsrc-java/`) — C++ → Java 翻译原则
+
+**核心目标**: Java 代码必须与 C++ 原代码保持最大程度的一致性，使开发者能够在 C++ 和 Java 之间轻松对照。
+
+**原则 1: 文件结构与 C++ 保持一致**
+- Java 包结构必须映射 C++ 目录结构
+- 示例: `tbsrc/Strategies/` → `com/quantlink/trader/strategy/`
+- 示例: `tbsrc/common/` → `com/quantlink/trader/common/`
+- 不得随意拆分或合并 C++ 中的文件
+
+**原则 2: 文件名与 C++ 尽可能保持一致**
+- C++ 文件名直接作为 Java 类名（PascalCase）
+- 示例: `ExecutionStrategy.cpp` → `ExecutionStrategy.java`
+- 示例: `PairwiseArbStrategy.cpp` → `PairwiseArbStrategy.java`
+- 示例: `ExtraStrategy.cpp` → `ExtraStrategy.java`
+- 头文件中的结构体/类型定义拆为独立 Java 文件时，保留原名
+
+**原则 3: 方法名与 C++ 尽可能保持一致**
+- C++ 方法名直接驼峰化作为 Java 方法名
+- 示例: `SendOrder()` → `sendOrder()`
+- 示例: `MDCallBack()` → `mdCallBack()`
+- 示例: `ORSCallBack()` → `orsCallBack()`
+- 示例: `SetThresholds()` → `setThresholds()`
+- 示例: `SendAggressiveOrder()` → `sendAggressiveOrder()`
+- 不得自行重命名方法（如不能把 `SendOrder` 改为 `placeOrder`）
+
+**原则 4: 变量名与 C++ 尽可能保持一致**
+- C++ 成员变量去掉 `m_` 前缀后驼峰化
+- 示例: `m_netpos` → `netpos`
+- 示例: `m_netpos_pass` → `netposPass`
+- 示例: `m_firstStrat` → `firstStrat`
+- 局部变量保持原名驼峰化
+- 不得自行重命名变量（如不能把 `m_netpos` 改为 `position`）
+
+**原则 5: 方法必须加入 C++ 来源注释**
+- 每个从 C++ 迁移的方法必须在方法上方注释说明来源
+- 格式: `// 迁移自: tbsrc/Strategies/文件名.cpp:方法名() (行号)`
+- 关键逻辑行使用 `// C++: 原始代码` 标注对应的 C++ 代码
+- 示例:
+  ```java
+  // 迁移自: tbsrc/Strategies/PairwiseArbStrategy.cpp:SendAggressiveOrder() (L150-L220)
+  private void sendAggressiveOrder() {
+      // C++: auto long_place_diff_thold = m_thold_first->LONG_PLACE - m_thold_first->BEGIN_PLACE;
+      double longPlaceDiff = firstThold.longPlace - firstThold.beginPlace;
+      ...
+  }
+  ```
+
+**原则 6: 无法对齐的逻辑必须详细注释说明**
+- 当 Java 实现与 C++ 存在结构性差异时，必须加注释说明:
+  - 差异是什么
+  - 为什么无法完全对齐
+  - Java 采用了什么替代方案
+- 格式: `// [C++差异] 说明...`
+- 示例:
+  ```java
+  // [C++差异] C++ 使用 function pointer callback (m_ORSCallBackFn)，
+  // Java 使用 @Override 虚方法派发，语义等价但机制不同。
+  // 参考: tbsrc/Strategies/include/ExecutionStrategy.h:85
+  ```
+- 常见差异场景:
+  - 指针操作 → Java 引用
+  - 宏定义 → Java 常量/方法
+  - 模板 → Java 泛型
+  - `friend class` → Java 包级访问
+  - `union` → Java 多字段
+  - `#ifdef` 条件编译 → Java 配置开关
+
 ### 配置文件 (`config/`)
 
 - **格式**: YAML
@@ -320,6 +388,7 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 - `docs/功能实现/`: Phase2-9 实施计划、C++ 对照等
 - `docs/系统分析/`: 架构分析、MWMR 技术规格、代码对比
 - `docs/gateway/`: Gateway 模块文档
+- `docs/java迁移/`: Java 迁移评估、设计、实施文档
 
 **已清空/归档目录**:
 - `docs/golang/`: 已全部归档（旧 `golang/` 代码库文档）
@@ -332,8 +401,9 @@ func (pas *PairwiseArbStrategy) setDynamicThresholds() {
 3. **新功能实施** → `docs/功能实现/`
 4. **系统分析、架构设计** → `docs/系统分析/`
 5. **Gateway实现** → `docs/gateway/`
-6. **过时文档** → `docs/archive/`
-7. **核心文档更新** → 谨慎操作，这些是长期维护的基础文档
+6. **Java 迁移相关** → `docs/java迁移/`
+7. **过时文档** → `docs/archive/`
+8. **核心文档更新** → 谨慎操作，这些是长期维护的基础文档
 
 **目录结构**:
 ```
@@ -347,6 +417,7 @@ quantlink-trade-system/
 │   ├── 功能实现/                            # Phase2-9 实施计划等
 │   ├── 系统分析/                            # 架构分析、MWMR 规格、代码对比
 │   ├── gateway/                             # Gateway模块文档
+│   ├── java迁移/                            # Java 迁移评估、设计、实施
 │   └── archive/                             # 已归档文档（131个）
 │
 ├── gateway/                                 # C++ 网关代码（md_shm_feeder, counter_bridge 等）
@@ -363,37 +434,32 @@ quantlink-trade-system/
 
 ### 文档命名规范
 
-**规则 2: 文档命名格式**
+**规则 2: 文档命名格式（2026-02-25 更新）**
 
-**格式**: `模块_摘要_YYYY-MM-DD-HH_mm.md`
+**格式**: `YYYY-MM-DD-HH_mm_模块_摘要.md`
 
 **组成部分**:
+- **时间戳**: `YYYY-MM-DD-HH_mm` 格式（24 小时制），**放在最前面**
 - **模块**: 文档所属模块或主题（小写或驼峰）
-  - 单模块: `gateway`, `golang`, `config`, `strategy`, `risk` 等
+  - 单模块: `gateway`, `golang`, `java`, `config`, `strategy`, `risk` 等
   - 多模块/系统级: `QuantlinkTrader`, `系统`, `项目`, `部署` 等
 - **摘要**: 简短描述文档内容（2-5 个字，中文）
-- **时间戳**: `YYYY-MM-DD-HH_mm` 格式（24 小时制）
 
 **命名示例**:
 
 ```bash
-# ✅ 正确示例
-docs/QuantlinkTrader_端到端测试报告_2026-01-24-15_32.md    # 通用文档
-docs/系统_架构设计_2026-01-20-10_00.md                       # 通用文档
-docs/部署_生产环境指南_2026-01-21-14_30.md                   # 通用文档
+# ✅ 正确示例（时间在前）
+docs/2026-02-25-10_00_系统_架构设计.md                       # 通用文档
+docs/2026-02-25-14_30_部署_生产环境指南.md                   # 通用文档
 
-docs/gateway/gateway_共享内存优化_2026-01-15-09_20.md       # Gateway 模块文档
-docs/gateway/gateway_性能测试报告_2026-01-16-11_45.md       # Gateway 模块文档
-
-docs/golang/golang_策略引擎设计_2026-01-18-13_15.md         # Golang 模块文档
-docs/golang/golang_风控模块实现_2026-01-19-16_00.md         # Golang 模块文档
-docs/golang/strategy_配对套利策略_2026-01-22-10_30.md       # Golang 模块文档
+docs/gateway/2026-02-25-09_20_gateway_共享内存优化.md       # Gateway 模块文档
+docs/java迁移/2026-02-25-10_00_java_迁移评估.md             # Java 迁移文档
 
 # ❌ 错误示例
 docs/test_report.md                                         # 缺少时间戳
+docs/模块_摘要_2026-01-24-15_32.md                          # 时间在后面（旧格式）
 docs/EndToEndTest_2026-01-24.md                            # 使用英文，缺少时分
 gateway/docs/gateway_共享内存优化.md                         # 错误位置
-docs/系统架构_20260120.md                                    # 时间格式不正确
 ```
 
 ### 文档内容规范
@@ -1454,6 +1520,11 @@ cd deploy_new
 
 ## 📋 项目重组历史
 
+**2026-02-25**: 文档命名格式更新 + Java 迁移启动
+- 文档命名格式改为时间在前：`YYYY-MM-DD-HH_mm_模块_摘要.md`（旧格式：`模块_摘要_YYYY-MM-DD-HH_mm.md`）
+- 新增 `docs/java迁移/` 目录，用于 C++ → Java 迁移相关文档
+- 完成 Java 迁移可行性评估
+
 **2026-02-24**: 文档归档 + 架构更新
 - 归档 94 个过时文档到 archive/（golang/ 35个、测试报告/ 8个、核心文档/ 4个、实盘/ 27个、功能实现/ 15个、系统分析/ 5个）
 - 新建部署指南 `docs/核心文档/DEPLOY_GUIDE_2026-02-24.md`（SysV MWMR SHM 直连架构）
@@ -1494,5 +1565,5 @@ cd deploy_new
 
 ---
 
-**最后更新**: 2026-02-24
-**文档版本**: v2.0
+**最后更新**: 2026-02-25
+**文档版本**: v2.1
