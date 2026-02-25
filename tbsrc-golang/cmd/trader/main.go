@@ -23,9 +23,26 @@ import (
 )
 
 func main() {
-	// ---- CLI 参数（对齐 C++ TradeBot） ----
+	// ---- C++ 模式参数（argv[1]）----
 	// C++: ./TradeBot --Live --controlFile ./controls/xxx --strategyID 92201 --configFile ./config/xxx.cfg
-	// 参考: tbsrc/main/main.cpp:372-998
+	// C++: main.cpp:386 - 第一个参数必须是 --Regress/--Sim/--Live/--LeadLag
+	// Go trader 仅支持 --Live 模式（Sim/Regress/LeadLag 依赖 hftbase ExchSim 磁盘回放架构，不适用）
+	// 参考: tbsrc/main/main.cpp:372-998, TradeBotUtils.cpp:2590-2608 (GetMode)
+	if len(os.Args) < 2 || os.Args[1] != "--Live" {
+		fmt.Println("Invalid Arguments!! Example Command is as below.")
+		fmt.Println("./trader --Live --controlFile ./controls/xxx --strategyID 92201 --configFile ./config/xxx.cfg")
+		if len(os.Args) >= 2 && os.Args[1] != "--Live" {
+			fmt.Printf("Error: Go trader 仅支持 --Live 模式（当前: %s）\n", os.Args[1])
+		}
+		os.Exit(1)
+	}
+	// C++: cout << "*****TradeBot started in " << argv[1]+2 << " Mode*****"
+	log.Printf("[main] *****TradeBot started in Live Mode*****")
+
+	// 移除 --Live 参数后再解析 flag（flag.Parse 处理 os.Args[2:]）
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+
+	// ---- CLI 参数（对齐 C++ TradeBot） ----
 	controlFile := flag.String("controlFile", "", "C++ controlFile 路径")
 	strategyIDStr := flag.String("strategyID", "", "策略 ID")
 	configFile := flag.String("configFile", "", "C++ configFile (.cfg) 路径")
@@ -36,12 +53,8 @@ func main() {
 	apiPort := flag.Int("apiPort", 9201, "Web UI / REST API 端口")
 	yearPrefix := flag.String("yearPrefix", "", "年份后两位 (e.g. 26)，用于 baseName→symbol 映射")
 
-	// 解析命令行参数
-	// C++: 第一个参数是 --Live/--Sim/--Regress，这里简化处理
 	flag.Parse()
 
-	// C++ 模式参数 (--Live 等) 在 flag.Args() 中
-	// 兼容 C++ 风格: 第一个非 flag 参数可能是 --Live
 	_ = adjustLTP
 	_ = printMod
 	_ = updateInterval
@@ -177,8 +190,9 @@ func main() {
 
 	// ---- 加载 daily_init ----
 	// C++: PairwiseArbStrategy 构造函数 (PairwiseArbStrategy.cpp:18-28)
-	// C++: 路径硬编码为 ../data/daily_init.<strategyID>
-	dailyPath := config.DailyInitPath("../data", cfg.Strategy.StrategyID)
+	// C++: 路径硬编码为 ../data/daily_init.<strategyID>（C++ CWD=bin/，所以 ../data/ 即部署根目录的 data/）
+	// Go: CWD=deploy_new/，所以用 ./data/
+	dailyPath := config.DailyInitPath("./data", cfg.Strategy.StrategyID)
 	daily, err := config.LoadMatrix2(dailyPath, int32(cfg.Strategy.StrategyID))
 	if err != nil {
 		log.Fatalf("[main] daily_init 加载失败: %v", err)
@@ -237,8 +251,10 @@ func main() {
 	log.Printf("[main] Connector 已启动，开始接收行情和回报")
 
 	// ---- 激活策略 ----
-	pas.SetActive(true)
-	log.Printf("[main] 策略已激活: strategy_id=%d", cfg.Strategy.StrategyID)
+	// C++: ExecutionStrategy.cpp:377-380
+	// C++: if (m_configParams->m_modeType == ModeType_Sim) m_Active = true; else m_Active = false;
+	// Live 模式: 策略启动时不激活，等待 SIGUSR1 信号激活
+	log.Printf("[main] 策略未激活 (Live 模式，等待 SIGUSR1 激活): strategy_id=%d", cfg.Strategy.StrategyID)
 
 	// ---- 信号注册（对应 C++ sigfillset + sigwait）----
 	sigCh := make(chan os.Signal, 1)

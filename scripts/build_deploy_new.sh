@@ -440,7 +440,7 @@ mkdir -p log data
 
 if [ "$FOREGROUND" = true ]; then
     echo -e "${YELLOW}[INFO]${NC} 前台模式 (Ctrl+C 停止)"
-    ./bin/trader \
+    ./bin/trader --Live \
         -controlFile "$CONTROL_FILE" \
         -strategyID "$STRATEGY_ID" \
         -configFile "$CONFIG_FILE" \
@@ -452,7 +452,7 @@ if [ "$FOREGROUND" = true ]; then
         2>&1 | tee -a "$LOG_FILE"
 else
     ulimit -c unlimited 2>/dev/null || true
-    nohup ./bin/trader \
+    nohup ./bin/trader --Live \
         -controlFile "$CONTROL_FILE" \
         -strategyID "$STRATEGY_ID" \
         -configFile "$CONFIG_FILE" \
