@@ -109,8 +109,10 @@ log_info "编译 C++:   ${BUILD_CPP}"
 
 # ==================== 清理 ====================
 if [ "$CLEAN_BUILD" = true ]; then
-    log_info "清理 deploy_new 目录..."
-    rm -rf "${DEPLOY_DIR}"
+    log_info "清理 deploy_new 目录（保留 data/ 和 ctp_flow/）..."
+    for clean_dir in bin lib scripts web config controls models log; do
+        rm -rf "${DEPLOY_DIR}/${clean_dir}"
+    done
 fi
 
 # ==================== 创建 deploy_new 目录结构 ====================
