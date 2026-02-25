@@ -189,8 +189,8 @@ func (pas *PairwiseArbStrategy) handleSquareoffLocked() {
 		saveDaily := &config.DailyInit{
 			StrategyID:    pas.StrategyID,
 			AvgSpreadOri:  pas.Spread.AvgSpreadOri,
-			OrigBaseName1: pas.Inst1.Symbol, // C++: m_firstStrat->m_instru->m_origbaseName
-			OrigBaseName2: pas.Inst2.Symbol, // C++: m_secondStrat->m_instru->m_origbaseName
+			OrigBaseName1: pas.Inst1.OrigBaseName, // C++: m_firstStrat->m_instru->m_origbaseName
+			OrigBaseName2: pas.Inst2.OrigBaseName, // C++: m_secondStrat->m_instru->m_origbaseName
 			NetposYtd1:    pas.Leg1.State.NetposPass, // C++: m_firstStrat->m_netpos_pass (total)
 			Netpos2day1:   0,                          // C++: 固定 "0"
 			NetposAgg2:    pas.Leg2.State.NetposAgg,

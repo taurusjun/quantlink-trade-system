@@ -13,8 +13,9 @@ const (
 // 参考: tbsrc/common/include/Instrument.h
 type Instrument struct {
 	// 合约基本信息
-	Symbol          string  // m_symbol
-	Exchange        string  // m_exchange
+	Symbol       string // m_symbol (e.g. "ag2603")
+	OrigBaseName string // m_origbaseName (e.g. "ag_F_3_SFE")，来自 controlFile
+	Exchange     string // m_exchange
 	TickSize        float64 // m_tickSize
 	LotSize         float64 // m_lotSize
 	ContractFactor  float64 // m_contractFactor

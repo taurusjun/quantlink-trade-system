@@ -15,6 +15,7 @@ import (
 func newTestInstrument(symbol string, tickSize, lotSize float64) *instrument.Instrument {
 	inst := &instrument.Instrument{
 		Symbol:          symbol,
+		OrigBaseName:    symbol, // 测试中默认 origBaseName = symbol
 		Exchange:        "SHFE",
 		TickSize:        tickSize,
 		LotSize:         lotSize,
@@ -246,11 +247,11 @@ func TestPairwiseArb_HandleSquareoff_DailyInit(t *testing.T) {
 	if saved.StrategyID != pas.StrategyID {
 		t.Errorf("StrategyID = %d, want %d", saved.StrategyID, pas.StrategyID)
 	}
-	if saved.OrigBaseName1 != pas.Inst1.Symbol {
-		t.Errorf("OrigBaseName1 = %q, want %q", saved.OrigBaseName1, pas.Inst1.Symbol)
+	if saved.OrigBaseName1 != pas.Inst1.OrigBaseName {
+		t.Errorf("OrigBaseName1 = %q, want %q", saved.OrigBaseName1, pas.Inst1.OrigBaseName)
 	}
-	if saved.OrigBaseName2 != pas.Inst2.Symbol {
-		t.Errorf("OrigBaseName2 = %q, want %q", saved.OrigBaseName2, pas.Inst2.Symbol)
+	if saved.OrigBaseName2 != pas.Inst2.OrigBaseName {
+		t.Errorf("OrigBaseName2 = %q, want %q", saved.OrigBaseName2, pas.Inst2.OrigBaseName)
 	}
 }
 

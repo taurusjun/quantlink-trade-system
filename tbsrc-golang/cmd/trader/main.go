@@ -150,11 +150,13 @@ func main() {
 	inst1 := instrument.NewFromConfig(sym1, icfg1.Exchange, icfg1.TickSize, icfg1.LotSize,
 		icfg1.ContractFactor, icfg1.PriceMultiplier, icfg1.PriceFactor, icfg1.SendInLots,
 		icfg1.Token, icfg1.ExpiryDate)
+	inst1.OrigBaseName = controlCfg.BaseName // C++: m_instru->m_origbaseName (e.g. "ag_F_3_SFE")
 
 	icfg2 := cfg.Strategy.Instruments[sym2]
 	inst2 := instrument.NewFromConfig(sym2, icfg2.Exchange, icfg2.TickSize, icfg2.LotSize,
 		icfg2.ContractFactor, icfg2.PriceMultiplier, icfg2.PriceFactor, icfg2.SendInLots,
 		icfg2.Token, icfg2.ExpiryDate)
+	inst2.OrigBaseName = controlCfg.SecondName // C++: m_instru->m_origbaseName (e.g. "ag_F_5_SFE")
 
 	cli.RegisterInstrument(inst1)
 	cli.RegisterInstrument(inst2)
@@ -337,10 +339,10 @@ func main() {
 shutdown:
 	// ---- 优雅关闭 ----
 	// 1. 停止策略
-	if pas.IsActive() {
-		pas.HandleSquareoff()
-		log.Printf("[main] 策略已平仓退出")
-	}
+	// C++: main.cpp Squareoff() 收到 SIGTERM 无条件调用 HandleSquareoff()（不检查 m_Active）
+	// HandleSquareoff 内部执行: 撤单 + m_Active=false + SaveMatrix2
+	pas.HandleSquareoff()
+	log.Printf("[main] 策略已停止，daily_init 已保存")
 
 	// 2. 停止 Connector
 	conn.Stop()
