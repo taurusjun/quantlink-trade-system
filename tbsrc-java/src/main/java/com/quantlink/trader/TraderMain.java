@@ -155,6 +155,7 @@ public class TraderMain {
         client.setConnector(connector);
 
         ConfigParams params = ConfigParams.getInstance();
+        params.strategyID = strategyID;
         params.modeType = 2; // Live mode
         params.printMode = printMod;
 

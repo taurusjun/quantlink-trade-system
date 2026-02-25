@@ -126,6 +126,17 @@ if [ -d "$PROJECT_ROOT/data_new/sim/config" ]; then
     cp -r "$PROJECT_ROOT/data_new/sim/config/"* "$DEPLOY_DIR/config/" 2>/dev/null || true
 fi
 
+# 复制 controls 和 models
+mkdir -p "$DEPLOY_DIR/controls" "$DEPLOY_DIR/models"
+if [ -d "$PROJECT_ROOT/data_new/common/controls/day" ]; then
+    cp "$PROJECT_ROOT/data_new/common/controls/day/"* "$DEPLOY_DIR/controls/" 2>/dev/null || true
+    log_info "controlFile 已复制"
+fi
+if [ -d "$PROJECT_ROOT/data_new/common/models" ]; then
+    cp "$PROJECT_ROOT/data_new/common/models/"* "$DEPLOY_DIR/models/" 2>/dev/null || true
+    log_info "model 文件已复制"
+fi
+
 # 创建启动脚本
 cat > "$DEPLOY_DIR/scripts/run_tests.sh" << 'SCRIPT'
 #!/bin/bash
@@ -184,6 +195,114 @@ echo ""
 echo "=== 验证完成 ==="
 SCRIPT
 chmod +x "$DEPLOY_DIR/scripts/verify_deploy.sh"
+
+# 创建 Java Trader 启动脚本
+cat > "$DEPLOY_DIR/scripts/start_java_trader.sh" << 'SCRIPT'
+#!/bin/bash
+# 启动 Java Trader 策略引擎
+# 用法: ./start_java_trader.sh <strategyID>
+#   例: ./start_java_trader.sh 92201
+set -e
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+export JAVA_HOME
+
+STRATEGY_ID="${1:-92201}"
+
+# 查找对应的 controlFile 和 configFile
+CONTROL_FILE=$(ls "$DEPLOY_DIR/controls/"*".$STRATEGY_ID" 2>/dev/null | head -1)
+CONFIG_FILE=$(ls "$DEPLOY_DIR/config/config_CHINA.$STRATEGY_ID.cfg" 2>/dev/null | head -1)
+
+if [ -z "$CONTROL_FILE" ]; then
+    echo "[ERROR] controlFile not found for strategyID=$STRATEGY_ID"
+    echo "  Expected: $DEPLOY_DIR/controls/*.$STRATEGY_ID"
+    exit 1
+fi
+
+if [ -z "$CONFIG_FILE" ]; then
+    echo "[ERROR] configFile not found for strategyID=$STRATEGY_ID"
+    echo "  Expected: $DEPLOY_DIR/config/config_CHINA.$STRATEGY_ID.cfg"
+    exit 1
+fi
+
+# 确保 data 和 log 目录存在
+mkdir -p "$DEPLOY_DIR/data" "$DEPLOY_DIR/log"
+
+echo "[INFO] Starting Java Trader (strategyID=$STRATEGY_ID)"
+echo "  controlFile: $CONTROL_FILE"
+echo "  configFile: $CONFIG_FILE"
+echo "  dataDir: $DEPLOY_DIR/data"
+
+# 计算 classpath
+CLASSPATH="$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar"
+for jar in "$DEPLOY_DIR/lib/"*.jar; do
+    if [ "$jar" != "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" ]; then
+        CLASSPATH="$CLASSPATH:$jar"
+    fi
+done
+
+cd "$DEPLOY_DIR"
+nohup "$JAVA_HOME/bin/java" \
+    --enable-native-access=ALL-UNNAMED \
+    -cp "$CLASSPATH" \
+    com.quantlink.trader.TraderMain \
+    --Live \
+    -controlFile "$CONTROL_FILE" \
+    -strategyID "$STRATEGY_ID" \
+    -configFile "$CONFIG_FILE" \
+    -dataDir "$DEPLOY_DIR/data" \
+    -logFile "$DEPLOY_DIR/log/trader.$STRATEGY_ID.log" \
+    > "nohup.out.$STRATEGY_ID" 2>&1 &
+
+TRADER_PID=$!
+echo "[INFO] Java Trader started (PID=$TRADER_PID)"
+echo "$TRADER_PID" > "$DEPLOY_DIR/trader.$STRATEGY_ID.pid"
+echo "[INFO] 日志: tail -f $DEPLOY_DIR/nohup.out.$STRATEGY_ID"
+SCRIPT
+chmod +x "$DEPLOY_DIR/scripts/start_java_trader.sh"
+
+# 创建停止脚本
+cat > "$DEPLOY_DIR/scripts/stop_java_trader.sh" << 'SCRIPT'
+#!/bin/bash
+# 停止 Java Trader
+# 用法: ./stop_java_trader.sh [strategyID]
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STRATEGY_ID="${1:-92201}"
+
+PID_FILE="$DEPLOY_DIR/trader.$STRATEGY_ID.pid"
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "[INFO] Stopping Java Trader (PID=$PID, strategyID=$STRATEGY_ID)"
+        kill -SIGINT "$PID"
+        sleep 2
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "[WARN] Process still running, sending SIGTERM"
+            kill -SIGTERM "$PID"
+            sleep 2
+        fi
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "[WARN] Force killing"
+            kill -9 "$PID"
+        fi
+        echo "[INFO] Java Trader stopped"
+    else
+        echo "[INFO] Process $PID already stopped"
+    fi
+    rm -f "$PID_FILE"
+else
+    echo "[INFO] No PID file found for strategyID=$STRATEGY_ID"
+    # Try to find by process
+    PIDS=$(pgrep -f "TraderMain.*$STRATEGY_ID" 2>/dev/null || true)
+    if [ -n "$PIDS" ]; then
+        echo "[INFO] Found Java Trader processes: $PIDS"
+        for P in $PIDS; do
+            kill -SIGINT "$P" 2>/dev/null || true
+        done
+    fi
+fi
+SCRIPT
+chmod +x "$DEPLOY_DIR/scripts/stop_java_trader.sh"
 
 # ---- 汇总 ----
 log_section "部署完成"
