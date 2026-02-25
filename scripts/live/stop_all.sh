@@ -20,7 +20,7 @@ echo "  停止 QuantLink Trade System"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 
-PROCS="trader counter_bridge ors_gateway md_gateway ctp_md_gateway md_simulator"
+PROCS="trader md_shm_feeder counter_bridge webserver"
 
 # 第一步：发送 SIGTERM 优雅停止
 for proc in $PROCS; do

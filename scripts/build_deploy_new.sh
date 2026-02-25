@@ -150,11 +150,11 @@ if [ "$BUILD_CPP" = true ]; then
 
     log_info "编译中..."
     make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc) \
-        md_shm_feeder md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway md_benchmark 2>&1 || true
+        md_shm_feeder counter_bridge md_benchmark 2>&1 || true
 
     # 复制编译产物
     log_info "复制 C++ 可执行文件..."
-    CORE_COMPONENTS="md_shm_feeder md_gateway md_simulator ors_gateway counter_bridge ctp_md_gateway"
+    CORE_COMPONENTS="md_shm_feeder counter_bridge"
     for comp in $CORE_COMPONENTS; do
         if [ -f "$comp" ]; then
             cp "$comp" "${DEPLOY_DIR}/bin/"
@@ -638,7 +638,7 @@ fi
 echo -e "${GREEN}[INFO]${NC} trader 已停止"
 
 # 停止网关组件
-for proc in md_shm_feeder counter_bridge ors_gateway md_gateway ctp_md_gateway md_simulator webserver; do
+for proc in md_shm_feeder counter_bridge webserver; do
     if pgrep -f "$proc" > /dev/null 2>&1; then
         echo -e "${GREEN}[INFO]${NC} 停止 $proc..."
         pkill -f "$proc" 2>/dev/null || true
