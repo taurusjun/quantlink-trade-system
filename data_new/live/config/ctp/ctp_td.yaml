@@ -1,0 +1,88 @@
+# CTP交易插件配置文件
+# 注意：敏感信息（user_id, password）应放在 ctp_td.secret.yaml 中
+
+# ==================== CTP连接配置 ====================
+ctp:
+  # 交易前置地址 - SimNow 标准环境（与实际生产环境时间一致）
+  # 第一组: Trade=30001, Market=30011
+  # 第二组: Trade=30002, Market=30012
+  # 第三组: Trade=30003, Market=30013
+  front_addr: "tcp://182.254.243.31:30001"
+
+  # 经纪商代码（SimNow固定为9999）
+  broker_id: "9999"
+
+  # 用户ID（从secret文件加载，这里仅作为备用）
+  user_id: ""
+
+  # 密码（从secret文件加载，这里仅作为备用）
+  password: ""
+
+  # 投资者ID（通常与user_id相同，若为空则自动使用user_id）
+  investor_id: ""
+
+  # ==================== 终端认证信息 ====================
+  # SimNow看穿式前置需要认证
+  app_id: "simnow_client_test"
+  auth_code: "0000000000000000"
+
+  # 产品信息
+  product_info: "QuantlinkTrader"
+
+# ==================== 重连配置 ====================
+reconnect:
+  # 重连间隔（秒）
+  interval_sec: 5
+
+  # 最大重连次数（-1表示无限重连）
+  max_attempts: -1
+
+# ==================== 日志配置 ====================
+log:
+  # 日志级别：debug/info/warn/error
+  level: "info"
+
+  # 日志文件路径（可选，为空则不写文件）
+  file: "log/ctp_td.log"
+
+  # 是否输出到控制台
+  console: true
+
+# ==================== 查询配置 ====================
+query:
+  # 查询间隔（毫秒，建议不低于1000ms避免触发限流）
+  interval_ms: 1000
+
+# ==================== 交易配置 ====================
+# trading:
+#   # 是否允许市价单
+#   allow_market_order: true
+#
+#   # 是否允许平今
+#   allow_close_today: true
+#
+#   # 订单超时时间（秒）
+#   order_timeout_sec: 30
+
+# ==================== 说明 ====================
+# 1. 敏感信息管理：
+#    - 将 user_id, password, investor_id 放在 ctp_td.secret.yaml 中
+#    - ctp_td.secret.yaml 应添加到 .gitignore 避免提交到版本库
+#
+# 2. SimNow环境：
+#    - 7x24测试环境：tcp://180.168.146.187:10130
+#    - 可以全天候测试（包括夜盘）
+#    - 注册地址：https://www.simnow.com.cn/
+#
+# 3. 实盘环境：
+#    - front_addr 改为实际期货公司的交易前置地址
+#    - 需要填写 app_id 和 auth_code（终端认证信息）
+#    - broker_id 改为实际期货公司代码
+#
+# 4. 查询限流：
+#    - CTP对查询请求有频率限制（通常为1秒1次）
+#    - query_interval_ms 不建议低于1000ms
+#
+# 5. 结算单确认：
+#    - 每日首次登录需要确认结算单
+#    - 插件会自动完成结算单确认流程

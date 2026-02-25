@@ -52,6 +52,7 @@ func main() {
 	logFile := flag.String("logFile", "", "日志文件路径 (C++ --logFile)")
 	apiPort := flag.Int("apiPort", 9201, "Web UI / REST API 端口")
 	yearPrefix := flag.String("yearPrefix", "", "年份后两位 (e.g. 26)，用于 baseName→symbol 映射")
+	dataDir := flag.String("dataDir", "./data", "数据目录 (daily_init 等运行时状态，如 ./data/sim 或 ./data/live)")
 
 	flag.Parse()
 
@@ -191,8 +192,9 @@ func main() {
 	// ---- 加载 daily_init ----
 	// C++: PairwiseArbStrategy 构造函数 (PairwiseArbStrategy.cpp:18-28)
 	// C++: 路径硬编码为 ../data/daily_init.<strategyID>（C++ CWD=bin/，所以 ../data/ 即部署根目录的 data/）
-	// Go: CWD=deploy_new/，所以用 ./data/
-	dailyPath := config.DailyInitPath("./data", cfg.Strategy.StrategyID)
+	// Go: -dataDir 指定数据目录（默认 ./data，模式分离时为 ./data/sim 或 ./data/live）
+	dailyPath := config.DailyInitPath(*dataDir, cfg.Strategy.StrategyID)
+	log.Printf("[main] dataDir=%s dailyInitPath=%s", *dataDir, dailyPath)
 	daily, err := config.LoadMatrix2(dailyPath, int32(cfg.Strategy.StrategyID))
 	if err != nil {
 		log.Fatalf("[main] daily_init 加载失败: %v", err)

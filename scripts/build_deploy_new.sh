@@ -5,16 +5,20 @@
 # 日期: 2026-02-14
 #
 # 使用方式:
-#   ./scripts/build_deploy_new.sh          # 完整编译
-#   ./scripts/build_deploy_new.sh --go     # 仅编译 Go 组件
-#   ./scripts/build_deploy_new.sh --cpp    # 仅编译 C++ 组件
-#   ./scripts/build_deploy_new.sh --clean  # 清理后重新编译
+#   ./scripts/build_deploy_new.sh                    # 完整编译（默认 sim 模式）
+#   ./scripts/build_deploy_new.sh --mode live        # 完整编译（实盘模式）
+#   ./scripts/build_deploy_new.sh --go --mode sim    # 仅 Go + 模拟盘配置
+#   ./scripts/build_deploy_new.sh --cpp --mode live  # 仅 C++ + 实盘配置
+#   ./scripts/build_deploy_new.sh --clean            # 清理后重新编译
 #
 # 目录设计:
-#   deploy_new/ - 编译产物 + 脚本 + Web资源（代码变动时重建）
-#   data_new/   - 配置 + 模型 + 数据（配置变动时修改，持久化）
+#   deploy_new/  - 编译产物 + 脚本 + Web资源（代码变动时重建）
+#   data_new/    - 配置 + 模型 + 数据（三层结构: common/sim/live）
+#     common/    - 两种模式共享（config_CHINA.*.cfg, controls, models）
+#     sim/       - 模拟盘专用（simulator.yaml, sim daily_init）
+#     live/      - 实盘专用（ctp/*.yaml, live daily_init, ctp_flow）
 #
-#   脚本结束时自动将 data_new/ 复制到 deploy_new/ 中
+#   --mode 参数控制 data_new 合并: common + sim|live → deploy_new
 #   deploy_new/ 可直接运行或部署到新服务器
 #
 # 启动方式（模拟与实盘一致）:
@@ -58,6 +62,7 @@ DATA_DIR="${PROJECT_ROOT}/data_new"
 BUILD_GO=true
 BUILD_CPP=true
 CLEAN_BUILD=false
+DEPLOY_MODE="sim"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
@@ -65,17 +70,28 @@ while [[ $# -gt 0 ]]; do
         --go)    BUILD_GO=true; BUILD_CPP=false; shift ;;
         --cpp)   BUILD_GO=false; BUILD_CPP=true; shift ;;
         --clean) CLEAN_BUILD=true; shift ;;
+        --mode)
+            if [[ -z "$2" || "$2" == --* ]]; then
+                log_error "--mode 需要参数: sim 或 live"
+                exit 1
+            fi
+            if [[ "$2" != "sim" && "$2" != "live" ]]; then
+                log_error "--mode 只接受 sim 或 live（当前: $2）"
+                exit 1
+            fi
+            DEPLOY_MODE="$2"; shift 2 ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --go      仅编译 Go 组件"
-            echo "  --cpp     仅编译 C++ 组件"
-            echo "  --clean   清理后重新编译"
-            echo "  --help    显示帮助"
+            echo "  --mode sim|live  部署模式（默认: sim）"
+            echo "  --go             仅编译 Go 组件"
+            echo "  --cpp            仅编译 C++ 组件"
+            echo "  --clean          清理后重新编译"
+            echo "  --help           显示帮助"
             echo ""
-            echo "编译产物 → deploy_new/  配置数据 → data_new/"
-            echo "脚本结束时自动合并 data_new → deploy_new"
+            echo "目录结构: data_new/{common,sim,live} → deploy_new/"
+            echo "  common/ 始终复制，sim/ 或 live/ 按 --mode 选择"
             exit 0
             ;;
         *) log_error "Unknown option: $1"; exit 1 ;;
@@ -87,6 +103,7 @@ log_section "QuantLink Trade System - 编译部署 (deploy_new)"
 log_info "项目根目录: ${PROJECT_ROOT}"
 log_info "部署目录:   ${DEPLOY_DIR}"
 log_info "数据目录:   ${DATA_DIR}"
+log_info "部署模式:   ${DEPLOY_MODE}"
 log_info "编译 Go:    ${BUILD_GO}"
 log_info "编译 C++:   ${BUILD_CPP}"
 
@@ -222,6 +239,9 @@ if [ "$MODE" != "sim" ] && [ "$MODE" != "ctp" ]; then
     echo "  ctp  - CTP实盘"
     exit 1
 fi
+
+# 记录当前运行模式（供 start_strategy.sh 读取）
+echo "$MODE" > .gateway_mode
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -424,19 +444,33 @@ fi
 
 LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
 
+# 读取网关运行模式，确定数据目录
+if [ ! -f .gateway_mode ]; then
+    echo -e "${RED}[ERROR]${NC} .gateway_mode 文件不存在，请先启动网关: ./scripts/start_gateway.sh [sim|ctp]"
+    exit 1
+fi
+GATEWAY_MODE=$(cat .gateway_mode)
+case "$GATEWAY_MODE" in
+    sim) DATA_DIR="./data/sim" ;;
+    ctp) DATA_DIR="./data/live" ;;
+    *)   echo -e "${RED}[ERROR]${NC} .gateway_mode 内容无效: ${GATEWAY_MODE}"; exit 1 ;;
+esac
+
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  启动策略 ${STRATEGY_ID} (${SESSION})"
 echo "════════════════════════════════════════════════════════════"
 echo -e "${GREEN}[INFO]${NC} Strategy ID:  ${STRATEGY_ID}"
 echo -e "${GREEN}[INFO]${NC} Session:      ${SESSION}"
+echo -e "${GREEN}[INFO]${NC} Gateway Mode: ${GATEWAY_MODE}"
+echo -e "${GREEN}[INFO]${NC} Data Dir:     ${DATA_DIR}"
 echo -e "${GREEN}[INFO]${NC} ControlFile:  ${CONTROL_FILE}"
 echo -e "${GREEN}[INFO]${NC} ConfigFile:   ${CONFIG_FILE}"
 echo -e "${GREEN}[INFO]${NC} YearPrefix:   ${YEAR_PREFIX}"
 echo -e "${GREEN}[INFO]${NC} Log:          ${LOG_FILE}"
 echo ""
 
-mkdir -p log data
+mkdir -p log "${DATA_DIR}"
 
 if [ "$FOREGROUND" = true ]; then
     echo -e "${YELLOW}[INFO]${NC} 前台模式 (Ctrl+C 停止)"
@@ -444,6 +478,7 @@ if [ "$FOREGROUND" = true ]; then
         -controlFile "$CONTROL_FILE" \
         -strategyID "$STRATEGY_ID" \
         -configFile "$CONFIG_FILE" \
+        -dataDir "$DATA_DIR" \
         -yearPrefix "$YEAR_PREFIX" \
         -adjustLTP 1 \
         -printMod 1 \
@@ -456,6 +491,7 @@ else
         -controlFile "$CONTROL_FILE" \
         -strategyID "$STRATEGY_ID" \
         -configFile "$CONFIG_FILE" \
+        -dataDir "$DATA_DIR" \
         -yearPrefix "$YEAR_PREFIX" \
         -adjustLTP 1 \
         -printMod 1 \
@@ -610,6 +646,9 @@ done
 # 清理共享内存
 ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
 
+# 清理模式标记
+rm -f .gateway_mode
+
 echo ""
 echo -e "${GREEN}[INFO]${NC} 所有组件已停止"
 echo ""
@@ -622,8 +661,8 @@ log_info "  start_strategy.sh (策略启动，自动查找 control 文件)"
 log_info "  start_all.sh      (一键启动网关+所有策略)"
 log_info "  stop_all.sh       (停止所有，graceful shutdown)"
 
-# ==================== 合并 data_new → deploy_new ====================
-log_section "合并 data_new → deploy_new"
+# ==================== 合并 data_new → deploy_new (模式: ${DEPLOY_MODE}) ====================
+log_section "合并 data_new → deploy_new (模式: ${DEPLOY_MODE})"
 
 if [ ! -d "${DATA_DIR}" ]; then
     log_error "data_new 目录不存在: ${DATA_DIR}"
@@ -631,44 +670,60 @@ if [ ! -d "${DATA_DIR}" ]; then
     exit 1
 fi
 
-# 使用 rsync 合并（保留已有文件，如 daily_init、positions）
-# -a: 归档模式  -v: 详细  --ignore-existing: 不覆盖已存在的数据文件
-# 但配置文件需要覆盖，所以分两步：
-# 1. 复制配置文件（覆盖）
-# 2. 复制数据文件（不覆盖）
+COMMON_DIR="${DATA_DIR}/common"
+MODE_DIR="${DATA_DIR}/${DEPLOY_MODE}"
 
-# 复制配置（总是覆盖）
+if [ ! -d "${COMMON_DIR}" ]; then
+    log_error "data_new/common 目录不存在: ${COMMON_DIR}"
+    exit 1
+fi
+
+if [ ! -d "${MODE_DIR}" ]; then
+    log_error "data_new/${DEPLOY_MODE} 目录不存在: ${MODE_DIR}"
+    exit 1
+fi
+
+# 1. 复制 common（config/controls/models 总是覆盖）
 for dir in config controls models; do
-    if [ -d "${DATA_DIR}/${dir}" ]; then
-        cp -R "${DATA_DIR}/${dir}" "${DEPLOY_DIR}/"
-        log_info "  ${dir}/"
+    if [ -d "${COMMON_DIR}/${dir}" ]; then
+        cp -R "${COMMON_DIR}/${dir}" "${DEPLOY_DIR}/"
+        log_info "  common/${dir}/"
     fi
 done
 
-# 复制数据目录（保留已有的 daily_init 和 positions）
-if [ -d "${DATA_DIR}/data" ]; then
-    # 创建目标目录结构
-    find "${DATA_DIR}/data" -type d | while read dir; do
-        target="${DEPLOY_DIR}/${dir#${DATA_DIR}/}"
-        mkdir -p "$target"
-    done
-    # 复制文件（不覆盖已有的）
-    find "${DATA_DIR}/data" -type f | while read file; do
-        target="${DEPLOY_DIR}/${file#${DATA_DIR}/}"
-        if [ ! -f "$target" ]; then
-            cp "$file" "$target"
-        fi
-    done
-    log_info "  data/ (保留已有数据)"
+# 2. 复制模式配置（overlay 合并到 deploy_new/config/）
+if [ -d "${MODE_DIR}/config" ]; then
+    cp -R "${MODE_DIR}/config/"* "${DEPLOY_DIR}/config/" 2>/dev/null || true
+    log_info "  ${DEPLOY_MODE}/config/"
 fi
 
-# CTP flow 目录
-mkdir -p "${DEPLOY_DIR}/ctp_flow"
-if [ -d "${DATA_DIR}/ctp_flow" ]; then
-    cp -R "${DATA_DIR}/ctp_flow/"* "${DEPLOY_DIR}/ctp_flow/" 2>/dev/null || true
+# 3. 复制两种模式的数据到 data/sim/ 和 data/live/（保留已有运行时数据）
+for data_mode in sim live; do
+    src_data="${DATA_DIR}/${data_mode}/data"
+    dst_data="${DEPLOY_DIR}/data/${data_mode}"
+    if [ -d "${src_data}" ]; then
+        mkdir -p "${dst_data}"
+        find "${src_data}" -type f | while read file; do
+            filename=$(basename "$file")
+            target="${dst_data}/${filename}"
+            if [ ! -f "$target" ]; then
+                cp "$file" "$target"
+            fi
+        done
+        log_info "  data/${data_mode}/ (保留已有数据)"
+    fi
+done
+
+# 4. live 模式: 创建 ctp_flow 目录
+if [ "$DEPLOY_MODE" = "live" ]; then
+    mkdir -p "${DEPLOY_DIR}/ctp_flow"
+    if [ -d "${DATA_DIR}/live/ctp_flow" ]; then
+        cp -R "${DATA_DIR}/live/ctp_flow/"* "${DEPLOY_DIR}/ctp_flow/" 2>/dev/null || true
+    fi
+    log_info "  ctp_flow/"
 fi
 
-log_info "data_new 合并完成"
+log_info "data_new 合并完成 (模式: ${DEPLOY_MODE})"
 
 # ==================== 完成 ====================
 log_section "构建完成"
