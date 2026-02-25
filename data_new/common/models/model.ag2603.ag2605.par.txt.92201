@@ -21,7 +21,7 @@ SUPPORTING_ORDERS 2
 
 # Mean reversion parameters
 ALPHA 0.0000240672
-AVG_SPREAD_AWAY 20
+AVG_SPREAD_AWAY 40
 
 # Risk control parameters
 STOP_LOSS 100000
