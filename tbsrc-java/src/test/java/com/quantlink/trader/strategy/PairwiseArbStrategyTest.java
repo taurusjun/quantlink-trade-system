@@ -86,7 +86,7 @@ class PairwiseArbStrategyTest {
         client = new MockCommonClient();
 
         ConfigParams.getInstance().modeType = 1;
-        strategy = new PairwiseArbStrategy(client, simConfig);
+        strategy = new PairwiseArbStrategy(client, simConfig, null);
     }
 
     @AfterEach
@@ -124,8 +124,8 @@ class PairwiseArbStrategyTest {
     }
 
     @Test
-    void test_loadDailyInit(@TempDir Path tempDir) throws Exception {
-        strategy.strategyID = 92201;
+    void test_dailyInit_viaConstructor(@TempDir Path tempDir) throws Exception {
+        ConfigParams.getInstance().strategyID = 92201;
 
         Path file = tempDir.resolve("daily_init.92201");
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file))) {
@@ -133,15 +133,17 @@ class PairwiseArbStrategyTest {
             pw.println("92201 0 10.5 ag2603 ag2605 3 -3");
         }
 
-        strategy.loadDailyInit(file.toString());
+        // C++ 在构造函数中调用 LoadMatrix2
+        PairwiseArbStrategy strat = new PairwiseArbStrategy(client, simConfig, file.toString());
+        strat.strategyID = 92201;
 
-        assertEquals(10.5, strategy.avgSpreadRatio_ori, 0.001);
-        assertEquals(10.5, strategy.avgSpreadRatio, 0.001);
-        assertEquals(3, strategy.firstStrat.netpos_pass_ytd);
-        assertEquals(3, strategy.firstStrat.netpos);
-        assertEquals(3, strategy.firstStrat.netpos_pass);
-        assertEquals(-3, strategy.secondStrat.netpos);
-        assertEquals(-3, strategy.secondStrat.netpos_agg);
+        assertEquals(10.5, strat.avgSpreadRatio_ori, 0.001);
+        assertEquals(10.5, strat.avgSpreadRatio, 0.001);
+        assertEquals(3, strat.firstStrat.netpos_pass_ytd);
+        assertEquals(3, strat.firstStrat.netpos);
+        assertEquals(3, strat.firstStrat.netpos_pass);
+        assertEquals(-3, strat.secondStrat.netpos);
+        assertEquals(-3, strat.secondStrat.netpos_agg);
     }
 
     @Test
@@ -321,8 +323,8 @@ class PairwiseArbStrategyTest {
     }
 
     @Test
-    void test_loadDailyInit_missingStrategy(@TempDir Path tempDir) throws Exception {
-        strategy.strategyID = 99999; // not in file
+    void test_dailyInit_missingStrategy(@TempDir Path tempDir) throws Exception {
+        ConfigParams.getInstance().strategyID = 99999; // not in file
 
         Path file = tempDir.resolve("daily_init.99999");
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file))) {
@@ -330,15 +332,17 @@ class PairwiseArbStrategyTest {
             pw.println("92201 0 10.5 ag2603 ag2605 3 -3");
         }
 
-        assertThrows(RuntimeException.class, () -> strategy.loadDailyInit(file.toString()));
+        // C++ 构造函数中如果找不到 strategyID 对应行，会抛异常
+        assertThrows(RuntimeException.class, () ->
+            new PairwiseArbStrategy(client, simConfig, file.toString()));
     }
 
     @Test
-    void test_loadDailyInit_sameInstrumentNames(@TempDir Path tempDir) throws Exception {
-        strategy.strategyID = 92201;
+    void test_dailyInit_sameInstrumentNames(@TempDir Path tempDir) throws Exception {
+        ConfigParams.getInstance().strategyID = 92201;
         // Make both instruments have same name
-        strategy.firstStrat.instru.origBaseName = "ag2603";
-        strategy.secondStrat.instru.origBaseName = "ag2603";
+        instru1.origBaseName = "ag2603";
+        instru2.origBaseName = "ag2603";
 
         Path file = tempDir.resolve("daily_init.92201");
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file))) {
@@ -346,7 +350,9 @@ class PairwiseArbStrategyTest {
             pw.println("92201 0 10.5 ag2603 ag2603 3 -3");
         }
 
-        assertThrows(RuntimeException.class, () -> strategy.loadDailyInit(file.toString()));
+        // C++ 构造函数中如果两腿 origBaseName 相同，会抛异常
+        assertThrows(RuntimeException.class, () ->
+            new PairwiseArbStrategy(client, simConfig, file.toString()));
     }
 
     @Test

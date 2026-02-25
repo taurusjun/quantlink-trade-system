@@ -83,8 +83,12 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
      * 构造函数。
      * 迁移自: PairwiseArbStrategy::PairwiseArbStrategy(CommonClient*, SimConfig*)
      * Ref: PairwiseArbStrategy.cpp:7-84
+     *
+     * @param client    CommonClient
+     * @param simConfig SimConfig
+     * @param dailyInitPath daily_init 文件路径（C++ 在构造函数中调用 LoadMatrix2）
      */
-    public PairwiseArbStrategy(CommonClient client, SimConfig simConfig) {
+    public PairwiseArbStrategy(CommonClient client, SimConfig simConfig, String dailyInitPath) {
         super(client, simConfig);
 
         // C++: m_firstStrat = new ExtraStrategy(client, simConfig)
@@ -125,17 +129,20 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         curr_time_val = 0;
         last_time_val = 0;
         second_ordIDstart = 10;
+
+        // ---- LoadMatrix2 + 昨仓初始化 ----
+        // C++: PairwiseArbStrategy.cpp:18-62 — 构造函数中直接调用 LoadMatrix2
+        if (dailyInitPath != null && !dailyInitPath.isEmpty()) {
+            loadDailyInitData(dailyInitPath);
+        }
     }
 
     /**
-     * 加载 daily_init 文件并初始化昨仓/均价。
-     * 迁移自: PairwiseArbStrategy 构造函数中的 LoadMatrix2 调用
-     * Ref: PairwiseArbStrategy.cpp:18-62
-     *
-     * @param filepath daily_init 文件路径
+     * 加载 daily_init 数据。
+     * 从构造函数调用，匹配 C++ PairwiseArbStrategy 构造函数中的 LoadMatrix2 逻辑。
      */
-    public void loadDailyInit(String filepath) {
-        Map<Integer, Map<String, String>> mx = loadMatrix2(filepath);
+    private void loadDailyInitData(String dailyInitPath) {
+        Map<Integer, Map<String, String>> mx = loadMatrix2(dailyInitPath);
 
         if (!mx.containsKey(strategyID)) {
             throw new RuntimeException("daily_init ERROR! Missing strategyID " + strategyID);

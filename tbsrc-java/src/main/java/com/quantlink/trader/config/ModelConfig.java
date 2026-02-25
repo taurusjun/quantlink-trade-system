@@ -25,7 +25,7 @@ public class ModelConfig {
      * 解析 model .par.txt 文件。
      * C++: LoadModelFile() in TradeBotUtils.cpp:1983-2276
      */
-    public static ModelConfig parse(String path) throws IOException {
+    public static ModelConfig loadModelFile(String path) throws IOException {
         ModelConfig mc = new ModelConfig();
 
         try (BufferedReader reader = Files.newBufferedReader(Path.of(path))) {

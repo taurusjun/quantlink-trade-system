@@ -27,7 +27,7 @@ public class CfgConfig {
      * 解析 .cfg INI 文件。
      * C++: illuminati::Configfile::LoadCfg()
      */
-    public static CfgConfig parse(String path) throws IOException {
+    public static CfgConfig loadCfg(String path) throws IOException {
         CfgConfig cfg = new CfgConfig();
         String currentSection = null;
 

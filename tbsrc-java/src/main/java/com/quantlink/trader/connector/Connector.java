@@ -276,7 +276,7 @@ public class Connector {
     public int sendNewOrder(MemorySegment req) {
         // C++: stratReq.OrderID = GetUniqueOrderNumber(stratReq.Exchange_Type);
         // Ref: hftbase/Connector/include/connector.h:273
-        int orderId = nextOrderID();
+        int orderId = getUniqueOrderNumber();
 
         // C++: stratReq.Request_Type = illuminati::infra::NEWORDER;
         // Ref: hftbase/Connector/include/connector.h:274
@@ -368,14 +368,14 @@ public class Connector {
      *   2. ORS 轮询线程: 持续从 respQueue 读取 ResponseMsg
      * Ref: hftbase/Connector/src/connector.cpp:StartAsync()
      */
-    public void start() {
+    public void startAsync() {
         running = true;
 
-        pollMDThread = new Thread(this::pollMD, "connector-md-poll");
+        pollMDThread = new Thread(this::handleLiveMdUpdates, "connector-md-poll");
         pollMDThread.setDaemon(true);
         pollMDThread.start();
 
-        pollORSThread = new Thread(this::pollORS, "connector-ors-poll");
+        pollORSThread = new Thread(this::handleOrderResponse, "connector-ors-poll");
         pollORSThread.setDaemon(true);
         pollORSThread.start();
     }
@@ -416,7 +416,7 @@ public class Connector {
      * C++ 逻辑: 无限循环从 mdQueue 出队 MarketUpdateNew，调用 HandleUpdates(update)
      * Ref: hftbase/Connector/include/connector.h:116
      */
-    private void pollMD() {
+    private void handleLiveMdUpdates() {
         // C++: MarketUpdateNew update; (栈上分配)
         // Java: 使用全局 Arena 分配（避免 GC 开销）
         MemorySegment buf = Arena.global().allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
@@ -452,7 +452,7 @@ public class Connector {
      * [C++差异] C++ 支持多种过滤模式 (STRATEGY_FILTER, TICKERS_ON_ONE_ACCOUNT_FILTER)，
      *           Java 简化为单 clientId 精确匹配（适用于中国期货单账户场景）。
      */
-    private void pollORS() {
+    private void handleOrderResponse() {
         // C++: ResponseMsg msg; (栈上分配)
         MemorySegment buf = Arena.global().allocate(Types.RESPONSE_MSG_LAYOUT);
         while (running) {
@@ -566,7 +566,7 @@ public class Connector {
      *
      * @return clientId * ORDERID_RANGE + seq
      */
-    private int nextOrderID() {
+    private int getUniqueOrderNumber() {
         // C++: return m_clientId[exchCode] * ORDERID_RANGE + (m_OrderCount++);
         // Ref: hftbase/Connector/include/connector.h:366
         return clientId * Constants.ORDERID_RANGE + orderCount.getAndIncrement();

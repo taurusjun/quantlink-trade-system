@@ -46,9 +46,9 @@ public class ConfigParams {
     // ---- SimConfig 映射 ----
     // 迁移自: ConfigParams::m_simConfigMap + m_simConfigList[100]
     // C++: SimConfigMap m_simConfigMap (string→SimConfigList*)
-    //      SimConfigMapIter m_simConfigList[100] (symbolID→iterator)
-    // Java: symbolID → List<SimConfig>
-    public final Map<Integer, List<SimConfig>> simConfigMap = new HashMap<>();
+    // Go: Client.instruments map[string]*instrument.Instrument — 按 symbol 字符串路由
+    // Java: symbol → List<SimConfig>（与 Go 一致，因为 md_shm_feeder 不设置 m_symbolID）
+    public final Map<String, List<SimConfig>> simConfigMap = new HashMap<>();
 
     // ---- 当前活跃 SimConfig ----
     // 迁移自: ConfigParams::m_simConfig

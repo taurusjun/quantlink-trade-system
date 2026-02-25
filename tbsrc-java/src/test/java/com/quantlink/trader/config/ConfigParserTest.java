@@ -26,7 +26,7 @@ class ConfigParserTest {
         Files.writeString(file,
             "ag_F_3_SFE ./models/model.ag2603.ag2605.par.txt.92201 SFE 16 TB_PAIR_STRAT 0900 1500 ag_F_5_SFE\n");
 
-        ControlConfig cc = ControlConfig.parse(file.toString());
+        ControlConfig cc = ControlConfig.loadControlFile(file.toString());
 
         assertEquals("ag_F_3_SFE", cc.baseName);
         assertEquals("./models/model.ag2603.ag2605.par.txt.92201", cc.modelFile);
@@ -44,7 +44,7 @@ class ConfigParserTest {
         Files.writeString(file,
             "# comment line\n\nag_F_3_SFE ./models/model.txt SFE 16 TB_PAIR_STRAT 0900 1500 ag_F_5_SFE\n");
 
-        ControlConfig cc = ControlConfig.parse(file.toString());
+        ControlConfig cc = ControlConfig.loadControlFile(file.toString());
         assertEquals("ag_F_3_SFE", cc.baseName);
     }
 
@@ -53,7 +53,7 @@ class ConfigParserTest {
         Path file = tempDir.resolve("control.txt");
         Files.writeString(file, "ag_F_3_SFE ./models/model.txt SFE\n");
 
-        assertThrows(Exception.class, () -> ControlConfig.parse(file.toString()));
+        assertThrows(Exception.class, () -> ControlConfig.loadControlFile(file.toString()));
     }
 
     // =======================================================================
@@ -76,7 +76,7 @@ class ConfigParserTest {
             ORSRESPONSESHMSIZE = 1024
             """);
 
-        CfgConfig cfg = CfgConfig.parse(file.toString());
+        CfgConfig cfg = CfgConfig.loadCfg(file.toString());
 
         assertEquals("AG", cfg.product);
         assertEquals("CHINA_SHFE", cfg.exchanges);
@@ -104,7 +104,7 @@ class ConfigParserTest {
             ORSRESPONSESHMSIZE = 1024
             """);
 
-        CfgConfig cfg = CfgConfig.parse(file.toString());
+        CfgConfig cfg = CfgConfig.loadCfg(file.toString());
         // 传空字符串，应使用默认 EXCHANGES
         int[] shm = cfg.getExchangeShmConfig("");
         assertEquals(4097, shm[0]);
@@ -115,7 +115,7 @@ class ConfigParserTest {
         Path file = tempDir.resolve("config.cfg");
         Files.writeString(file, "EXCHANGES=CHINA_SHFE\n");
 
-        CfgConfig cfg = CfgConfig.parse(file.toString());
+        CfgConfig cfg = CfgConfig.loadCfg(file.toString());
         assertThrows(IllegalArgumentException.class, () -> cfg.getExchangeShmConfig("CHINA_SHFE"));
     }
 
@@ -148,7 +148,7 @@ class ConfigParserTest {
             #LOOKAHEAD 10
             """);
 
-        ModelConfig mc = ModelConfig.parse(file.toString());
+        ModelConfig mc = ModelConfig.loadModelFile(file.toString());
 
         assertEquals("3", mc.thresholds.get("MAX_QUOTE_LEVEL"));
         assertEquals("4", mc.thresholds.get("SIZE"));
@@ -171,7 +171,7 @@ class ConfigParserTest {
             SIZE 4
             """);
 
-        ModelConfig mc = ModelConfig.parse(file.toString());
+        ModelConfig mc = ModelConfig.loadModelFile(file.toString());
         assertEquals(1, mc.thresholds.size()); // only SIZE, not the indicator line
         assertEquals("4", mc.thresholds.get("SIZE"));
     }

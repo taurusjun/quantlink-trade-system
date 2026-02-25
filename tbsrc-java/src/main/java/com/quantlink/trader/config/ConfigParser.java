@@ -140,7 +140,7 @@ public class ConfigParser {
      */
     public static String loadAccount(String configDir) {
         try {
-            CfgConfig stratCfg = CfgConfig.parse(configDir + "/StrategyConfig.cfg");
+            CfgConfig stratCfg = CfgConfig.loadCfg(configDir + "/StrategyConfig.cfg");
             return stratCfg.globalKeys.getOrDefault("ACCOUNT", "");
         } catch (IOException e) {
             return "";

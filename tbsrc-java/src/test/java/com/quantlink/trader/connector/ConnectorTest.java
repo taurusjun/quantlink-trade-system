@@ -209,7 +209,7 @@ class ConnectorTest {
             // myClientId 应为 1
 
             // 启动轮询线程
-            connector.start();
+            connector.startAsync();
 
             // 等待轮询线程启动
             Thread.sleep(50);
@@ -294,7 +294,7 @@ class ConnectorTest {
             int myClientId = connector.getClientId();
 
             // 启动轮询
-            connector.start();
+            connector.startAsync();
             Thread.sleep(50);
 
             // Step 1: 模拟 md_shm_feeder 写入行情
@@ -429,7 +429,7 @@ class ConnectorTest {
 
         try (Arena arena = Arena.ofConfined()) {
             int myClientId = connector.getClientId();
-            connector.start();
+            connector.startAsync();
             Thread.sleep(50);
 
             // 入队 3 条属于本 clientId 的回报
@@ -468,7 +468,7 @@ class ConnectorTest {
 
         try (Arena arena = Arena.ofConfined()) {
             // start
-            connector.start();
+            connector.startAsync();
             Thread.sleep(50);
 
             // 入队一条行情

@@ -127,19 +127,23 @@ public class CommonClient {
      * @param mdUpdate MarketUpdateNew MemorySegment
      */
     private void sendINDUpdate(MemorySegment mdUpdate) {
-        // C++: SimConfigMapIter simIter = m_configParams->m_simConfigList[update->m_symbolID]
-        // Ref: CommonClient.cpp:418
-        int symbolID = Instrument.readSymbolID(mdUpdate);
+        // Go: symbol := extractSymbol(&md.Header)
+        // Go: inst, ok := c.instruments[symbol]
+        // Ref: tbsrc-golang/pkg/client/client.go:OnMDUpdate()
+        //
+        // 注意: md_shm_feeder 不设置 m_symbolID（memset 后为 0），
+        //       因此按 m_symbol 字符串路由（与 Go 版本一致）。
+        String symbol = Instrument.readSymbol(mdUpdate);
 
-        List<SimConfig> simConfigList = configParams.simConfigMap.get(symbolID);
+        List<SimConfig> simConfigList = configParams.simConfigMap.get(symbol);
         if (simConfigList == null) {
-            return; // symbolID 未注册
+            return; // symbol 未注册
         }
 
         // C++: for (SimConfigListIter listIter = simIter->second->begin(); ...)
         // Ref: CommonClient.cpp:431
         for (SimConfig simCfg : simConfigList) {
-            Instrument instru = simCfg.instruMap.get(symbolID);
+            Instrument instru = simCfg.instruMap.get(symbol);
             if (instru == null) continue;
 
             // C++: instru->lastLocalTime = update->m_timestamp

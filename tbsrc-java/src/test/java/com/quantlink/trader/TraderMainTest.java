@@ -201,18 +201,18 @@ class TraderMainTest {
             """);
 
         // 解析 controlFile
-        ControlConfig cc = ControlConfig.parse(controlFile.toString());
+        ControlConfig cc = ControlConfig.loadControlFile(controlFile.toString());
         assertEquals("ag_F_3_SFE", cc.baseName);
         assertEquals("ag_F_5_SFE", cc.secondName);
 
         // 解析 configFile
-        CfgConfig cfg = CfgConfig.parse(configFile.toString());
+        CfgConfig cfg = CfgConfig.loadCfg(configFile.toString());
         assertEquals("AG", cfg.product);
         int[] shm = cfg.getExchangeShmConfig("CHINA_SHFE");
         assertEquals(4097, shm[0]);
 
         // 解析 model file
-        ModelConfig mc = ModelConfig.parse(model.toString());
+        ModelConfig mc = ModelConfig.loadModelFile(model.toString());
         assertEquals("4", mc.thresholds.get("SIZE"));
         assertEquals("16", mc.thresholds.get("MAX_SIZE"));
 

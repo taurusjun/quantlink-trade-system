@@ -53,7 +53,7 @@ class InstrumentTest {
         Instrument inst = new Instrument();
         inst.bidPx[0] = 5499.0;
         inst.askPx[0] = 5501.0;
-        assertEquals(5500.0, inst.getMidPrice(), 0.001);
+        assertEquals(5500.0, inst.calculateMIDPrice(), 0.001);
     }
 
     @Test
@@ -65,7 +65,7 @@ class InstrumentTest {
         inst.askQty[0] = 5;
 
         // MSW = (5*5499 + 5501*10) / (5+10) = (27495 + 55010) / 15 = 82505/15 = 5500.333...
-        assertEquals(5500.333, inst.getMswPrice(), 0.01);
+        assertEquals(5500.333, inst.calculateMSWPrice(), 0.01);
     }
 
     @Test
@@ -74,7 +74,7 @@ class InstrumentTest {
         inst.bidPx[0] = 5499.0;
         inst.askPx[0] = 5501.0;
         inst.lastTradePx = 5500.0;
-        assertEquals(5500.0, inst.getLtpPrice(), 0.001);
+        assertEquals(5500.0, inst.calculateLTPPrice(), 0.001);
     }
 
     @Test
@@ -83,7 +83,7 @@ class InstrumentTest {
         inst.bidPx[0] = 5499.0;
         inst.askPx[0] = 5501.0;
         inst.lastTradePx = 5490.0;
-        assertEquals(5499.0, inst.getLtpPrice(), 0.001);
+        assertEquals(5499.0, inst.calculateLTPPrice(), 0.001);
     }
 
     @Test

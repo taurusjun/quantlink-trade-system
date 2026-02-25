@@ -30,34 +30,37 @@ class CommonClientTest {
     }
 
     /**
-     * 测试 MD 按 symbolID 路由到 Instrument 并触发回调。
+     * 测试 MD 按 symbol 字符串路由到 Instrument 并触发回调。
+     * 注意: md_shm_feeder 不设置 m_symbolID（memset 后为 0），
+     *       因此按 m_symbol 字符串路由（与 Go 版本一致）。
      */
     @Test
-    void test_mdDispatchBySymbolID() {
+    void test_mdDispatchBySymbol() {
         ConfigParams params = ConfigParams.getInstance();
         CommonClient client = new CommonClient();
 
         // 创建 Instrument 和 SimConfig
         Instrument inst = new Instrument();
         inst.origBaseName = "ag2603";
-        inst.symbolID = 5;
+        inst.symbol = "ag2603";
 
         SimConfig simCfg = new SimConfig();
         simCfg.instrument = inst;
-        simCfg.instruMap.put(5, inst);
+        simCfg.instruMap.put("ag2603", inst);
 
-        // 注册 symbolID → SimConfig 映射
+        // 注册 symbol → SimConfig 映射
         List<SimConfig> simList = new ArrayList<>();
         simList.add(simCfg);
-        params.simConfigMap.put(5, simList);
+        params.simConfigMap.put("ag2603", simList);
 
         // 记录 MD 回调
         AtomicReference<MemorySegment> received = new AtomicReference<>();
         client.setMDCallback(received::set);
 
-        // 构造 MarketUpdateNew
+        // 构造 MarketUpdateNew — 写入 m_symbol 字符串
         MemorySegment md = Arena.global().allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
-        Types.MDH_SYMBOL_ID_VH.set(md, 0L, (short) 5);
+        byte[] symBytes = "ag2603".getBytes(StandardCharsets.US_ASCII);
+        MemorySegment.copy(MemorySegment.ofArray(symBytes), 0, md, Types.MDH_SYMBOL_OFFSET, symBytes.length);
         Types.MDH_TIMESTAMP_VH.set(md, 0L, 1000000L);
         Types.MDH_EXCH_TS_VH.set(md, 0L, 2000000L);
 
@@ -83,17 +86,19 @@ class CommonClientTest {
     }
 
     /**
-     * 测试未注册的 symbolID 不触发回调。
+     * 测试未注册的 symbol 不触发回调。
      */
     @Test
-    void test_mdDispatch_unknownSymbolID_noCallback() {
+    void test_mdDispatch_unknownSymbol_noCallback() {
         CommonClient client = new CommonClient();
 
         AtomicReference<MemorySegment> received = new AtomicReference<>();
         client.setMDCallback(received::set);
 
+        // 写入未注册的 symbol
         MemorySegment md = Arena.global().allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
-        Types.MDH_SYMBOL_ID_VH.set(md, 0L, (short) 99); // 未注册
+        byte[] symBytes = "zz9999".getBytes(StandardCharsets.US_ASCII);
+        MemorySegment.copy(MemorySegment.ofArray(symBytes), 0, md, Types.MDH_SYMBOL_OFFSET, symBytes.length);
 
         client.sendInfraMDUpdate(md);
 

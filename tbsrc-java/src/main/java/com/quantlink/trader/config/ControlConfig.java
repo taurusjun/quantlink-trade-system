@@ -27,7 +27,7 @@ public class ControlConfig {
      * 解析 C++ controlFile 格式。
      * C++: LoadControlFile() in TradeBotUtils.cpp:1820-1865
      */
-    public static ControlConfig parse(String path) throws IOException {
+    public static ControlConfig loadControlFile(String path) throws IOException {
         String content = Files.readString(Path.of(path));
         String line = null;
         for (String l : content.split("\n")) {

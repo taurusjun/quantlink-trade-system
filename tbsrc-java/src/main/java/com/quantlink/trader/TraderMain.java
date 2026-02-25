@@ -95,20 +95,20 @@ public class TraderMain {
 
         // ---- Step 1: 加载 controlFile ----
         // C++: LoadControlFile(simConfig[0].m_controlConfig, controlFile)
-        ControlConfig controlCfg = ControlConfig.parse(controlFile);
+        ControlConfig controlCfg = ControlConfig.loadControlFile(controlFile);
         logger.info(String.format("[config] controlFile: baseName=%s model=%s exchange=%s strat=%s second=%s",
             controlCfg.baseName, controlCfg.modelFile, controlCfg.exchange,
             controlCfg.execStrat, controlCfg.secondName));
 
         // ---- Step 2: 加载 .cfg ----
         // C++: illuminati::Configfile::LoadCfg(configParams->m_configFile)
-        CfgConfig cfgConfig = CfgConfig.parse(configFile);
+        CfgConfig cfgConfig = CfgConfig.loadCfg(configFile);
         logger.info(String.format("[config] configFile: product=%s exchanges=%s",
             cfgConfig.product, cfgConfig.exchanges));
 
         // ---- Step 3: 加载 model file ----
         // C++: LoadModelFile(simConfig[i], tholdMap)
-        ModelConfig modelCfg = ModelConfig.parse(controlCfg.modelFile);
+        ModelConfig modelCfg = ModelConfig.loadModelFile(controlCfg.modelFile);
         logger.info(String.format("[config] modelFile: %d thresholds", modelCfg.thresholds.size()));
 
         // ---- Step 4: baseName → symbol 映射 ----
@@ -186,22 +186,18 @@ public class TraderMain {
         logger.info(String.format("[main] 合约创建: %s (tick=%.1f lot=%.0f) %s (tick=%.1f lot=%.0f)",
             sym1, tickSize, lotSize, sym2, tickSize, lotSize));
 
-        // 注册 symbolID → SimConfig 映射
+        // 注册 symbol → SimConfig 映射
+        // Go: c.instruments[inst.Symbol] = inst
+        // Ref: tbsrc-golang/pkg/client/client.go:RegisterInstrument()
         SimConfig simConfig1 = new SimConfig();
         simConfig1.instrument = instru1;
         simConfig1.instrumentSec = instru2;
         simConfig1.useArbStrat = true;
         simConfig1.strategyID = strategyID;
 
-        // C++: 两个 symbolID 都注册到同一个 SimConfig
-        int symId1 = instru1.symbol.hashCode() & 0x7FFFFFFF;
-        int symId2 = instru2.symbol.hashCode() & 0x7FFFFFFF;
-        instru1.symbolID = symId1;
-        instru2.symbolID = symId2;
-
         List<SimConfig> simList1 = new ArrayList<>();
         simList1.add(simConfig1);
-        params.simConfigMap.put(symId1, simList1);
+        params.simConfigMap.put(sym1, simList1);
 
         SimConfig simConfig2 = new SimConfig();
         simConfig2.instrument = instru2;
@@ -211,13 +207,13 @@ public class TraderMain {
 
         List<SimConfig> simList2 = new ArrayList<>();
         simList2.add(simConfig2);
-        params.simConfigMap.put(symId2, simList2);
+        params.simConfigMap.put(sym2, simList2);
 
-        // instruMap: symbolID → Instrument
-        simConfig1.instruMap.put(symId1, instru1);
-        simConfig1.instruMap.put(symId2, instru2);
-        simConfig2.instruMap.put(symId1, instru1);
-        simConfig2.instruMap.put(symId2, instru2);
+        // instruMap: symbol → Instrument
+        simConfig1.instruMap.put(sym1, instru1);
+        simConfig1.instruMap.put(sym2, instru2);
+        simConfig2.instruMap.put(sym1, instru1);
+        simConfig2.instruMap.put(sym2, instru2);
 
         // ---- Step 9: 加载阈值 ----
         // C++: LoadModelFile → ThresholdSet
@@ -228,15 +224,12 @@ public class TraderMain {
         logger.info(String.format("[main] 阈值: BEGIN_PLACE=%.4f LONG_PLACE=%.4f MAX_SIZE=%d",
             simConfig1.thresholdSet.BEGIN_PLACE, simConfig1.thresholdSet.LONG_PLACE, simConfig1.thresholdSet.MAX_SIZE));
 
-        // ---- Step 10: 创建 PairwiseArbStrategy ----
+        // ---- Step 10+11: 创建 PairwiseArbStrategy ----
         // C++: Strategy = new PairwiseArbStrategy(client, simConfig)
-        strategy = new PairwiseArbStrategy(client, simConfig1);
-        simConfig1.executionStrategy = strategy;
-
-        // ---- Step 11: 加载 daily_init ----
-        // C++: PairwiseArbStrategy 构造函数中调用 LoadMatrix2
+        // C++: 构造函数中调用 LoadMatrix2 加载 daily_init
         dailyInitPath = dataDir + "/daily_init." + strategyID;
-        strategy.loadDailyInit(dailyInitPath);
+        strategy = new PairwiseArbStrategy(client, simConfig1, dailyInitPath);
+        simConfig1.executionStrategy = strategy;
         logger.info("[main] daily_init 已加载: " + dailyInitPath);
 
         // ---- 设置回调 ----
@@ -269,7 +262,7 @@ public class TraderMain {
      */
     public void start() {
         // ---- 启动 Connector ----
-        connector.start();
+        connector.startAsync();
         logger.info("[main] Connector 已启动，开始接收行情和回报");
 
         // ---- 策略未激活 (Live 模式) ----
@@ -342,8 +335,8 @@ public class TraderMain {
      */
     private void reloadThresholds() {
         try {
-            ControlConfig cc = ControlConfig.parse(controlFile);
-            ModelConfig mc = ModelConfig.parse(cc.modelFile);
+            ControlConfig cc = ControlConfig.loadControlFile(controlFile);
+            ModelConfig mc = ModelConfig.loadModelFile(cc.modelFile);
             ConfigParser.loadThresholds(strategy.thold_first, mc.thresholds);
             ConfigParser.loadThresholds(strategy.thold_second, mc.thresholds);
             strategy.setThresholds();

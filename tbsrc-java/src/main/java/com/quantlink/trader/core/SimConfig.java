@@ -18,8 +18,9 @@ public class SimConfig {
     // ---- Instrument 映射 ----
     // 迁移自: SimConfig::m_instruMap, m_instruList[100]
     // C++: unordered_map<string, InstruElem*> m_instruMap
-    // Java: symbolID → Instrument
-    public final Map<Integer, Instrument> instruMap = new HashMap<>();
+    // Go: Client.instruments map[string]*instrument.Instrument
+    // Java: symbol → Instrument（按 symbol 字符串路由，与 Go 一致）
+    public final Map<String, Instrument> instruMap = new HashMap<>();
 
     // ---- 阈值 ----
     // 迁移自: SimConfig::m_tholdSet

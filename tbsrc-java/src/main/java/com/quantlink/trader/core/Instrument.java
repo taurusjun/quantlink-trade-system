@@ -114,7 +114,7 @@ public class Instrument {
      * 中间价。
      * C++: MIDPrice_ = (bidPx[0] + askPx[0]) / 2.0
      */
-    public double getMidPrice() {
+    public double calculateMIDPrice() {
         return (bidPx[0] + askPx[0]) / 2.0;
     }
 
@@ -122,9 +122,9 @@ public class Instrument {
      * 量加权中间价 (Market Size Weighted)。
      * C++: MSWPrice_ = (askQty[0]*bidPx[0] + askPx[0]*bidQty[0]) / (askQty[0]+bidQty[0])
      */
-    public double getMswPrice() {
+    public double calculateMSWPrice() {
         double totalQty = askQty[0] + bidQty[0];
-        if (totalQty <= 0) return getMidPrice();
+        if (totalQty <= 0) return calculateMIDPrice();
         return (askQty[0] * bidPx[0] + askPx[0] * bidQty[0]) / totalQty;
     }
 
@@ -132,8 +132,8 @@ public class Instrument {
      * LTP 价格（约束在 bid-ask 范围内）。
      * C++: if (lastTradePx != 0) LTPPrice_ = clamp(lastTradePx, bidPx[0], askPx[0])
      */
-    public double getLtpPrice() {
-        if (lastTradePx == 0) return getMidPrice();
+    public double calculateLTPPrice() {
+        if (lastTradePx == 0) return calculateMIDPrice();
         if (lastTradePx < bidPx[0]) return bidPx[0];
         if (lastTradePx > askPx[0]) return askPx[0];
         return lastTradePx;
@@ -143,10 +143,10 @@ public class Instrument {
      * MSW-MID 混合价格。
      * C++: calculate_MSWMIDPrice — 当价差 > tickSize 时用 MID，否则用 MSW
      */
-    public double getMswMidPrice() {
-        double msw = getMswPrice();
+    public double calculateMSWMIDPrice() {
+        double msw = calculateMSWPrice();
         if (askPx[0] - bidPx[0] > tickSize + 0.0001) {
-            return getMidPrice();
+            return calculateMIDPrice();
         }
         return msw;
     }
