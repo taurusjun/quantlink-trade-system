@@ -27,7 +27,7 @@ public class SimConfig {
 
     // ---- 策略关联 ----
     // 迁移自: SimConfig::m_execStrategy
-    // [C++差异] C++ 使用 ExecutionStrategy* 指针，Java 使用 Object 引用（Phase 3 细化为具体类型）
+    // C++ 使用 ExecutionStrategy* 指针
     public Object executionStrategy;
 
     // ---- 策略 ID ----

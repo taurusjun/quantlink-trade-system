@@ -57,8 +57,12 @@ public class ConfigParams {
     // ---- OrderID → 策略映射 ----
     // 迁移自: ConfigParams::m_orderIDStrategyMap
     // C++: map<uint32_t, ExecutionStrategy*>
-    // [C++差异] Java 使用 Object 引用，Phase 3 细化为 ExecutionStrategy 类型
+    // 使用 Object 以避免 core↔strategy 循环依赖；运行时存放 ExecutionStrategy 实例
     public final Map<Integer, Object> orderIDStrategyMap = new HashMap<>();
+
+    // ---- 打印模式 ----
+    // 迁移自: ConfigParams::m_printMode
+    public int printMode = 0;
 
     // ---- 全局配置标志 ----
     // 迁移自: ConfigParams 各布尔/数值字段
