@@ -7,6 +7,9 @@ gateway/.cache
 *.so
 *.dylib
 
+# Java Build
+tbsrc-java/target/
+
 # Golang Build
 bin/
 golang/bin/
