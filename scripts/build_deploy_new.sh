@@ -638,7 +638,7 @@ fi
 echo -e "${GREEN}[INFO]${NC} trader 已停止"
 
 # 停止网关组件
-for proc in counter_bridge ors_gateway md_gateway ctp_md_gateway md_simulator webserver; do
+for proc in md_shm_feeder counter_bridge ors_gateway md_gateway ctp_md_gateway md_simulator webserver; do
     if pgrep -f "$proc" > /dev/null 2>&1; then
         echo -e "${GREEN}[INFO]${NC} 停止 $proc..."
         pkill -f "$proc" 2>/dev/null || true
