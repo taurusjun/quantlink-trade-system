@@ -45,9 +45,10 @@ public class ConfigParams {
 
     // ---- SimConfig 映射 ----
     // 迁移自: ConfigParams::m_simConfigMap + m_simConfigList[100]
-    // C++: SimConfigMap m_simConfigMap (string→SimConfigList*)
-    // Go: Client.instruments map[string]*instrument.Instrument — 按 symbol 字符串路由
-    // Java: symbol → List<SimConfig>（与 Go 一致，因为 md_shm_feeder 不设置 m_symbolID）
+    // C++: SimConfigMap m_simConfigMap — 原按 m_symbolID (int) 索引
+    // Ref: CommonClient.h:130, CommonClient.cpp:418
+    // [C++差异] C++ 按 m_symbolID (int) 路由，但 md_shm_feeder 不设置 m_symbolID（memset 后为 0），
+    //           因此 Java 按 m_symbol (String) 路由，与 CommonClient.cpp:417 的字符串查找一致。
     public final Map<String, List<SimConfig>> simConfigMap = new HashMap<>();
 
     // ---- 当前活跃 SimConfig ----
@@ -95,4 +96,9 @@ public class ConfigParams {
     // ---- 更新 symbol ----
     // 迁移自: ConfigParams::m_updateSymbol
     public String updateSymbol = "";
+
+    // ---- 标的物标志 ----
+    // 迁移自: ConfigParams::m_underlying
+    // C++: 在 SendINDUpdate 中设置，表示当前更新的是期权的标的物合约
+    public boolean underlying = false;
 }

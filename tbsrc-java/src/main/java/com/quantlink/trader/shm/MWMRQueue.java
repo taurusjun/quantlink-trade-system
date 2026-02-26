@@ -22,8 +22,11 @@ import java.lang.invoke.VarHandle;
  * C++ 类继承链:
  *   MultiWriterMultiReaderShmQueue&lt;T&gt; : ShmAllocator&lt;QueueElem&lt;T&gt;, MultiWriterMultiReaderShmHeader&gt; : SharedMemory
  * <p>
- * [C++差异] C++ 使用模板参数化元素类型 T，Java 使用 dataSize/elemSize 参数 + 原始 MemorySegment，
- *           与 Go 迁移方案一致。调用者负责传入正确的结构体大小。
+ * [C++差异] C++ 使用模板参数化元素类型 T (MultiWriterMultiReaderShmQueue&lt;T&gt;)，
+ *           编译期自动推导 sizeof(T) 和 sizeof(QueueElem&lt;T&gt;)。
+ *           Java 泛型存在类型擦除，无法获取结构体内存布局大小，
+ *           因此改为 dataSize/elemSize 参数 + 原始 MemorySegment，由调用者传入正确的结构体大小。
+ *           Ref: hftbase/Ipc/include/multiwritermultireadershmqueue.h — template&lt;typename T&gt;
  * <p>
  * [C++差异] C++ 通过继承 ShmAllocator 完成 SHM 创建/连接，Java 使用组合 SysVShm.ShmSegment。
  */
@@ -83,8 +86,10 @@ public final class MWMRQueue {
 
     // C++: std::atomic<int64_t> tail -- 本地读指针，非 SHM 存储
     // Ref: hftbase/Ipc/include/multiwritermultireadershmqueue.h:42
-    // [C++差异] C++ 中 tail 是 atomic，因为 dequeuePtrBlock 需要多线程读；
-    //           Java 中简化为普通 long，仅支持单线程消费（与 Go 迁移一致）。
+    // [C++差异] C++ 中 tail 是 std::atomic<int64_t>，因为 dequeuePtrBlock 支持多线程消费；
+    //           Java 中当前仅有单个 Connector 轮询线程消费，因此使用普通 long。
+    //           如需多线程消费，需改为 AtomicLong 并对齐 C++ 的 CAS 自旋逻辑。
+    //           Ref: hftbase/Ipc/include/multiwritermultireadershmqueue.h:42
     private long localTail;
 
     // C++: QueueElem 中 seqNo 相对于 QueueElem 起始的偏移
@@ -398,10 +403,10 @@ public final class MWMRQueue {
      *   return result;
      * </pre>
      * <p>
-     * 注意: C++ 原实现存在运算符优先级 bug，导致已经是 2 的幂的值被翻倍
-     * (例如 getMinHighestPowOf2(4) = 8)。Go 迁移版本修正为标准语义（4 -&gt; 4, 8 -&gt; 8），
-     * Java 实现与 Go 保持一致。
-     * Ref: tbsrc-golang/pkg/shm/mwmr_queue.go:180-194
+     * 注意: C++ 原实现存在运算符优先级 bug（!value 先于 &amp; 求值），
+     * 导致已经是 2 的幂的值被翻倍 (例如 getMinHighestPowOf2(4) = 8)。
+     * Java 实现修正为标准语义（4 → 4, 8 → 8），与实际 SHM 队列大小匹配。
+     * Ref: hftbase/Ipc/include/multiwritermultireadershmqueue.h:165-172
      */
     static long nextPowerOf2(long value) {
         if (value <= 0) {

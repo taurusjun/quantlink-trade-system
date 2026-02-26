@@ -17,9 +17,10 @@ public class SimConfig {
 
     // ---- Instrument 映射 ----
     // 迁移自: SimConfig::m_instruMap, m_instruList[100]
-    // C++: unordered_map<string, InstruElem*> m_instruMap
-    // Go: Client.instruments map[string]*instrument.Instrument
-    // Java: symbol → Instrument（按 symbol 字符串路由，与 Go 一致）
+    // C++: unordered_map<string, InstruElem*> m_instruMap — 按 symbol 字符串路由
+    // Ref: CommonClient.cpp:437 — InstruMapIter iter = m_configParams->m_simConfig->m_instruList[symbolID]
+    // [C++差异] C++ 按 symbolID (int) 索引 m_instruList，Java 按 symbol (String) 索引。
+    //           原因同 ConfigParams.simConfigMap：md_shm_feeder 不设置 m_symbolID。
     public final Map<String, Instrument> instruMap = new HashMap<>();
 
     // ---- 阈值 ----
@@ -55,6 +56,19 @@ public class SimConfig {
     public boolean useArbStrat = false;
     public boolean crossBook = false;
 
+    // ---- DateConfig ----
+    // 迁移自: SimConfig::m_dateConfig.m_simActive
+    // C++: DateConfig m_dateConfig — 包含交易时间控制
+    // C++: bool m_simActive — 当前是否在交易时段内
+    // 在 SendINDUpdate 中检查: if (m_simConfig->m_dateConfig.m_simActive)
+    public boolean simActive = true;
+
+    // ---- StratBook 控制 ----
+    // 迁移自: SimConfig::m_bUseStratBook
+    // C++: 在 SendINDUpdate 中: m_bUseStratBook = false 当策略主合约收到行情时
+    // 区分于 ConfigParams.bUseStratBook (全局配置), 此为 per-simConfig 运行时状态
+    public boolean bUseStratBookRuntime = false;
+
     // ---- 交易费用 ----
     // 迁移自: SimConfig::m_buyExchTx 等
     public double buyExchTx = 0;
@@ -65,4 +79,18 @@ public class SimConfig {
     // ---- 索引 ----
     // 迁移自: SimConfig::m_index
     public int index = 0;
+
+    // ---- 最后遍历的合约引用 ----
+    // 迁移自: SimConfig::m_lastInstruMapIter — 用于 CrossBook endPkt 判定
+    // C++: 在 SendINDUpdate 循环中更新此迭代器
+    public Instrument lastInstruMapInstrument;
+
+    /**
+     * 获取最后遍历合约的 crossUpdate 标志。
+     * 迁移自: m_simConfig->m_lastInstruMapIter->second->m_instrument->m_crossUpdate
+     * Ref: ExecutionStrategy.cpp:469 — CrossBookEnd 条件
+     */
+    public boolean lastCrossUpdate() {
+        return lastInstruMapInstrument != null && lastInstruMapInstrument.crossUpdate;
+    }
 }

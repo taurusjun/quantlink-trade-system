@@ -43,6 +43,7 @@ class CommonClientTest {
         Instrument inst = new Instrument();
         inst.origBaseName = "ag2603";
         inst.symbol = "ag2603";
+        inst.instrument = "ag2603"; // C++: m_instrument — 用于 isStratSymbol 判定
 
         SimConfig simCfg = new SimConfig();
         simCfg.instrument = inst;

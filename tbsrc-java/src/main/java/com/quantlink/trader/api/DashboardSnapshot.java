@@ -135,6 +135,14 @@ public class DashboardSnapshot {
         // Leg2
         snap.leg2 = collectLeg(pas.secondinstru, pas.secondStrat, pas.ordMap2);
 
+        // Leg2 是对冲腿，展示 secondStrat 关联的模型静态阈值（setThresholds() 仅设 firstStrat）
+        // pas.thold_second 仅在 sendOrder() 中赋值，构造后可能为 null，
+        // 因此直接从 secondStrat.thold 读取（构造函数中已指向 SimConfig.thresholdSet）
+        if (pas.secondStrat != null && pas.secondStrat.thold != null) {
+            snap.leg2.tholdMaxPos = Math.max(pas.secondStrat.thold.BID_MAX_SIZE, pas.secondStrat.thold.ASK_MAX_SIZE);
+            snap.leg2.tholdSize = pas.secondStrat.thold.SIZE;
+        }
+
         return snap;
     }
 
@@ -144,7 +152,7 @@ public class DashboardSnapshot {
         if (inst == null || leg == null) return ls;
 
         ls.symbol = inst.symbol != null ? inst.symbol : "";
-        ls.exchange = "";
+        ls.exchange = inst.exchange != null ? inst.exchange : "";
         // 行情
         ls.bidPx = inst.bidPx[0];
         ls.askPx = inst.askPx[0];
@@ -154,8 +162,8 @@ public class DashboardSnapshot {
         ls.lastTradePx = inst.lastTradePx;
         // 持仓
         ls.netpos = leg.netpos;
-        ls.netposPass = leg.netpos_pass;
-        ls.netposAgg = leg.netpos_agg;
+        ls.netposPass = leg.netposPass;
+        ls.netposAgg = leg.netposAgg;
         // PNL
         ls.realisedPNL = leg.realisedPNL;
         ls.unrealisedPNL = leg.unrealisedPNL;
@@ -203,7 +211,7 @@ public class DashboardSnapshot {
                 os.openQty = ord.openQty;
                 os.doneQty = ord.doneQty;
                 os.status = ord.status != null ? ord.status.name() : "UNKNOWN";
-                os.ordType = ord.hitType != null ? ord.hitType.name() : "UNKNOWN";
+                os.ordType = ord.ordType != null ? ord.ordType.name() : "UNKNOWN";
                 os.time = "";
                 ls.orders.add(os);
             }

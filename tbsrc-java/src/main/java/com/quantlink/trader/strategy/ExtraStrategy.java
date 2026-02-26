@@ -59,7 +59,7 @@ public class ExtraStrategy extends ExecutionStrategy {
         //        m_buyAvgPrice, m_sellAvgPrice, m_buyQty, m_sellQty, m_buyTotalQty, m_sellTotalQty, m_netpos_pass);
         sendMonitorStratPos(product, strategyID, instru.origBaseName,
                 buyPrice, sellPrice, buyAvgPrice, sellAvgPrice,
-                buyQty, sellQty, buyTotalQty, sellTotalQty, netpos_pass);
+                buyQty, sellQty, buyTotalQty, sellTotalQty, netposPass);
     }
 
     // =======================================================================

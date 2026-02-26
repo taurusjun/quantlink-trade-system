@@ -1,27 +1,25 @@
 #!/bin/bash
 # ============================================
 # 脚本名称: build_deploy_java.sh
-# 用途: 编译 Java 策略引擎并部署到 deploy_java 目录
-# 日期: 2026-02-25
+# 用途: 一键编译部署 C++ 网关 + Java 策略引擎（无 Go 组件）
+# 日期: 2026-02-26
 #
 # 使用方式:
-#   ./scripts/build_deploy_java.sh              # 编译 + 测试 + 部署
-#   ./scripts/build_deploy_java.sh --skip-test  # 编译 + 部署（跳过测试）
-#   ./scripts/build_deploy_java.sh --clean      # 清理后重新编译
-#   ./scripts/build_deploy_java.sh --test-only  # 仅运行测试
+#   ./scripts/build_deploy_java.sh                    # 完整编译 C++ + Java
+#   ./scripts/build_deploy_java.sh --cpp              # 仅编译 C++ 网关
+#   ./scripts/build_deploy_java.sh --java             # 仅编译 Java 策略
+#   ./scripts/build_deploy_java.sh --mode live        # 实盘配置
+#   ./scripts/build_deploy_java.sh --clean            # 清理后重编译
 #
-# 目录设计:
-#   deploy_java/
-#   ├── lib/              - JAR 包 + 依赖
-#   │   ├── trader-1.0-SNAPSHOT.jar
-#   │   └── snakeyaml-2.2.jar
-#   ├── config/           - 配置文件（从 data_new 复制）
-#   ├── data/             - 运行时数据（daily_init 等）
-#   ├── log/              - 日志输出
-#   └── scripts/          - 启停脚本
+# 部署目录:  deploy_java/
+# 配置来源:  data_new/{common,sim,live}
 #
-# 相关文档:
-#   - @docs/java迁移/2026-02-25-10_00_java_迁移可行性评估.md
+# 启动方式:
+#   cd deploy_java
+#   ./scripts/start_gateway.sh sim          # 模拟网关 (C++)
+#   ./scripts/start_gateway.sh ctp          # CTP 实盘网关 (C++)
+#   ./scripts/start_strategy.sh 92201 day   # Java 策略
+#   ./scripts/stop_all.sh                   # 停止所有
 # ============================================
 
 set -e
@@ -29,7 +27,7 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# 颜色定义
+# 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -39,282 +37,686 @@ NC='\033[0m'
 log_info()    { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; }
-log_section() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
+log_section() {
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}  $1${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+}
 
-# 参数解析
-SKIP_TEST=false
-CLEAN=false
-TEST_ONLY=false
+# 配置
+DEPLOY_DIR="${PROJECT_ROOT}/deploy_java"
+DATA_DIR="${PROJECT_ROOT}/data_new"
+BUILD_CPP=true
+BUILD_JAVA=true
+CLEAN_BUILD=false
+DEPLOY_MODE="sim"
 
-for arg in "$@"; do
-    case "$arg" in
-        --skip-test) SKIP_TEST=true ;;
-        --clean)     CLEAN=true ;;
-        --test-only) TEST_ONLY=true ;;
-        *) log_error "未知参数: $arg"; exit 1 ;;
+# 解析参数
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --cpp)   BUILD_CPP=true; BUILD_JAVA=false; shift ;;
+        --java)  BUILD_CPP=false; BUILD_JAVA=true; shift ;;
+        --clean) CLEAN_BUILD=true; shift ;;
+        --mode)
+            if [[ -z "$2" || "$2" == --* ]]; then
+                log_error "--mode 需要参数: sim 或 live"
+                exit 1
+            fi
+            if [[ "$2" != "sim" && "$2" != "live" ]]; then
+                log_error "--mode 只接受 sim 或 live（当前: $2）"
+                exit 1
+            fi
+            DEPLOY_MODE="$2"; shift 2 ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --mode sim|live  部署模式（默认: sim）"
+            echo "  --cpp            仅编译 C++ 网关"
+            echo "  --java           仅编译 Java 策略"
+            echo "  --clean          清理后重新编译"
+            echo "  --help           显示帮助"
+            exit 0
+            ;;
+        *) log_error "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# 检测 Java 和 Maven
+# Java 环境
 JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
-MVN="${MVN:-/opt/homebrew/bin/mvn}"
-
-if [ ! -d "$JAVA_HOME" ]; then
-    log_error "JAVA_HOME 不存在: $JAVA_HOME"
-    exit 1
-fi
-
-if [ ! -x "$MVN" ]; then
-    log_error "Maven 不可用: $MVN"
-    exit 1
-fi
-
 export JAVA_HOME
-JAVA_VERSION=$("$JAVA_HOME/bin/java" -version 2>&1 | head -1)
-log_info "Java: $JAVA_VERSION"
-log_info "Maven: $MVN"
-
-JAVA_DIR="$PROJECT_ROOT/tbsrc-java"
-DEPLOY_DIR="$PROJECT_ROOT/deploy_java"
-
-# ---- 清理 ----
-if $CLEAN; then
-    log_section "清理编译产物"
-    "$MVN" -f "$JAVA_DIR/pom.xml" clean -q
-    log_info "Maven clean 完成"
+MVN_CMD="${MVN_CMD:-/opt/homebrew/bin/mvn}"
+if [ ! -f "$MVN_CMD" ]; then
+    MVN_CMD="$(which mvn 2>/dev/null || true)"
 fi
 
-# ---- 仅测试 ----
-if $TEST_ONLY; then
-    log_section "运行测试"
-    "$MVN" -f "$JAVA_DIR/pom.xml" test
-    log_info "测试完成"
-    exit 0
+log_section "QuantLink Trade System - C++ 网关 + Java 策略 (deploy_java)"
+log_info "项目根目录: ${PROJECT_ROOT}"
+log_info "部署目录:   ${DEPLOY_DIR}"
+log_info "部署模式:   ${DEPLOY_MODE}"
+log_info "编译 C++:   ${BUILD_CPP}"
+log_info "编译 Java:  ${BUILD_JAVA}"
+
+# ==================== 清理 ====================
+if [ "$CLEAN_BUILD" = true ]; then
+    log_info "清理 deploy_java 目录（保留 data/）..."
+    for d in bin lib scripts config controls models log; do
+        rm -rf "${DEPLOY_DIR}/${d}"
+    done
 fi
 
-# ---- 编译 ----
-log_section "编译 Java 策略引擎"
-if $SKIP_TEST; then
-    "$MVN" -f "$JAVA_DIR/pom.xml" package -DskipTests -q
-    log_info "编译完成（跳过测试）"
+# ==================== 创建目录结构 ====================
+log_section "创建 deploy_java 目录结构"
+mkdir -p "${DEPLOY_DIR}/bin"
+mkdir -p "${DEPLOY_DIR}/lib"
+mkdir -p "${DEPLOY_DIR}/scripts"
+mkdir -p "${DEPLOY_DIR}/log"
+log_info "目录结构创建完成"
+
+# ==================== 编译 C++ 网关 ====================
+if [ "$BUILD_CPP" = true ]; then
+    log_section "编译 C++ 网关组件"
+
+    GATEWAY_DIR="${PROJECT_ROOT}/gateway"
+    GATEWAY_BUILD="${GATEWAY_DIR}/build"
+
+    if [ "$CLEAN_BUILD" = true ]; then
+        log_info "清理 gateway/build..."
+        rm -rf "${GATEWAY_BUILD}"
+    fi
+
+    mkdir -p "${GATEWAY_BUILD}"
+    cd "${GATEWAY_BUILD}"
+
+    log_info "运行 CMake..."
+    cmake .. -DCMAKE_BUILD_TYPE=Release
+
+    log_info "编译中..."
+    make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc) \
+        md_shm_feeder counter_bridge md_benchmark 2>&1 || true
+
+    log_info "复制 C++ 可执行文件..."
+    for comp in md_shm_feeder counter_bridge; do
+        if [ -f "$comp" ]; then
+            cp "$comp" "${DEPLOY_DIR}/bin/"
+            log_info "  $comp"
+        else
+            log_error "  $comp 编译失败！"
+            exit 1
+        fi
+    done
+    [ -f "md_benchmark" ] && cp md_benchmark "${DEPLOY_DIR}/bin/" && log_info "  md_benchmark"
+
+    cd "${PROJECT_ROOT}"
+
+    # CTP 动态库（macOS）
+    if [ "$(uname)" = "Darwin" ]; then
+        CTP_FRAMEWORK_DIR="${GATEWAY_DIR}/third_party/ctp"
+        if [ -d "${CTP_FRAMEWORK_DIR}" ]; then
+            log_info "复制 CTP Framework..."
+            mkdir -p "${DEPLOY_DIR}/lib/ctp"
+            cp -R "${CTP_FRAMEWORK_DIR}"/*.framework "${DEPLOY_DIR}/lib/ctp/" 2>/dev/null || true
+        fi
+    fi
+
+    log_info "C++ 网关编译完成"
+fi
+
+# ==================== 编译 Java ====================
+if [ "$BUILD_JAVA" = true ]; then
+    log_section "编译 Java 策略组件"
+
+    if [ -z "$MVN_CMD" ] || [ ! -f "$MVN_CMD" ]; then
+        log_error "Maven 未找到，请安装 Maven 或设置 MVN_CMD 环境变量"
+        exit 1
+    fi
+
+    log_info "JAVA_HOME: ${JAVA_HOME}"
+    log_info "Maven: ${MVN_CMD}"
+
+    if [ "$CLEAN_BUILD" = true ]; then
+        log_info "清理 Java 构建..."
+        "$MVN_CMD" -f "${PROJECT_ROOT}/tbsrc-java/pom.xml" clean -q 2>&1 || true
+    fi
+
+    log_info "编译 + 打包..."
+    "$MVN_CMD" -f "${PROJECT_ROOT}/tbsrc-java/pom.xml" package -DskipTests -q 2>&1
+
+    log_info "部署 JAR..."
+    # 清理旧 jar（避免残留）
+    rm -f "${DEPLOY_DIR}/lib/trader-1.0-SNAPSHOT.jar"
+    cp "${PROJECT_ROOT}/tbsrc-java/target/trader-1.0-SNAPSHOT.jar" "${DEPLOY_DIR}/lib/"
+    cp "${PROJECT_ROOT}/tbsrc-java/target/lib/"*.jar "${DEPLOY_DIR}/lib/" 2>/dev/null || true
+    log_info "  trader-1.0-SNAPSHOT.jar + $(ls "${PROJECT_ROOT}/tbsrc-java/target/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个依赖"
+
+    log_info "Java 策略编译完成"
+fi
+
+# ==================== 生成启动脚本 ====================
+log_section "生成启动脚本"
+
+# --- start_gateway.sh (C++ 网关 + Java OverviewServer) ---
+cat > "${DEPLOY_DIR}/scripts/start_gateway.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 启动 C++ 网关层（md_shm_feeder + counter_bridge）+ Java OverviewServer
+# Usage: ./scripts/start_gateway.sh [sim|ctp]
+# ============================================
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$DEPLOY_ROOT"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+MODE=${1:-sim}
+DATE=$(date +%Y%m%d)
+
+if [ "$MODE" != "sim" ] && [ "$MODE" != "ctp" ]; then
+    echo "Usage: $0 [sim|ctp]"
+    exit 1
+fi
+
+echo "$MODE" > .gateway_mode
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+if [ "$MODE" = "sim" ]; then
+    echo "  QuantLink (C++ + Java) - 模拟环境"
 else
-    "$MVN" -f "$JAVA_DIR/pom.xml" package
-    log_info "编译 + 测试完成"
+    echo -e "  QuantLink (C++ + Java) - ${RED}CTP 实盘环境${NC}"
+fi
+echo "════════════════════════════════════════════════════════════"
+echo ""
+
+# CTP 配置检查
+if [ "$MODE" = "ctp" ]; then
+    CTP_MD_CONFIG="config/ctp/ctp_md.secret.yaml"
+    CTP_TD_CONFIG="config/ctp/ctp_td.secret.yaml"
+    if [ ! -f "$CTP_MD_CONFIG" ] || [ ! -f "$CTP_TD_CONFIG" ]; then
+        echo -e "${RED}[ERROR]${NC} CTP 配置文件不存在"
+        echo "  需要: $CTP_MD_CONFIG"
+        echo "  需要: $CTP_TD_CONFIG"
+        exit 1
+    fi
+    read -p "确认启动 CTP 实盘? (y/N): " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && exit 0
 fi
 
-# ---- 部署 ----
-log_section "部署到 $DEPLOY_DIR"
+# 清理共享内存
+ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
 
-# 创建部署目录
-mkdir -p "$DEPLOY_DIR"/{lib,config,data,log,scripts}
+mkdir -p log ctp_flow
 
-# 复制 JAR
-cp "$JAVA_DIR/target/trader-1.0-SNAPSHOT.jar" "$DEPLOY_DIR/lib/"
-log_info "主 JAR 已复制"
-
-# 复制依赖
-if [ -d "$JAVA_DIR/target/lib" ]; then
-    cp "$JAVA_DIR/target/lib/"*.jar "$DEPLOY_DIR/lib/" 2>/dev/null || true
-    log_info "依赖 JAR 已复制"
-fi
-
-# 复制配置（从 data_new/common 和 data_new/sim）
-if [ -d "$PROJECT_ROOT/data_new/common/config" ]; then
-    cp -r "$PROJECT_ROOT/data_new/common/config/"* "$DEPLOY_DIR/config/" 2>/dev/null || true
-fi
-if [ -d "$PROJECT_ROOT/data_new/sim/config" ]; then
-    cp -r "$PROJECT_ROOT/data_new/sim/config/"* "$DEPLOY_DIR/config/" 2>/dev/null || true
-fi
-
-# 复制 controls 和 models
-mkdir -p "$DEPLOY_DIR/controls" "$DEPLOY_DIR/models"
-if [ -d "$PROJECT_ROOT/data_new/common/controls/day" ]; then
-    cp "$PROJECT_ROOT/data_new/common/controls/day/"* "$DEPLOY_DIR/controls/" 2>/dev/null || true
-    log_info "controlFile 已复制"
-fi
-if [ -d "$PROJECT_ROOT/data_new/common/models" ]; then
-    cp "$PROJECT_ROOT/data_new/common/models/"* "$DEPLOY_DIR/models/" 2>/dev/null || true
-    log_info "model 文件已复制"
-fi
-
-# 创建启动脚本
-cat > "$DEPLOY_DIR/scripts/run_tests.sh" << 'SCRIPT'
-#!/bin/bash
-# 运行 Java 策略引擎测试
-set -e
-DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_ROOT="$(cd "$DEPLOY_DIR/.." && pwd)"
-JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
-MVN="${MVN:-/opt/homebrew/bin/mvn}"
-export JAVA_HOME
-
-echo "[INFO] 运行 Java 策略引擎测试..."
-"$MVN" -f "$PROJECT_ROOT/tbsrc-java/pom.xml" test
-echo "[INFO] 测试完成"
-SCRIPT
-chmod +x "$DEPLOY_DIR/scripts/run_tests.sh"
-
-# 创建验证脚本
-cat > "$DEPLOY_DIR/scripts/verify_deploy.sh" << 'SCRIPT'
-#!/bin/bash
-# 验证部署完整性
-set -e
-DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
-export JAVA_HOME
-
-echo "=== 部署验证 ==="
-
-# 检查 JAR 存在
-if [ -f "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" ]; then
-    echo "[OK] 主 JAR 存在: $(ls -lh "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" | awk '{print $5}')"
+# 1. MD SHM Feeder
+if [ "$MODE" = "sim" ]; then
+    SYMBOLS=""
+    for ctrl in controls/day/control.*.par.txt.*; do
+        [ -f "$ctrl" ] || continue
+        fname=$(basename "$ctrl")
+        syms="${fname#control.}"
+        syms="${syms%.par.txt.*}"
+        syms=$(echo "$syms" | tr '.' ',')
+        [ -n "$SYMBOLS" ] && SYMBOLS="${SYMBOLS},"
+        SYMBOLS="${SYMBOLS}${syms}"
+    done
+    [ -z "$SYMBOLS" ] && SYMBOLS="ag2603,ag2605"
+    QUEUE_SIZE=2048
+    [ "$(uname)" = "Linux" ] && QUEUE_SIZE=65536
+    ./bin/md_shm_feeder "simulator:${SYMBOLS}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
+    sleep 1
+    echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (Simulator: ${SYMBOLS}, queue=${QUEUE_SIZE})"
 else
-    echo "[FAIL] 主 JAR 不存在"
+    QUEUE_SIZE=2048
+    [ "$(uname)" = "Linux" ] && QUEUE_SIZE=65536
+    ./bin/md_shm_feeder "ctp:${CTP_MD_CONFIG}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
+    sleep 2
+    echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (CTP, queue=${QUEUE_SIZE})"
+fi
+
+# 2. Counter Bridge
+if [ "$MODE" = "sim" ]; then
+    ./bin/counter_bridge simulator:config/simulator.yaml > "log/counter_bridge.${DATE}.log" 2>&1 &
+    sleep 1
+    echo -e "${GREEN}[INFO]${NC} Counter Bridge (Simulator)"
+else
+    ./bin/counter_bridge ctp:"$CTP_TD_CONFIG" > "log/counter_bridge.${DATE}.log" 2>&1 &
+    sleep 2
+    echo -e "${GREEN}[INFO]${NC} Counter Bridge (CTP)"
+fi
+
+# 3. Java OverviewServer (端口 8080)
+JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+export JAVA_HOME
+
+CLASSPATH="$DEPLOY_ROOT/lib/trader-1.0-SNAPSHOT.jar"
+for jar in "$DEPLOY_ROOT/lib/"*.jar; do
+    [ "$jar" = "$DEPLOY_ROOT/lib/trader-1.0-SNAPSHOT.jar" ] && continue
+    echo "$jar" | grep -q "/ctp/" && continue
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+OVERVIEW_PORT=8080
+nohup "$JAVA_HOME/bin/java" --enable-native-access=ALL-UNNAMED \
+    -cp "$CLASSPATH" \
+    com.quantlink.trader.api.overview.OverviewServer "$OVERVIEW_PORT" \
+    >> "log/overview.${DATE}.log" 2>&1 &
+echo $! > overview.pid
+sleep 1
+echo -e "${GREEN}[INFO]${NC} Java OverviewServer (port ${OVERVIEW_PORT})"
+
+echo ""
+echo -e "${GREEN}[INFO]${NC} C++ 网关 + Overview 启动完成 (${MODE})"
+echo -e "${GREEN}[INFO]${NC} Overview:  http://localhost:${OVERVIEW_PORT}/"
+echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id> [day|night]"
+echo ""
+SCRIPT_EOF
+
+# --- start_strategy.sh (Java Trader) ---
+cat > "${DEPLOY_DIR}/scripts/start_strategy.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 启动 Java 策略引擎
+# Usage: ./scripts/start_strategy.sh <strategy_id> [day|night] [--fg]
+# ============================================
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$DEPLOY_ROOT"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+export JAVA_HOME
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <strategy_id> [day|night] [--fg]"
+    echo ""
+    echo "可用策略:"
+    for f in controls/day/control.*.par.txt.*; do
+        [ -f "$f" ] || continue
+        sid="${f##*.}"
+        echo "  ${sid}  ($(basename "$f"))"
+    done
     exit 1
 fi
 
-# 检查依赖
-JAR_COUNT=$(ls "$DEPLOY_DIR/lib/"*.jar 2>/dev/null | wc -l)
-echo "[OK] JAR 文件数: $JAR_COUNT"
+STRATEGY_ID=$1
+SESSION=""
+FOREGROUND=false
+shift
+for arg in "$@"; do
+    case "$arg" in
+        day|night) SESSION="$arg" ;;
+        --fg)      FOREGROUND=true ;;
+    esac
+done
 
-# 列出类
-echo ""
-echo "=== 策略类 ==="
-"$JAVA_HOME/bin/jar" tf "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" | grep "strategy/" | sort
-echo ""
-echo "=== 核心类 ==="
-"$JAVA_HOME/bin/jar" tf "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" | grep "core/" | sort
-echo ""
-echo "=== SHM 类 ==="
-"$JAVA_HOME/bin/jar" tf "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" | grep "shm/" | sort
-echo ""
-echo "=== Connector 类 ==="
-"$JAVA_HOME/bin/jar" tf "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" | grep "connector/" | sort
+# 自动检测 session
+if [ -z "$SESSION" ]; then
+    HOUR=$(date +%H)
+    if [ "$HOUR" -ge 20 ] || [ "$HOUR" -lt 4 ]; then
+        SESSION="night"
+    else
+        SESSION="day"
+    fi
+fi
 
-echo ""
-echo "=== 验证完成 ==="
-SCRIPT
-chmod +x "$DEPLOY_DIR/scripts/verify_deploy.sh"
+DATE=$(date +%Y%m%d)
+YEAR_PREFIX=$(date +%y)
 
-# 创建 Java Trader 启动脚本
-cat > "$DEPLOY_DIR/scripts/start_java_trader.sh" << 'SCRIPT'
-#!/bin/bash
-# 启动 Java Trader 策略引擎
-# 用法: ./start_java_trader.sh <strategyID>
-#   例: ./start_java_trader.sh 92201
-set -e
-DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
-export JAVA_HOME
-
-STRATEGY_ID="${1:-92201}"
-
-# 查找对应的 controlFile 和 configFile
-CONTROL_FILE=$(ls "$DEPLOY_DIR/controls/"*".$STRATEGY_ID" 2>/dev/null | head -1)
-CONFIG_FILE=$(ls "$DEPLOY_DIR/config/config_CHINA.$STRATEGY_ID.cfg" 2>/dev/null | head -1)
-
+# 查找 controlFile
+CONTROL_FILE=""
+for f in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+    [ -f "$f" ] && CONTROL_FILE="$f" && break
+done
 if [ -z "$CONTROL_FILE" ]; then
-    echo "[ERROR] controlFile not found for strategyID=$STRATEGY_ID"
-    echo "  Expected: $DEPLOY_DIR/controls/*.$STRATEGY_ID"
+    echo -e "${RED}[ERROR]${NC} 找不到 controlFile: controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}"
     exit 1
 fi
 
-if [ -z "$CONFIG_FILE" ]; then
-    echo "[ERROR] configFile not found for strategyID=$STRATEGY_ID"
-    echo "  Expected: $DEPLOY_DIR/config/config_CHINA.$STRATEGY_ID.cfg"
+CONFIG_FILE="config/config_CHINA.${STRATEGY_ID}.cfg"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${RED}[ERROR]${NC} 找不到 configFile: ${CONFIG_FILE}"
     exit 1
 fi
 
-# 确保 data 和 log 目录存在
-mkdir -p "$DEPLOY_DIR/data" "$DEPLOY_DIR/log"
+# 读取网关模式
+if [ ! -f .gateway_mode ]; then
+    echo -e "${RED}[ERROR]${NC} 请先启动网关: ./scripts/start_gateway.sh [sim|ctp]"
+    exit 1
+fi
+GATEWAY_MODE=$(cat .gateway_mode)
+case "$GATEWAY_MODE" in
+    sim) DATA_DIR="./data/sim" ;;
+    ctp) DATA_DIR="./data/live" ;;
+    *)   echo -e "${RED}[ERROR]${NC} .gateway_mode 无效: ${GATEWAY_MODE}"; exit 1 ;;
+esac
 
-echo "[INFO] Starting Java Trader (strategyID=$STRATEGY_ID)"
-echo "  controlFile: $CONTROL_FILE"
-echo "  configFile: $CONFIG_FILE"
-echo "  dataDir: $DEPLOY_DIR/data"
+LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
 
-# 计算 classpath
-CLASSPATH="$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar"
-for jar in "$DEPLOY_DIR/lib/"*.jar; do
-    if [ "$jar" != "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" ]; then
-        CLASSPATH="$CLASSPATH:$jar"
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  启动 Java 策略 ${STRATEGY_ID} (${SESSION})"
+echo "════════════════════════════════════════════════════════════"
+echo -e "${GREEN}[INFO]${NC} Strategy ID:  ${STRATEGY_ID}"
+echo -e "${GREEN}[INFO]${NC} Session:      ${SESSION}"
+echo -e "${GREEN}[INFO]${NC} Gateway Mode: ${GATEWAY_MODE}"
+echo -e "${GREEN}[INFO]${NC} Data Dir:     ${DATA_DIR}"
+echo -e "${GREEN}[INFO]${NC} ControlFile:  ${CONTROL_FILE}"
+echo -e "${GREEN}[INFO]${NC} ConfigFile:   ${CONFIG_FILE}"
+echo -e "${GREEN}[INFO]${NC} JAVA_HOME:    ${JAVA_HOME}"
+echo ""
+
+mkdir -p log "${DATA_DIR}"
+
+# 构建 classpath
+CLASSPATH="$DEPLOY_ROOT/lib/trader-1.0-SNAPSHOT.jar"
+for jar in "$DEPLOY_ROOT/lib/"*.jar; do
+    [ "$jar" = "$DEPLOY_ROOT/lib/trader-1.0-SNAPSHOT.jar" ] && continue
+    # 跳过 CTP 目录
+    echo "$jar" | grep -q "/ctp/" && continue
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+JAVA_OPTS="--enable-native-access=ALL-UNNAMED"
+
+if [ "$FOREGROUND" = true ]; then
+    echo -e "${YELLOW}[INFO]${NC} 前台模式 (Ctrl+C 停止)"
+    "$JAVA_HOME/bin/java" $JAVA_OPTS -cp "$CLASSPATH" \
+        com.quantlink.trader.TraderMain \
+        --Live \
+        -controlFile "$CONTROL_FILE" \
+        -strategyID "$STRATEGY_ID" \
+        -configFile "$CONFIG_FILE" \
+        -dataDir "$DATA_DIR" \
+        -yearPrefix "$YEAR_PREFIX" \
+        -logFile "$LOG_FILE" \
+        -printMod 1 \
+        2>&1 | tee -a "$LOG_FILE"
+else
+    nohup "$JAVA_HOME/bin/java" $JAVA_OPTS -cp "$CLASSPATH" \
+        com.quantlink.trader.TraderMain \
+        --Live \
+        -controlFile "$CONTROL_FILE" \
+        -strategyID "$STRATEGY_ID" \
+        -configFile "$CONFIG_FILE" \
+        -dataDir "$DATA_DIR" \
+        -yearPrefix "$YEAR_PREFIX" \
+        -logFile "$LOG_FILE" \
+        -printMod 1 \
+        >> "nohup.out.${STRATEGY_ID}" 2>&1 &
+
+    PID=$!
+    echo "$PID" > "trader.${STRATEGY_ID}.pid"
+    echo -e "${GREEN}[INFO]${NC} Java Trader 已启动 (PID: ${PID})"
+    echo -e "${GREEN}[INFO]${NC} Dashboard: http://localhost:9201/dashboard.html"
+    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f nohup.out.${STRATEGY_ID}"
+
+    sleep 3
+    if kill -0 $PID 2>/dev/null; then
+        echo -e "${GREEN}[INFO]${NC} 进程运行正常"
+    else
+        echo -e "${RED}[ERROR]${NC} 进程已退出，检查日志:"
+        tail -20 "nohup.out.${STRATEGY_ID}" 2>/dev/null
+        exit 1
+    fi
+fi
+SCRIPT_EOF
+
+# --- start_all.sh ---
+cat > "${DEPLOY_DIR}/scripts/start_all.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 一键启动: C++ 网关 + 所有 Java 策略
+# Usage: ./scripts/start_all.sh [sim|ctp] [day|night]
+# ============================================
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$DEPLOY_ROOT"
+
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+MODE=${1:-sim}
+SESSION=${2:-}
+
+if [ -z "$SESSION" ]; then
+    HOUR=$(date +%H)
+    if [ "$HOUR" -ge 20 ] || [ "$HOUR" -lt 4 ]; then
+        SESSION="night"
+    else
+        SESSION="day"
+    fi
+fi
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  一键启动 (C++ + Java): 模式=${MODE}  时段=${SESSION}"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+
+# 1. 启动 C++ 网关
+./scripts/start_gateway.sh "$MODE"
+sleep 2
+
+# 2. 启动所有 Java 策略
+FOUND=0
+for cfg_file in config/config_CHINA.*.cfg; do
+    [ -f "$cfg_file" ] || continue
+    fname=$(basename "$cfg_file")
+    STRATEGY_ID="${fname#config_CHINA.}"
+    STRATEGY_ID="${STRATEGY_ID%.cfg}"
+    [ -z "$STRATEGY_ID" ] && continue
+
+    CTRL_FOUND=false
+    for ctrl in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+        [ -f "$ctrl" ] && CTRL_FOUND=true && break
+    done
+    if [ "$CTRL_FOUND" = false ]; then
+        echo -e "${GREEN}[INFO]${NC} 跳过策略 ${STRATEGY_ID}（无 ${SESSION} control 文件）"
+        continue
+    fi
+
+    FOUND=1
+    ./scripts/start_strategy.sh "$STRATEGY_ID" "$SESSION"
+    sleep 1
+done
+
+[ "$FOUND" -eq 0 ] && echo -e "${GREEN}[INFO]${NC} 未找到可启动的策略"
+
+echo ""
+echo -e "${GREEN}[INFO]${NC} 所有组件启动完成"
+echo -e "${GREEN}[INFO]${NC} Overview:  http://localhost:8080/"
+echo -e "${GREEN}[INFO]${NC} 停止: ./scripts/stop_all.sh"
+echo ""
+SCRIPT_EOF
+
+# --- stop_all.sh ---
+cat > "${DEPLOY_DIR}/scripts/stop_all.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 停止所有: Java 策略 + Java OverviewServer + C++ 网关
+# ============================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(dirname "$SCRIPT_DIR")"
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  停止 QuantLink (C++ + Java)"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+
+# 1. 停止 Java Trader（graceful shutdown 保存 daily_init）
+for pid_file in trader.*.pid; do
+    [ -f "$pid_file" ] || continue
+    PID=$(cat "$pid_file")
+    SID=$(basename "$pid_file" .pid | sed 's/trader\.//')
+    if kill -0 "$PID" 2>/dev/null; then
+        echo -e "${YELLOW}[INFO]${NC} 发送 SIGTERM 到 Java Trader ${SID} (PID=${PID})..."
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+done
+
+# 等待 Java 进程退出（最多 10 秒）
+for i in $(seq 1 10); do
+    if ! pgrep -f "TraderMain" > /dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+if pgrep -f "TraderMain" > /dev/null 2>&1; then
+    echo -e "${YELLOW}[WARN]${NC} Java Trader 未在 10 秒内退出，强制终止..."
+    pkill -9 -f "TraderMain" 2>/dev/null || true
+fi
+echo -e "${GREEN}[INFO]${NC} Java Trader 已停止"
+
+# 2. 停止 Java OverviewServer
+if [ -f overview.pid ]; then
+    OV_PID=$(cat overview.pid)
+    if kill -0 "$OV_PID" 2>/dev/null; then
+        echo -e "${GREEN}[INFO]${NC} 停止 OverviewServer (PID=${OV_PID})..."
+        kill -TERM "$OV_PID" 2>/dev/null || true
+    fi
+    rm -f overview.pid
+fi
+if pgrep -f "OverviewServer" > /dev/null 2>&1; then
+    pkill -f "OverviewServer" 2>/dev/null || true
+fi
+echo -e "${GREEN}[INFO]${NC} OverviewServer 已停止"
+
+# 3. 停止 C++ 网关
+for proc in md_shm_feeder counter_bridge; do
+    if pgrep -f "$proc" > /dev/null 2>&1; then
+        echo -e "${GREEN}[INFO]${NC} 停止 $proc..."
+        pkill -f "$proc" 2>/dev/null || true
     fi
 done
 
-cd "$DEPLOY_DIR"
-nohup "$JAVA_HOME/bin/java" \
-    --enable-native-access=ALL-UNNAMED \
-    -cp "$CLASSPATH" \
-    com.quantlink.trader.TraderMain \
-    --Live \
-    -controlFile "$CONTROL_FILE" \
-    -strategyID "$STRATEGY_ID" \
-    -configFile "$CONFIG_FILE" \
-    -dataDir "$DEPLOY_DIR/data" \
-    -logFile "$DEPLOY_DIR/log/trader.$STRATEGY_ID.log" \
-    > "nohup.out.$STRATEGY_ID" 2>&1 &
+# 清理 SHM
+ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
 
-TRADER_PID=$!
-echo "[INFO] Java Trader started (PID=$TRADER_PID)"
-echo "$TRADER_PID" > "$DEPLOY_DIR/trader.$STRATEGY_ID.pid"
-echo "[INFO] 日志: tail -f $DEPLOY_DIR/nohup.out.$STRATEGY_ID"
-SCRIPT
-chmod +x "$DEPLOY_DIR/scripts/start_java_trader.sh"
+rm -f .gateway_mode
 
-# 创建停止脚本
-cat > "$DEPLOY_DIR/scripts/stop_java_trader.sh" << 'SCRIPT'
-#!/bin/bash
-# 停止 Java Trader
-# 用法: ./stop_java_trader.sh [strategyID]
-DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STRATEGY_ID="${1:-92201}"
+echo ""
+echo -e "${GREEN}[INFO]${NC} 所有组件已停止"
+echo ""
+SCRIPT_EOF
 
-PID_FILE="$DEPLOY_DIR/trader.$STRATEGY_ID.pid"
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "[INFO] Stopping Java Trader (PID=$PID, strategyID=$STRATEGY_ID)"
-        kill -SIGINT "$PID"
-        sleep 2
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "[WARN] Process still running, sending SIGTERM"
-            kill -SIGTERM "$PID"
-            sleep 2
-        fi
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "[WARN] Force killing"
-            kill -9 "$PID"
-        fi
-        echo "[INFO] Java Trader stopped"
-    else
-        echo "[INFO] Process $PID already stopped"
-    fi
-    rm -f "$PID_FILE"
-else
-    echo "[INFO] No PID file found for strategyID=$STRATEGY_ID"
-    # Try to find by process
-    PIDS=$(pgrep -f "TraderMain.*$STRATEGY_ID" 2>/dev/null || true)
-    if [ -n "$PIDS" ]; then
-        echo "[INFO] Found Java Trader processes: $PIDS"
-        for P in $PIDS; do
-            kill -SIGINT "$P" 2>/dev/null || true
-        done
-    fi
+chmod +x "${DEPLOY_DIR}/scripts/"*.sh
+log_info "  start_gateway.sh   (C++ 网关: sim/ctp)"
+log_info "  start_strategy.sh  (Java 策略引擎)"
+log_info "  start_all.sh       (一键启动)"
+log_info "  stop_all.sh        (停止所有)"
+
+# ==================== 合并 data_new → deploy_java ====================
+log_section "合并 data_new → deploy_java (模式: ${DEPLOY_MODE})"
+
+if [ ! -d "${DATA_DIR}" ]; then
+    log_error "data_new 目录不存在: ${DATA_DIR}"
+    exit 1
 fi
-SCRIPT
-chmod +x "$DEPLOY_DIR/scripts/stop_java_trader.sh"
 
-# ---- 汇总 ----
-log_section "部署完成"
+COMMON_DIR="${DATA_DIR}/common"
+MODE_DIR="${DATA_DIR}/${DEPLOY_MODE}"
+
+if [ ! -d "${COMMON_DIR}" ]; then
+    log_error "data_new/common 目录不存在: ${COMMON_DIR}"
+    exit 1
+fi
+
+# 1. 复制 common（config/controls/models 总是覆盖）
+for dir in config controls models; do
+    if [ -d "${COMMON_DIR}/${dir}" ]; then
+        cp -R "${COMMON_DIR}/${dir}" "${DEPLOY_DIR}/"
+        log_info "  common/${dir}/"
+    fi
+done
+
+# 2. 复制模式配置
+if [ -d "${MODE_DIR}" ] && [ -d "${MODE_DIR}/config" ]; then
+    cp -R "${MODE_DIR}/config/"* "${DEPLOY_DIR}/config/" 2>/dev/null || true
+    log_info "  ${DEPLOY_MODE}/config/"
+fi
+
+# 3. 复制数据文件（保留运行时数据）
+for data_mode in sim live; do
+    src_data="${DATA_DIR}/${data_mode}/data"
+    dst_data="${DEPLOY_DIR}/data/${data_mode}"
+    if [ -d "${src_data}" ]; then
+        mkdir -p "${dst_data}"
+        find "${src_data}" -type f | while read file; do
+            filename=$(basename "$file")
+            target="${dst_data}/${filename}"
+            [ ! -f "$target" ] && cp "$file" "$target"
+        done || true
+        log_info "  data/${data_mode}/"
+    fi
+done
+
+# 4. live: ctp_flow
+if [ "$DEPLOY_MODE" = "live" ]; then
+    mkdir -p "${DEPLOY_DIR}/ctp_flow"
+    [ -d "${DATA_DIR}/live/ctp_flow" ] && cp -R "${DATA_DIR}/live/ctp_flow/"* "${DEPLOY_DIR}/ctp_flow/" 2>/dev/null || true
+    log_info "  ctp_flow/"
+fi
+
+log_info "data_new 合并完成 (模式: ${DEPLOY_MODE})"
+
+# ==================== 完成 ====================
+log_section "构建完成"
+
 echo ""
-log_info "部署目录: $DEPLOY_DIR"
-log_info "目录结构:"
+log_info "deploy_java/ 目录结构:"
+echo ""
 echo "  deploy_java/"
-echo "  ├── lib/           $(ls "$DEPLOY_DIR/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个 JAR"
-echo "  ├── config/        配置文件"
-echo "  ├── data/          运行时数据"
-echo "  ├── log/           日志输出"
-echo "  └── scripts/       启停脚本"
+echo "  ├── bin/          (C++ 网关)"
+ls "${DEPLOY_DIR}/bin/" 2>/dev/null | while read f; do echo "  │   ├── $f"; done
+echo "  ├── lib/          (Java JARs)"
+echo "  │   ├── trader-1.0-SNAPSHOT.jar"
+echo "  │   └── ... $(ls "${DEPLOY_DIR}/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个 JAR"
+echo "  ├── config/"
+echo "  ├── controls/"
+echo "  ├── models/"
+echo "  ├── data/"
+echo "  ├── scripts/"
+ls "${DEPLOY_DIR}/scripts/" 2>/dev/null | while read f; do echo "  │   ├── $f"; done
+echo "  └── log/"
+
 echo ""
-log_info "验证: ./deploy_java/scripts/verify_deploy.sh"
-log_info "测试: ./deploy_java/scripts/run_tests.sh"
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo -e "${BLUE}  使用方式${NC}"
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo ""
+echo "  cd deploy_java"
+echo ""
+echo "  # 模拟测试"
+echo "  ./scripts/start_gateway.sh sim"
+echo "  ./scripts/start_strategy.sh 92201 day"
+echo ""
+echo "  # 或一键启动"
+echo "  ./scripts/start_all.sh sim day"
+echo ""
+echo "  # CTP 实盘"
+echo "  ./scripts/start_gateway.sh ctp"
+echo "  ./scripts/start_strategy.sh 92201 day"
+echo ""
+echo "  # 停止"
+echo "  ./scripts/stop_all.sh"
+echo ""
+echo "  # Dashboard"
+echo "  http://localhost:9201/dashboard.html"
+echo ""

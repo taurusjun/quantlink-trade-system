@@ -4,6 +4,8 @@ import com.quantlink.trader.shm.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -24,7 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *           Java 版本仅实现 LIVE 模式（SHM 直连），回测通过独立的 BacktestConnector 实现。
  * <p>
  * [C++差异] C++ 使用 exchCode 索引的 m_clientId[MAX_EXCHANGE_COUNT] 数组，
- *           Java 简化为单个 clientId（中国期货只使用一个交易所连接）。
+ *           Java 使用 Map&lt;Integer, Integer&gt; clientIdMap 按 exchCode 索引 clientId。
+ *           默认 exchCode=0 用于中国期货。多交易所场景需为每个 exchCode 分配独立 clientId。
  * <p>
  * [C++差异] C++ m_OrderCount 是 uint32_t 非原子变量（单线程使用），
  *           Java 使用 AtomicInteger 以支持潜在的多线程发单场景。
@@ -115,9 +118,16 @@ public class Connector {
      * 迁移自: hftbase/Connector/include/connector.h:380
      * C++: uint32_t m_clientId[illuminati::md::MAX_EXCHANGE_COUNT];
      * <p>
-     * [C++差异] C++ 按 exchCode 索引维护多个 clientId，Java 简化为单个值。
+     * Java 使用 clientIdMap 按 exchCode 索引，defaultClientId 为默认值（exchCode=0）。
      */
-    private final int clientId;
+    private final int defaultClientId;
+
+    /**
+     * 按 exchCode 索引的 clientId 映射。
+     * 迁移自: C++ m_clientId[MAX_EXCHANGE_COUNT] 数组
+     * Ref: hftbase/Connector/include/connector.h:380
+     */
+    private final Map<Integer, Integer> clientIdMap = new HashMap<>();
 
     /**
      * 订单计数器，用于生成唯一 OrderID。
@@ -166,7 +176,9 @@ public class Connector {
         this.reqQueue = reqQueue;
         this.respQueue = respQueue;
         this.clientStore = clientStore;
-        this.clientId = clientId;
+        this.defaultClientId = clientId;
+        // C++: m_clientId[exchCode] — 默认交易所 exchCode=0
+        this.clientIdMap.put(0, clientId);
         this.mdCallback = mdCallback;
         this.orsCallback = orsCallback;
         this.running = false;
@@ -450,7 +462,7 @@ public class Connector {
      * </pre>
      * <p>
      * [C++差异] C++ 支持多种过滤模式 (STRATEGY_FILTER, TICKERS_ON_ONE_ACCOUNT_FILTER)，
-     *           Java 简化为单 clientId 精确匹配（适用于中国期货单账户场景）。
+     *           Java 使用 clientIdMap 中所有 clientId 匹配（STRATEGY_FILTER 模式）。
      */
     private void handleOrderResponse() {
         // C++: ResponseMsg msg; (栈上分配)
@@ -460,9 +472,14 @@ public class Connector {
                 // C++: int32_t clientId = msg->OrderID / ORDERID_RANGE;
                 // Ref: hftbase/Connector/src/connector.cpp:822
                 int orderID = (int) Types.RESP_ORDER_ID_VH.get(buf, 0L);
-                if (orderID / Constants.ORDERID_RANGE == clientId) {
+                int respClientId = orderID / Constants.ORDERID_RANGE;
+
+                // C++: for (int i = 0; i < MAX_ORS_CLIENTS; i++) {
+                //          if (m_all_clientIds[exchId][i] == clientId) { m_orscb(msg); break; }
+                //      }
+                // Ref: hftbase/Connector/src/connector.cpp:826-832
+                if (clientIdMap.containsValue(respClientId)) {
                     // C++: m_orscb(msg);
-                    // Ref: hftbase/Connector/src/connector.cpp:830
                     orsCallback.onOrderResponse(buf);
                 }
             } else {
@@ -530,15 +547,40 @@ public class Connector {
     // =======================================================================
 
     /**
-     * 获取本客户端的唯一 ID。
+     * 获取默认 clientId (exchCode=0)。
      * <p>
      * 迁移自: hftbase/Connector/include/connector.h:380
      * C++: uint32_t m_clientId[illuminati::md::MAX_EXCHANGE_COUNT]
      *
-     * @return clientId
+     * @return 默认 clientId
      */
     public int getClientId() {
-        return clientId;
+        return defaultClientId;
+    }
+
+    /**
+     * 获取指定交易所的 clientId。
+     * 迁移自: C++ m_clientId[exchCode]
+     *
+     * @param exchCode 交易所代码
+     * @return clientId，不存在则返回默认值
+     */
+    public int getClientId(int exchCode) {
+        return clientIdMap.getOrDefault(exchCode, defaultClientId);
+    }
+
+    /**
+     * 为指定交易所注册新的 clientId。
+     * 迁移自: C++ m_clientId[exchCode] = m_shmMgr.getClientIdAndIncrement();
+     * Ref: hftbase/Connector/src/connector.cpp 中多交易所初始化
+     *
+     * @param exchCode 交易所代码
+     * @return 新分配的 clientId
+     */
+    public int addClientId(int exchCode) {
+        int newClientId = (int) clientStore.getClientIdAndIncrement();
+        clientIdMap.put(exchCode, newClientId);
+        return newClientId;
     }
 
     // =======================================================================
@@ -546,7 +588,18 @@ public class Connector {
     // =======================================================================
 
     /**
-     * 生成唯一的 OrderID。
+     * 生成唯一的 OrderID（默认 exchCode=0）。
+     * <p>
+     * 迁移自: hftbase/Connector/include/connector.h:362-372
+     *
+     * @return clientId * ORDERID_RANGE + seq
+     */
+    private int getUniqueOrderNumber() {
+        return getUniqueOrderNumber(0);
+    }
+
+    /**
+     * 生成唯一的 OrderID（指定 exchCode）。
      * <p>
      * 迁移自: hftbase/Connector/include/connector.h:362-372
      * C++:
@@ -564,11 +617,13 @@ public class Connector {
      *           Java 版本暂不处理溢出（AtomicInteger.getAndIncrement 会持续递增，
      *           在 1M 以内足够日内使用）。
      *
+     * @param exchCode 交易所代码 (0=默认)
      * @return clientId * ORDERID_RANGE + seq
      */
-    private int getUniqueOrderNumber() {
+    private int getUniqueOrderNumber(int exchCode) {
         // C++: return m_clientId[exchCode] * ORDERID_RANGE + (m_OrderCount++);
         // Ref: hftbase/Connector/include/connector.h:366
-        return clientId * Constants.ORDERID_RANGE + orderCount.getAndIncrement();
+        int cid = clientIdMap.getOrDefault(exchCode, defaultClientId);
+        return cid * Constants.ORDERID_RANGE + orderCount.getAndIncrement();
     }
 }

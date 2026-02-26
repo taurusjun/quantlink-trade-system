@@ -9,7 +9,10 @@ import java.nio.charset.StandardCharsets;
  * 20 档订单簿行情数据模型。
  * 迁移自: tbsrc/common/include/Instrument.h
  *
- * 保留中国期货核心字段，省略 CME/ICE/KRX 等交易所特定逻辑。
+ * [C++差异] C++ Instrument 包含交易所特定的 FillOrderBook 方法（CME/ICE/KRX/China 等），
+ * Java 版本仅实现通用 FillOrderBook（从 MarketUpdateNew 读取 20 档），
+ * 交易所特定逻辑通过 C++ 网关层（md_shm_feeder）在写入 SHM 前已完成规范化。
+ * Ref: tbsrc/common/include/Instrument.h (456 lines)
  */
 public class Instrument {
 
@@ -81,6 +84,38 @@ public class Instrument {
 
     // ---- 日期 ----
     public String currDate = "";
+
+    // ---- Bond 相关字段 ----
+    // 迁移自: Instrument.h — m_cDays, m_tDays, m_yield
+    // C++: int32_t m_cDays, m_tDays; double m_yield;
+    public int cDays;       // 剩余交易日（用于 BondPrice 计算）
+    public int tDays;       // 总交易日
+    public double yield;    // 收益率
+
+    // ---- 合约全名 ----
+    // 迁移自: Instrument.h — m_instrument (char[48])
+    // C++: 与 m_symbol 不同，m_instrument 是完整的合约标识（含交易所前缀等）
+    public String instrument = "";
+
+    // ---- CME/期权相关字段 ----
+    // 迁移自: Instrument.h — m_token, m_expiryDate, m_strike, m_callPutFlag, m_securitygroup, m_product
+    public int token;                    // C++: m_token — 合约 token (NSE 等使用)
+    public int expiryDate;               // C++: m_expiryDate — 到期日 (YYYYMMDD)
+    public double strike;                // C++: m_strike — 行权价
+    public double strikeSpread;          // C++: m_strikeSpread — 行权价差
+    public char callPutFlag;             // C++: m_callPutFlag — 'C'=CALL, 'P'=PUT, 其他=NILL
+    public String securityGroup = "";    // C++: m_securitygroup[100] — CME 安全组
+    public int productType;              // C++: m_product (ProductType enum) — 0=Future, 1=Option 等
+
+    // ---- 行情状态标志 ----
+    // 迁移自: Instrument.h — m_crossUpdate, m_firstTrade, m_ignoreImpliedTrades, m_bUseTradeInfo
+    public boolean crossUpdate;           // C++: m_crossUpdate — 是否为 cross book 更新
+    public boolean firstTrade;            // C++: m_firstTrade — 是否已收到首笔成交
+    public boolean ignoreImpliedTrades;   // C++: m_ignoreImpliedTrades — 是否过滤隐含成交
+    public boolean bUseTradeInfo;         // C++: m_bUseTradeInfo — 是否使用 TRADE_INFO 类型更新
+    public boolean useSmartBook;          // C++: m_useSmartBook — SmartMD 模式
+    public boolean updateIndicators;      // C++: m_updateIndicators — 是否更新指标
+    public boolean smartTrade;            // C++: m_smartTrade — SmartMD 交易标志
 
     /**
      * 从 MarketUpdateNew MemorySegment 填充 20 档订单簿。
@@ -184,6 +219,38 @@ public class Instrument {
         totalL1Event = 0;
         lastLocalTime = 0;
         lastExchTime = 0;
+    }
+
+    // =======================================================================
+    //  价格工具方法
+    // =======================================================================
+
+    /**
+     * 零息债券现值折扣因子。
+     * 迁移自: TradeBotUtils.cpp:3744-3747
+     * C++: double BondPrice(double rate, int32_t days) { return 1 / (pow(rate/100 + 1, (double)days/252)); }
+     *
+     * @param rate 年化利率（百分比形式，如 3.5 表示 3.5%）
+     * @param days 剩余交易日
+     * @return 折扣因子
+     */
+    public static double bondPrice(double rate, int days) {
+        // C++: return 1 / (pow(rate / 100 + 1, (double)days / 252));
+        return 1.0 / Math.pow(rate / 100.0 + 1.0, (double) days / 252.0);
+    }
+
+    /**
+     * 年化利率转复合收益。
+     * 迁移自: TradeBotUtils.cpp:3739-3742
+     * C++: double TransPrice(double rate, int32_t days) { return (pow(rate/100 + 1, (double)days/252) - 1); }
+     *
+     * @param rate 年化利率（百分比形式）
+     * @param days 交易日数
+     * @return 复合收益率
+     */
+    public static double transPrice(double rate, int days) {
+        // C++: return (pow(rate / 100 + 1, (double)days / 252) - 1);
+        return Math.pow(rate / 100.0 + 1.0, (double) days / 252.0) - 1.0;
     }
 
     @Override

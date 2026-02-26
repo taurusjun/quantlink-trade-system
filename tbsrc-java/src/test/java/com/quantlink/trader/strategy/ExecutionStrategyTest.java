@@ -87,8 +87,8 @@ class ExecutionStrategyTest {
         assertEquals(simConfig, strategy.simConfig);
         assertTrue(strategy.active); // Sim mode → active
         assertEquals(0, strategy.netpos);
-        assertEquals(0, strategy.netpos_pass);
-        assertEquals(0, strategy.netpos_agg);
+        assertEquals(0, strategy.netposPass);
+        assertEquals(0, strategy.netposAgg);
     }
 
     @Test
@@ -239,11 +239,12 @@ class ExecutionStrategyTest {
     void test_checkSquareoff_maxLoss() {
         strategy.netPNL = -200000; // exceeds MAX_LOSS = 100000
 
-        MemorySegment update = arena.allocate(Types.MD_HEADER_LAYOUT);
-        strategy.checkSquareoff(update);
+        strategy.checkSquareoff();
 
         assertTrue(strategy.onExit);
-        assertTrue(strategy.onCancel);
+        // C++: handleSquareoff() 在 checkSquareoff 末尾被调用，会重置 onCancel = false
+        // 验证 onExit 和 aggFlat 保持 true（已触发退出）
+        assertFalse(strategy.onCancel); // handleSquareoff() resets onCancel
         assertTrue(strategy.onFlat);
     }
 
@@ -253,7 +254,7 @@ class ExecutionStrategyTest {
         strategy.maxTradedQty = 1_000_000; // set high to avoid trigger
 
         MemorySegment update = arena.allocate(Types.MD_HEADER_LAYOUT);
-        strategy.checkSquareoff(update);
+        strategy.checkSquareoff();
 
         assertFalse(strategy.onExit);
         assertFalse(strategy.onFlat);

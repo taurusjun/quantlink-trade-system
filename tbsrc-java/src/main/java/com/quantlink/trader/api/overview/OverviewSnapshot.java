@@ -146,6 +146,9 @@ public class OverviewSnapshot {
                 // ⑦ 聚合成交 (从 orders 中提取 status=TRADED 的)
                 aggregateFills(overview.fills, snap.leg1, row.pro);
                 aggregateFills(overview.fills, snap.leg2, row.pro);
+
+                // ④ 聚合价差成交 (配对 Leg1 + Leg2 的已成交订单)
+                aggregateSpreadTrades(overview.spreadTrades, snap, row.pro);
             }
 
             overview.strategies.add(row);
@@ -209,6 +212,42 @@ public class OverviewSnapshot {
                 row.pro = pro;
                 target.add(row);
             }
+        }
+    }
+
+    /**
+     * 从 Leg1 + Leg2 的已成交订单中配对生成价差成交。
+     * 配对逻辑: Leg1 BUY + Leg2 SELL → 买入价差; Leg1 SELL + Leg2 BUY → 卖出价差
+     */
+    private static void aggregateSpreadTrades(List<SpreadTradeRow> target,
+                                               DashboardSnapshot snap, String pro) {
+        List<DashboardSnapshot.OrderSnapshot> leg1Fills = new ArrayList<>();
+        List<DashboardSnapshot.OrderSnapshot> leg2Fills = new ArrayList<>();
+
+        if (snap.leg1.orders != null) {
+            for (DashboardSnapshot.OrderSnapshot o : snap.leg1.orders) {
+                if ("TRADED".equals(o.status) && o.doneQty > 0) leg1Fills.add(o);
+            }
+        }
+        if (snap.leg2.orders != null) {
+            for (DashboardSnapshot.OrderSnapshot o : snap.leg2.orders) {
+                if ("TRADED".equals(o.status) && o.doneQty > 0) leg2Fills.add(o);
+            }
+        }
+
+        // 尝试配对: Leg1 BUY ↔ Leg2 SELL, Leg1 SELL ↔ Leg2 BUY
+        int pairs = Math.min(leg1Fills.size(), leg2Fills.size());
+        for (int i = 0; i < pairs; i++) {
+            DashboardSnapshot.OrderSnapshot f1 = leg1Fills.get(i);
+            DashboardSnapshot.OrderSnapshot f2 = leg2Fills.get(i);
+            SpreadTradeRow row = new SpreadTradeRow();
+            row.modelFile = snap.modelFile;
+            row.side = "BUY".equals(f1.side) ? "BUY" : "SELL";
+            row.qty = Math.min(f1.doneQty, f2.doneQty);
+            row.spread = f2.price - f1.price;
+            row.time = f1.time != null && !f1.time.isEmpty() ? f1.time : f2.time;
+            row.pro = pro;
+            target.add(row);
         }
     }
 

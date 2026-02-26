@@ -48,9 +48,9 @@ public abstract class ExecutionStrategy {
     // ---- 位置字段 ----
     // 迁移自: ExecutionStrategy.h:111-114
     public int netpos;                   // C++: m_netpos
-    public int netpos_pass;              // C++: m_netpos_pass
-    public int netpos_pass_ytd;          // C++: m_netpos_pass_ytd
-    public int netpos_agg;               // C++: m_netpos_agg
+    public int netposPass;               // C++: m_netpos_pass
+    public int netposPassYtd;            // C++: m_netpos_pass_ytd
+    public int netposAgg;                // C++: m_netpos_agg
 
     // ---- PNL 字段 ----
     // 迁移自: ExecutionStrategy.h:160-165
@@ -161,8 +161,35 @@ public abstract class ExecutionStrategy {
     public double sellAggCount;
     public double buyAggOrder;
     public double sellAggOrder;
-    public long last_agg_time;
-    public byte last_agg_side;
+    public long lastAggTime;
+    public byte lastAggSide;
+
+    // ---- 期权策略标志 ----
+    // 迁移自: ExecutionStrategy.h — m_optionStrategy, m_useNewsHandler
+    public boolean optionStrategy;        // C++: m_optionStrategy — 是否为期权策略
+    public boolean useNewsHandler;        // C++: m_useNewsHandler — 是否使用新闻处理器
+
+    // ---- Delta 风控字段 ----
+    // 迁移自: ExecutionStrategy.h — 用于 CheckSquareoff 中的 delta 滚动平均
+    public double currAvgDelta;           // C++: m_currAvgDelta — 当前窗口平均 delta
+    public double tmpAvgDelta;            // C++: tmpAvgDelta — 累积中的平均 delta
+    public int deltaCount;                // C++: m_deltaCount — delta 采样计数
+    public long lastDeltaTS;              // C++: m_lastDeltaTS — 上次 delta 更新时间戳
+
+    // ---- 价格限制风控字段 ----
+    // 迁移自: ExecutionStrategy.h — 用于 CheckSquareoff 中的 USE_PRICE_LIMIT
+    public double tmpAvgTargetPrice;      // C++: tmpAvgTargetPrice — 累积中的平均目标价
+    public int priceCount;                // C++: m_priceCount — 价格采样计数
+    public long lastPxTS;                 // C++: m_lastPxTS — 上次价格更新时间戳
+
+    // ---- PNL 变化检测 ----
+    // 迁移自: ExecutionStrategy.h — m_bestbid_lastpnl, m_bestask_lastpnl
+    public double bestbidLastpnl;         // C++: m_bestbid_lastpnl
+    public double bestaskLastpnl;         // C++: m_bestask_lastpnl
+
+    // ---- 风控最大手数 ----
+    // 迁移自: ExecutionStrategy.h — m_rmsQty
+    public int rmsQty;                    // C++: m_rmsQty — RMS 最大平仓手数
 
     // ---- 订单/价格 Map ----
     // 迁移自: ExecutionStrategy.h:257-264
@@ -179,12 +206,12 @@ public abstract class ExecutionStrategy {
     public final Map<Double, OrderStats> askMapCache = new TreeMap<>();
 
     // ---- 统计字段 ----
-    // 迁移自: ExecutionStrategy.h — instruAvgTradeQty, volume_ewa, SET_HIGH, prev_tradeQty
+    // 迁移自: ExecutionStrategy.h — instruAvgTradeQty, volumeEwa, SET_HIGH, prevTradeQty
     // C++: deque<uint64_t> StatTrTimeQ; deque<double> StatTradeQtyQ;
     public double instruAvgTradeQty;
-    public double volume_ewa;
+    public double volumeEwa;
     public int SET_HIGH;
-    public double prev_tradeQty;
+    public double prevTradeQty;
     public final Deque<Long> statTrTimeQ = new ArrayDeque<>();
     public final Deque<Double> statTradeQtyQ = new ArrayDeque<>();
 
@@ -391,9 +418,9 @@ public abstract class ExecutionStrategy {
     public void reset() {
         cancelconfirmCount = 0;
         netpos = 0;
-        netpos_pass = 0;
-        netpos_pass_ytd = 0;
-        netpos_agg = 0;
+        netposPass = 0;
+        netposPassYtd = 0;
+        netposAgg = 0;
         buyQty = 0; sellQty = 0;
         buyTotalQty = 0; sellTotalQty = 0;
         buyOpenQty = 0; sellOpenQty = 0;
@@ -426,13 +453,23 @@ public abstract class ExecutionStrategy {
 
         buyAggCount = 0; sellAggCount = 0;
         buyAggOrder = 0; sellAggOrder = 0;
-        last_agg_time = 0; last_agg_side = 0;
+        lastAggTime = 0; lastAggSide = 0;
 
         tholdBidSize = 0; tholdBidMaxPos = 0;
         tholdAskSize = 0; tholdAskMaxPos = 0;
 
         // C++: m_Active = m_configParams->m_modeType == ModeType_Sim ? true : false
         active = (configParams.modeType == 1);
+
+        // C++: m_maxTradedQty = m_instru->m_sendInLots ? m_maxPosSize : m_maxPosSize * m_instru->m_lotSize
+        // Ref: ExecutionStrategy.cpp — Reset()
+        if (instru != null) {
+            maxTradedQty = instru.sendInLots ? maxPosSize : maxPosSize * instru.lotSize;
+        }
+
+        // C++: m_optionStrategy = m_configParams->m_optionStrategy
+        // Ref: ExecutionStrategy.cpp — Reset()
+        optionStrategy = (configParams.optionStrategy != 0);
 
         ordMap.clear();
         bidMap.clear();
@@ -486,22 +523,55 @@ public abstract class ExecutionStrategy {
 
         // C++: 监控状态上报 — 每 120 秒
         // C++: auto curr_time = Watch::GetUniqueInstance()->GetCurrentTime();
+        // Ref: ExecutionStrategy.cpp:438-450
         long currTime = exchTS != 0 ? exchTS : System.nanoTime();
         // C++: uint64_t gap = 1000000000; if (mlog && curr_time - m_lastStsTS > gap * 120)
         long gap = 1_000_000_000L;
         if (currTime - lastStsTS > gap * 120) {
-            // C++: SendMonitorStratStatus(...) — 监控上报省略（未迁移）
+            // C++: SendMonitorStratStatus(m_product, m_strategyID, m_onExit, m_onCancel, m_onFlat, m_Active);
+            sendMonitorStratStatus(product, strategyID, onExit, onCancel, onFlat, active);
             lastStsTS = currTime;
+            // C++: if (!m_simConfig->m_bUseArbStrat) { ... }
+            // arb 策略（PairwiseArbStrategy）在自己的 MDCallBack 中上报，不在基类重复上报
+            if (!simConfig.useArbStrat) {
+                // C++: SendMonitorStratPos(m_product, m_strategyID, m_instru->m_instrument, ...)
+                sendMonitorStratPos(product, strategyID, instru.instrument,
+                        buyPrice, sellPrice, buyAvgPrice, sellAvgPrice,
+                        buyQty, sellQty, buyTotalQty, sellTotalQty, netpos);
+                // C++: SendMonitorStratPNL(m_product, m_strategyID, ...)
+                sendMonitorStratPNL(product, strategyID, unrealisedPNL, realisedPNL,
+                        grossPNL, transTotalValue, netPNL);
+                // C++: SendMonitorStratCancelSts(m_product, m_instru->m_instrument, m_strategyID, ...)
+                sendMonitorStratCancelSts(product, instru.instrument, strategyID,
+                        orderCount, cancelconfirmCount);
+            }
         }
 
         // C++: if (!m_onFlat && m_Active) { ... SendOrder(); }
+        // Ref: ExecutionStrategy.cpp:454-472
         if (!onFlat && active) {
-            // C++: optionStrategy 相关逻辑省略（中国期货不使用）
+            // C++: if (m_optionStrategy) { ... }
+            // Ref: ExecutionStrategy.cpp:456-467
+            if (optionStrategy) {
+                // C++: if (!strcmp(m_instru->m_origbaseName, m_configParams->m_underlyingSimConfig->m_instru->m_origbaseName))
+                // [C++差异] Java 中 underlyingSimConfig 未迁移，使用 configParams.updateSymbol 替代。
+                // C++ 原始逻辑: 如果当前合约是 underlying，不 return (允许交易 futures)
+                // C++ 原始逻辑: 如果非 parityMode 且非 underlying 且合约不匹配 updateSymbol，则 return
+                // Ref: ExecutionStrategy.cpp:458-466
+                // [C++差异] OptionManager.parityMode 和 configParams.underlying 标志未迁移,
+                // 保留逻辑结构; 当 OptionManager 可用时启用此分支
+                // if (!OptionManager.parityMode && !configParams.underlying
+                //         && !configParams.updateSymbol.equals(instru.instrument)) {
+                //     return;
+                // }
+            }
 
-            // C++: if (((bCrossBook || bCrossBook2) && ...) || !(bCrossBook || bCrossBook2)) { SendOrder(); }
-            // [C++差异] CrossBook 条件简化：当前中国期货场景 bCrossBook/bCrossBook2 均为 false，直接调用 SendOrder
-            if ((!configParams.bCrossBook && !configParams.bCrossBook2) ||
-                    ((configParams.bCrossBook || configParams.bCrossBook2))) {
+            // C++: if (((bCrossBook || bCrossBook2) && ((bCrossBookEnd && !lastInstruMapIter->crossUpdate) || !bCrossBookEnd))
+            //      || !(bCrossBook || bCrossBook2)) { SendOrder(); }
+            // Ref: ExecutionStrategy.cpp:469-472
+            if (((configParams.bCrossBook || configParams.bCrossBook2)
+                    && ((configParams.bCrossBookEnd && !simConfig.lastCrossUpdate()) || !configParams.bCrossBookEnd))
+                    || !(configParams.bCrossBook || configParams.bCrossBook2)) {
                 sendOrder();
             }
         }
@@ -550,29 +620,57 @@ public abstract class ExecutionStrategy {
             smsRatio = (int) (thold.MAX_SIZE / thold.SIZE);
         }
 
-        // C++: SetThresholds() 阶梯逻辑
+        // C++: SetThresholds() 阶梯逻辑 — 含 SET_HIGH 分支
+        // Ref: ExecutionStrategy.cpp:635-689
         if (netpos == 0) {
-            tholdBidPlace = thold.BEGIN_PLACE;
-            tholdAskPlace = thold.BEGIN_PLACE;
+            // C++: if (SET_HIGH == 1) { BEGIN_PLACE_HIGH } else { BEGIN_PLACE }
+            if (SET_HIGH == 1) {
+                tholdBidPlace = thold.BEGIN_PLACE_HIGH;
+                tholdAskPlace = thold.BEGIN_PLACE_HIGH;
+            } else {
+                tholdBidPlace = thold.BEGIN_PLACE;
+                tholdAskPlace = thold.BEGIN_PLACE;
+            }
             tholdBidRemove = thold.BEGIN_REMOVE;
             tholdAskRemove = thold.BEGIN_REMOVE;
-        } else if (netpos > 0 && netpos < tholdBeginPos) {
-            tholdBidPlace = thold.BEGIN_PLACE;
+        } else if (netpos >= 0 && netpos < tholdBeginPos) {
+            // C++: if (SET_HIGH == 1) m_tholdBidPlace = BEGIN_PLACE_HIGH; else m_tholdBidPlace = BEGIN_PLACE;
+            if (SET_HIGH == 1) {
+                tholdBidPlace = thold.BEGIN_PLACE_HIGH;
+            } else {
+                tholdBidPlace = thold.BEGIN_PLACE;
+            }
             tholdBidRemove = thold.BEGIN_REMOVE;
             tholdAskPlace = thold.SHORT_PLACE;
             tholdAskRemove = thold.SHORT_REMOVE;
-        } else if (netpos < 0 && netpos > -1 * tholdBeginPos) {
-            tholdAskPlace = thold.BEGIN_PLACE;
+        } else if (netpos <= 0 && netpos > -1 * tholdBeginPos) {
+            // C++: if (SET_HIGH == 1) m_tholdBidPlace = BEGIN_PLACE_HIGH; else m_tholdAskPlace = BEGIN_PLACE;
+            // 注意: C++ 中 SET_HIGH==1 时设置的 tholdBidPlace 会被后面 SHORT_PLACE 覆盖（C++ 原代码行为）
+            if (SET_HIGH == 1) {
+                tholdBidPlace = thold.BEGIN_PLACE_HIGH;
+            } else {
+                tholdAskPlace = thold.BEGIN_PLACE;
+            }
             tholdAskRemove = thold.BEGIN_REMOVE;
             tholdBidPlace = thold.SHORT_PLACE;
             tholdBidRemove = thold.SHORT_REMOVE;
         } else if (netpos > 0) {
-            tholdBidPlace = thold.LONG_PLACE;
+            // C++: if (SET_HIGH == 1) m_tholdBidPlace = LONG_PLACE_HIGH; else m_tholdBidPlace = LONG_PLACE;
+            if (SET_HIGH == 1) {
+                tholdBidPlace = thold.LONG_PLACE_HIGH;
+            } else {
+                tholdBidPlace = thold.LONG_PLACE;
+            }
             tholdBidRemove = thold.LONG_REMOVE;
             tholdAskPlace = thold.SHORT_PLACE;
             tholdAskRemove = thold.SHORT_REMOVE;
         } else if (netpos < 0) {
-            tholdAskPlace = thold.LONG_PLACE;
+            // C++: if (SET_HIGH == 1) m_tholdAskPlace = LONG_PLACE_HIGH; else m_tholdAskPlace = LONG_PLACE;
+            if (SET_HIGH == 1) {
+                tholdAskPlace = thold.LONG_PLACE_HIGH;
+            } else {
+                tholdAskPlace = thold.LONG_PLACE;
+            }
             tholdAskRemove = thold.LONG_REMOVE;
             tholdBidPlace = thold.SHORT_PLACE;
             tholdBidRemove = thold.SHORT_REMOVE;
@@ -713,8 +811,280 @@ public abstract class ExecutionStrategy {
      * Ref: ExecutionStrategy.cpp:774-819
      */
     public void mdCallBack(MemorySegment update) {
+        // C++: if (up->m_updateType == MDUPDTYPE_TRADE || up->m_updateType == MDUPDTYPE_TRADE_IMPLIED)
+        //          m_ltp = up->m_newPrice;
+        // Ref: ExecutionStrategy.cpp:776-777
+        long mdDataBase = Types.MU_DATA_OFFSET;
+        byte updateType = (byte) Types.MDD_UPDATE_TYPE_VH.get(update, mdDataBase);
+        if (updateType == Constants.MDUPDTYPE_TRADE || updateType == Constants.MDUPDTYPE_TRADE_IMPLIED) {
+            ltp = (double) Types.MDD_NEW_PRICE_VH.get(update, mdDataBase);
+        }
+
+        // C++: m_exchTS = up->m_timestamp;
+        // Ref: ExecutionStrategy.cpp:779
         exchTS = (long) Types.MDH_EXCH_TS_VH.get(update, 0L);
-        calculatePNL();
+
+        // C++: if ((m_bestbid_lastpnl != m_instru->bidPx[0]) || (m_bestask_lastpnl != m_instru->askPx[0]))
+        //          { CalculatePNL(); m_bestbid_lastpnl = m_instru->bidPx[0]; m_bestask_lastpnl = m_instru->askPx[0]; }
+        // Ref: ExecutionStrategy.cpp:790-795
+        if (bestbidLastpnl != instru.bidPx[0] || bestaskLastpnl != instru.askPx[0]) {
+            calculatePNL();
+            bestbidLastpnl = instru.bidPx[0];
+            bestaskLastpnl = instru.askPx[0];
+        }
+
+        // C++: CheckSquareoff(up);
+        // Ref: ExecutionStrategy.cpp:797
+        checkSquareoff();
+
+        // C++: if (m_thold->USE_AHEAD_PERCENT) SetQuantAhead(up);
+        // Ref: ExecutionStrategy.cpp:799-800
+        if (thold.USE_AHEAD_PERCENT) {
+            setQuantAhead(update);
+        }
+    }
+
+    /**
+     * 检查各种平仓条件（完整版）。
+     * 迁移自: ExecutionStrategy::CheckSquareoff(MarketUpdateNew*)
+     * Ref: ExecutionStrategy.cpp:2150-2341
+     *
+     * C++ 检查条件:
+     * 1. endTimeAgg — 激进平仓时间
+     * 2. endTime / MAX_LOSS / maxOrderCount / maxTradedQty — 退出条件
+     * 3. Option delta 范围检查（滚动平均 delta）
+     * 4. USE_PRICE_LIMIT — 滚动平均价格 MIN_PRICE/MAX_PRICE 范围检查
+     * 5. UPNL_LOSS / STOP_LOSS — 触发后阈值翻倍
+     * 6. NEWS_FLAT — 新闻平仓
+     * 7. Flat 恢复逻辑 — 15分钟 StopLoss 冷却、价格范围回归、新闻退出 Flat
+     * 8. HandleSquareoff() — 当 onFlat 时执行平仓
+     */
+    protected void checkSquareoff() {
+        // === 1. 激进平仓时间 ===
+        // C++: if (Watch::GetUniqueInstance()->GetCurrentTime() >= m_endTimeAggEpoch && !m_aggFlat)
+        // Ref: ExecutionStrategy.cpp:2152-2161
+        if (exchTS >= endTimeAggEpoch && !aggFlat) {
+            aggFlat = true;
+            onExit = true;
+            onCancel = true;
+            onFlat = true;
+            log.warning(instru.currDate + " Exchange Time Limit reached. Aggressive flat got hit!! "
+                    + exchTS + " " + endTimeAggEpoch + " Symbol: " + instru.origBaseName);
+        }
+
+        // === 2. 退出条件 ===
+        // C++: if (((GetCurrentTime() >= m_endTimeEpoch) || m_netPNL < m_thold->MAX_LOSS * -1
+        //      || m_orderCount >= m_maxOrderCount || m_buyTotalQty >= m_maxTradedQty
+        //      || m_sellTotalQty >= m_maxTradedQty) && !m_onExit)
+        // Ref: ExecutionStrategy.cpp:2163-2199
+        if (!onExit) {
+            String limitReason = null;
+            if (exchTS >= endTimeEpoch) {
+                limitReason = "END TIME limit got hit!!";
+            }
+            if (netPNL < thold.MAX_LOSS * -1) {
+                limitReason = "MAX LOSS limit got hit!!";
+            }
+            if (orderCount >= maxOrderCount) {
+                limitReason = "MAX ORDERS limit got hit!!";
+            }
+            if (buyTotalQty >= maxTradedQty || sellTotalQty >= maxTradedQty) {
+                limitReason = "MAX TRADED limit got hit!!";
+            }
+
+            if (limitReason != null) {
+                onExit = true;
+                onCancel = true;
+                onFlat = true;
+                log.warning(exchTS + "  " + endTimeEpoch);
+                log.warning(instru.currDate + " Limit reached. Square off is Called. Strategy Exiting.."
+                        + " Order Count:" + orderCount + " Buy Qty: " + buyTotalQty
+                        + " Sell Qty: " + sellTotalQty + " NetPNL: " + netPNL / 100
+                        + " Limit Reason: " + limitReason + " Symbol: " + instru.origBaseName);
+
+                if (exchTS < endTimeEpoch) {
+                    sendAlert("Strategy squared off due to limit hit", limitReason);
+                }
+            }
+        }
+
+        // === 3. Option delta 范围检查 ===
+        // C++: if (m_optionStrategy && ...) { delta 滚动平均 + minDelta/maxDelta 检查 }
+        // Ref: ExecutionStrategy.cpp:2201-2237
+        boolean deltaTooLow = false;
+        if (optionStrategy) {
+            // C++: double delta = abs(OptionManager::GetInstance()->GetOption(m_instru->m_instrument)->GetDelta());
+            // [C++差异] Java 未迁移 OptionManager，此处 delta 逻辑保留结构但不执行实际 delta 获取
+            // 当 optionStrategy=true 且有 delta 数据时，以下逻辑生效
+            double delta = 0; // 由 OptionManager 提供
+            double minDelta = 0; // 由 OptionManager 提供
+            double maxDelta = 0; // 由 OptionManager 提供
+
+            if (delta != 0 && !Double.isNaN(delta)) {
+                // C++: if (m_exchTS - m_lastDeltaTS > 50000000000) // 50 secs (注释写 20 secs，实际 50s)
+                if (exchTS - lastDeltaTS > 50_000_000_000L) {
+                    currAvgDelta = tmpAvgDelta;
+                    lastDeltaTS = exchTS;
+                    deltaCount = 1;
+                    tmpAvgDelta = delta;
+                } else {
+                    tmpAvgDelta = (tmpAvgDelta * deltaCount + delta) / (deltaCount + 1);
+                    deltaCount++;
+                }
+
+                // C++: if (((abs(m_currAvgDelta) < minDelta || abs(m_currAvgDelta) > maxDelta) && (m_currAvgDelta != 0)) && !m_onFlat)
+                if (((Math.abs(currAvgDelta) < minDelta || Math.abs(currAvgDelta) > maxDelta) && (currAvgDelta != 0)) && !onFlat) {
+                    onCancel = true;
+                    onFlat = true;
+                    deltaTooLow = true;
+                    log.warning(instru.currDate + " DELTA limit reached 1. " + instru.origBaseName
+                            + " Squaring off due to min/max delta: " + minDelta + " " + delta + " " + maxDelta);
+                }
+                // C++: if (((abs(m_currAvgDelta) > minDelta && abs(m_currAvgDelta) < maxDelta) && (m_currAvgDelta != 0)) && m_onFlat && !m_onExit)
+                if (((Math.abs(currAvgDelta) > minDelta && Math.abs(currAvgDelta) < maxDelta) && (currAvgDelta != 0)) && onFlat && !onExit) {
+                    onCancel = false;
+                    onFlat = false;
+                    deltaTooLow = false;
+                    log.warning(instru.currDate + " DELTA limit reached 2. " + instru.origBaseName
+                            + " Squaring off due to min/max delta: " + minDelta + " " + delta + " " + maxDelta);
+                }
+            }
+        }
+
+        // === 4. USE_PRICE_LIMIT ===
+        // C++: if (m_thold->USE_PRICE_LIMIT) { ... }
+        // Ref: ExecutionStrategy.cpp:2239-2291
+        if (thold.USE_PRICE_LIMIT) {
+            if (targetPrice > 0) {
+                // C++: if (m_exchTS - m_lastPxTS > 50000000000 && !m_onExit) // 50 secs
+                if (exchTS - lastPxTS > 50_000_000_000L && !onExit) {
+                    currAvgPrice = tmpAvgTargetPrice;
+                    lastPxTS = exchTS;
+                    priceCount = 1;
+                    tmpAvgTargetPrice = targetPrice;
+                } else {
+                    tmpAvgTargetPrice = (tmpAvgTargetPrice * priceCount + targetPrice) / (priceCount + 1);
+                    priceCount++;
+                }
+
+                // C++: if ((m_currAvgPrice < m_thold->MIN_PRICE || m_currAvgPrice > m_thold->MAX_PRICE || deltaTooLow || !isModelVolValid) && !m_onFlat)
+                if ((currAvgPrice < thold.MIN_PRICE || currAvgPrice > thold.MAX_PRICE || deltaTooLow) && !onFlat) {
+                    if (currAvgPrice == 0) {
+                        // C++: if (tmpAvgTargetPrice < m_thold->MIN_PRICE || tmpAvgTargetPrice > m_thold->MAX_PRICE)
+                        if (tmpAvgTargetPrice < thold.MIN_PRICE || tmpAvgTargetPrice > thold.MAX_PRICE) {
+                            onCancel = true;
+                            onFlat = true;
+                            log.warning(instru.currDate + " PRICE limit reached."
+                                    + " Min Price: " + thold.MIN_PRICE + " Price: " + currAvgPrice
+                                    + " Max Price: " + thold.MAX_PRICE + " Square off is Called. Strategy Exiting..."
+                                    + " Symbol: " + instru.origBaseName);
+                        }
+                    } else {
+                        onCancel = true;
+                        onFlat = true;
+                        log.warning(instru.currDate + " PRICE limit reached."
+                                + " Min Price: " + thold.MIN_PRICE + " Price: " + currAvgPrice
+                                + " Max Price: " + thold.MAX_PRICE + " Square off is Called. Strategy Exiting..."
+                                + " Symbol: " + instru.origBaseName);
+                    }
+                }
+                // C++: if ((m_currAvgPrice > MIN_PRICE && m_currAvgPrice < MAX_PRICE && !deltaTooLow) && (m_currAvgPrice != 0) && m_onFlat && !m_onExit)
+                if ((currAvgPrice > thold.MIN_PRICE && currAvgPrice < thold.MAX_PRICE && !deltaTooLow)
+                        && (currAvgPrice != 0) && onFlat && !onExit) {
+                    onCancel = false;
+                    onFlat = false;
+                    log.warning(instru.currDate + " PRICE bound reached."
+                            + " Min Price: " + thold.MIN_PRICE + " Price: " + currAvgPrice
+                            + " Max Price: " + thold.MAX_PRICE + " Strategy Starting..."
+                            + " Symbol: " + instru.origBaseName);
+                }
+            }
+        }
+
+        // === 5. UPNL_LOSS / STOP_LOSS（阈值翻倍） ===
+        // C++: if ((m_unrealisedPNL < m_thold->UPNL_LOSS * -1 || m_netPNL < m_thold->STOP_LOSS * -1) && !m_onCancel && !m_onFlat)
+        // Ref: ExecutionStrategy.cpp:2293-2320
+        if ((unrealisedPNL < thold.UPNL_LOSS * -1 || netPNL < thold.STOP_LOSS * -1) && !onCancel && !onFlat) {
+            String limitReason;
+            if (unrealisedPNL < thold.UPNL_LOSS * -1) {
+                limitReason = "UPNL LOSS limit got hit!!";
+            } else {
+                limitReason = "STOP LOSS limit got hit!!";
+            }
+
+            onStopLoss = true;
+            onCancel = true;
+            onFlat = true;
+            lastFlatTS = exchTS;
+
+            // C++: m_thold->UPNL_LOSS += m_thold->UPNL_LOSS; — 阈值翻倍
+            if (unrealisedPNL < thold.UPNL_LOSS * -1) {
+                thold.UPNL_LOSS += thold.UPNL_LOSS;
+            }
+            // C++: m_thold->STOP_LOSS += m_thold->STOP_LOSS; — 阈值翻倍
+            if (netPNL < thold.STOP_LOSS * -1) {
+                thold.STOP_LOSS += thold.STOP_LOSS;
+            }
+
+            sendAlert("Strategy paused due to limit hit", limitReason);
+            log.warning(instru.currDate + " Limit reached. Square off is Called. Strategy Paused. Reason: "
+                    + limitReason + " Symbol: " + instru.origBaseName);
+        }
+
+        // === 6. NEWS_FLAT ===
+        // C++: if (!m_onCancel && !m_onFlat && m_useNewsHandler && m_thold->NEWS_FLAT && news_handler->getFlat())
+        // Ref: ExecutionStrategy.cpp:2322-2328
+        // [C++差异] Java 中 news_handler 未迁移，保留结构但不执行
+        // 当 useNewsHandler=true 时，需要外部注入 news handler 实例
+        if (!onCancel && !onFlat && useNewsHandler && thold.NEWS_FLAT) {
+            // news_handler->getFlat() 的等价检查
+            // 当 Java 版 NewsHandler 可用时启用此分支
+            // if (newsHandler != null && newsHandler.getFlat()) {
+            //     onNewsFlat = true;
+            //     onCancel = true;
+            //     onFlat = true;
+            //     log.warning(instru.currDate + " News Handler: Get Flat");
+            // }
+        }
+
+        // === 7. Flat 恢复逻辑 ===
+        // C++: m_onStopLoss = (m_onFlat) ? m_onStopLoss : false;
+        // Ref: ExecutionStrategy.cpp:2330-2341
+        onStopLoss = onFlat && onStopLoss;
+
+        if (onFlat) {
+            // C++: if (m_exchTS - m_lastFlatTS > 900000000000 && !m_onExit && m_onStopLoss) // 15 mins
+            if (exchTS - lastFlatTS > 900_000_000_000L && !onExit && onStopLoss) {
+                onFlat = false;
+                onStopLoss = false;
+                log.warning(instru.currDate + " STOPLOSS time limit reached. Strategy Restarted..");
+            }
+
+            // C++: if (!m_optionStrategy && m_thold->USE_PRICE_LIMIT) { ... m_exchTS - m_lastFlatTS > 60000000000 ... } // 1 min
+            if (!optionStrategy && thold.USE_PRICE_LIMIT) {
+                if (currAvgPrice > thold.MIN_PRICE && currAvgPrice < thold.MAX_PRICE
+                        && (currAvgPrice != 0) && !onExit && exchTS - lastFlatTS > 60_000_000_000L) {
+                    onFlat = false;
+                    log.warning(instru.currDate + " Back in Price Ranges Strategy Restarted..");
+                }
+            }
+
+            // C++: if (m_useNewsHandler && m_onNewsFlat && !news_handler->getFlat()) { ... }
+            if (useNewsHandler && onNewsFlat) {
+                // 当 Java 版 NewsHandler 可用时启用此分支
+                // if (newsHandler != null && !newsHandler.getFlat()) {
+                //     onFlat = false;
+                //     onCancel = false;
+                //     onNewsFlat = false;
+                //     log.warning(instru.currDate + " News Handler: Quit Flat");
+                // }
+            }
+
+            // === 8. 执行平仓 ===
+            // C++: HandleSquareoff();
+            // Ref: ExecutionStrategy.cpp:2341
+            handleSquareoff();
+        }
     }
 
     /**
@@ -800,10 +1170,29 @@ public abstract class ExecutionStrategy {
      * @return 新创建的 OrderStats，或 null（重复价格）
      */
     public OrderStats sendNewOrder(byte side, double price, int qty, int orderLevel) {
-        return sendNewOrder(side, price, qty, orderLevel, OrderStats.HitType.STANDARD);
+        return sendNewOrder(side, price, qty, orderLevel, OrderStats.TypeOfOrder.QUOTE, OrderStats.HitType.STANDARD);
     }
 
     public OrderStats sendNewOrder(byte side, double price, int qty, int orderLevel, OrderStats.HitType ordtype) {
+        return sendNewOrder(side, price, qty, orderLevel, OrderStats.TypeOfOrder.QUOTE, ordtype);
+    }
+
+    /**
+     * 发送新订单（完整参数版本）。
+     * 迁移自: ExecutionStrategy::SendNewOrder(TransactionType side, double price, int32_t qty,
+     *          int32_t level, TypeOfOrder typeOfOrder, OrderHitType ordtype)
+     * Ref: ExecutionStrategy.cpp:1060-1110
+     *
+     * @param side        买卖方向
+     * @param price       价格
+     * @param qty         数量
+     * @param orderLevel  订单层级
+     * @param typeOfOrder 订单类型 (QUOTE/PHEDGE/AHEDGE)
+     * @param ordtype     命中类型 (STANDARD/IMPROVE/CROSS/DETECT/MATCH)
+     * @return 新创建的 OrderStats，或 null（重复价格）
+     */
+    public OrderStats sendNewOrder(byte side, double price, int qty, int orderLevel,
+                                    OrderStats.TypeOfOrder typeOfOrder, OrderStats.HitType ordtype) {
         Map<Double, OrderStats> priceMap;
         if (side == Constants.SIDE_BUY) {
             // C++: if (m_bidMap.find(price) != m_bidMap.end()) return m_ordMap.end()
@@ -830,7 +1219,7 @@ public abstract class ExecutionStrategy {
         ordStats.isNew = true;
         ordStats.cancel = false;
         ordStats.modifyWait = false;
-        ordStats.modifyCount = 0;
+        ordStats.modify = 0;
         ordStats.status = OrderStats.Status.NEW_ORDER;
         ordStats.price = price;
         ordStats.side = side;
@@ -839,7 +1228,8 @@ public abstract class ExecutionStrategy {
         ordStats.openQty = qty;
         ordStats.doneQty = 0;
         ordStats.quantBehind = 0;
-        ordStats.hitType = ordtype;
+        ordStats.ordType = ordtype;
+        ordStats.typeOfOrder = typeOfOrder;
 
         // C++: m_quantAhead = (side==BUY) ? (bidPx[level]==price ? bidQty[level] : 0) : ...
         if (side == Constants.SIDE_BUY) {
@@ -874,7 +1264,7 @@ public abstract class ExecutionStrategy {
         order.status = OrderStats.Status.MODIFY_ORDER;
         order.newPrice = price;
         order.newQty = qty;
-        order.hitType = ordtype;
+        order.ordType = ordtype;
 
         if (order.side == Constants.SIDE_BUY) {
             bidMap.put(price, order);
@@ -888,11 +1278,11 @@ public abstract class ExecutionStrategy {
         client.sendModifyOrder(strategyID, instru.symbol, order.side, price, qty, orderID,
                 Constants.POS_OPEN, this);
 
-        if (order.modifyCount == 0) {
+        if (order.modify == 0) {
             order.oldPrice = order.price;
             order.oldQty = order.openQty;
         }
-        order.modifyCount++;
+        order.modify++;
         order.modifyWait = true;
 
         return order;
@@ -1361,16 +1751,16 @@ public abstract class ExecutionStrategy {
             sellOpenQty -= tradeQty;
         }
 
-        // C++: 更新 netpos_pass / netpos_agg
-        if (order.hitType == OrderStats.HitType.IMPROVE) {
+        // C++: 更新 netposPass / netposAgg
+        if (order.ordType == OrderStats.HitType.IMPROVE) {
             improveCount++;
-        } else if (order.hitType == OrderStats.HitType.CROSS) {
+        } else if (order.ordType == OrderStats.HitType.CROSS) {
             crossCount++;
-            if (order.side == Constants.SIDE_BUY) netpos_agg += tradeQty; else netpos_agg -= tradeQty;
-        } else if (order.hitType == OrderStats.HitType.STANDARD) {
-            if (order.side == Constants.SIDE_BUY) netpos_pass += tradeQty; else netpos_pass -= tradeQty;
-        } else if (order.hitType == OrderStats.HitType.MATCH) {
-            if (order.side == Constants.SIDE_BUY) netpos_agg += tradeQty; else netpos_agg -= tradeQty;
+            if (order.side == Constants.SIDE_BUY) netposAgg += tradeQty; else netposAgg -= tradeQty;
+        } else if (order.ordType == OrderStats.HitType.STANDARD) {
+            if (order.side == Constants.SIDE_BUY) netposPass += tradeQty; else netposPass -= tradeQty;
+        } else if (order.ordType == OrderStats.HitType.MATCH) {
+            if (order.side == Constants.SIDE_BUY) netposAgg += tradeQty; else netposAgg -= tradeQty;
         }
 
         tradeCount++;
@@ -1602,7 +1992,7 @@ public abstract class ExecutionStrategy {
         order.qty = newQty;
         order.openQty = newQty - order.doneQty;
         order.modifyWait = false;
-        order.modifyCount = 0;
+        order.modify = 0;
     }
 
     /** 撤单确认。 Ref: ExecutionStrategy.cpp:1912-1981 */
@@ -1652,10 +2042,15 @@ public abstract class ExecutionStrategy {
      */
     public double calculatePNL(double buyprice, double sellprice) {
         double pnl = 0;
-        // C++: if (m_instru->m_perYield) ... Bond 逻辑省略（中国期货不使用 perYield）
+        // C++: if (m_instru->m_perYield)
+        //          PNL = (BondPrice(buyprice, m_instru->m_cDays) - BondPrice(sellprice, m_instru->m_cDays)) - (m_buyExchTx + m_sellExchTx);
+        //      else
+        //          PNL = (sellprice - buyprice - m_buyExchTx * buyprice - m_sellExchTx * sellprice) * m_instru->m_priceMultiplier - (m_buyExchContractTx + m_sellExchContractTx);
+        // Ref: ExecutionStrategy.cpp:1215-1223
         if (instru.perYield) {
-            // [C++差异] BondPrice() 未迁移，perYield=false 时不会进入此分支
-            pnl = 0;
+            // C++: PNL = (BondPrice(buyprice, m_instru->m_cDays) - BondPrice(sellprice, m_instru->m_cDays)) - (m_buyExchTx + m_sellExchTx);
+            pnl = (Instrument.bondPrice(buyprice, instru.cDays) - Instrument.bondPrice(sellprice, instru.cDays))
+                    - (buyExchTx + sellExchTx);
         } else {
             // C++: PNL = (sellprice - buyprice - m_buyExchTx * buyprice - m_sellExchTx * sellprice) * m_instru->m_priceMultiplier - (m_buyExchContractTx + m_sellExchContractTx);
             pnl = (sellprice - buyprice - buyExchTx * buyprice - sellExchTx * sellprice) * instru.priceMultiplier
@@ -1669,52 +2064,115 @@ public abstract class ExecutionStrategy {
     // =======================================================================
 
     /**
-     * 检查是否需要平仓。
-     * 迁移自: ExecutionStrategy::CheckSquareoff(MarketUpdateNew*)
-     * Ref: ExecutionStrategy.cpp:2150-2341 (简化版，不含期权/delta/新闻处理)
-     */
-    public void checkSquareoff(MemorySegment update) {
-        // C++: 时间限制、最大亏损、最大订单数、最大成交量
-        if (!onExit) {
-            boolean shouldExit = false;
-            if (netPNL < thold.MAX_LOSS * -1) shouldExit = true;
-            if (orderCount >= maxOrderCount) shouldExit = true;
-            if (buyTotalQty >= maxTradedQty || sellTotalQty >= maxTradedQty) shouldExit = true;
-
-            if (shouldExit) {
-                onExit = true;
-                onCancel = true;
-                onFlat = true;
-                log.warning("[" + instru.origBaseName + "] Squareoff triggered: netPNL=" + netPNL + " orderCount=" + orderCount);
-            }
-        }
-
-        // C++: UPNL LOSS check
-        if (!onFlat && thold.CHECK_PNL && unrealisedPNL < -1 * thold.UPNL_LOSS) {
-            onCancel = true;
-            onFlat = true;
-            log.warning("[" + instru.origBaseName + "] UPNL loss triggered: " + unrealisedPNL);
-        }
-
-        // C++: STOP LOSS check
-        if (!onFlat && thold.CHECK_PNL && netPNL < -1 * thold.STOP_LOSS) {
-            onExit = true;
-            onCancel = true;
-            onFlat = true;
-            log.warning("[" + instru.origBaseName + "] Stop loss triggered: " + netPNL);
-        }
-    }
-
-    /**
      * 执行平仓。
      * 迁移自: ExecutionStrategy::HandleSquareoff()
      * Ref: ExecutionStrategy.cpp:2355-2437
+     *
+     * 逻辑:
+     * 1. netpos==0 且 onExit 且无挂单 → 停止策略
+     * 2. aggFlat 时用对手价穿越(bid-tick/ask+tick)，否则用被动价
+     * 3. DI1F/DI1N 薄订单簿检测 → 即使非 aggFlat 也用激进价
+     * 4. 撤销价格不利的挂单（含 optionStrategy 逻辑）
+     * 5. onCancel = false
+     * 6. qty = abs(netpos), 受 rmsQty 上限限制
+     * 7. 无挂单时发送平仓订单（aggFlat 用 CROSS 类型）
      */
     public void handleSquareoff() {
-        // C++: 撤销所有挂单
-        List<Integer> cancelList = new ArrayList<>(ordMap.keySet());
-        for (int ordID : cancelList) {
-            sendCancelOrder(ordID);
+        // C++: if (m_netpos == 0 && m_onExit && m_askMap.size() == 0 && m_bidMap.size() == 0)
+        // Ref: ExecutionStrategy.cpp:2361-2370
+        if (netpos == 0 && onExit && askMap.isEmpty() && bidMap.isEmpty()) {
+            if (onExit && active) {
+                log.warning(instru.currDate + " Positions Closed. Strategy Exiting.."
+                        + " Symbol: " + instru.origBaseName);
+                active = false;
+            }
+        }
+
+        // C++: double sellprice = m_aggFlat == true ? m_instru->bidPx[0] - m_instru->m_tickSize : m_instru->askPx[0];
+        // C++: double buyprice = m_aggFlat == true ? m_instru->askPx[0] + m_instru->m_tickSize : m_instru->bidPx[0];
+        // Ref: ExecutionStrategy.cpp:2372-2373
+        double sellprice = aggFlat ? instru.bidPx[0] - instru.tickSize : instru.askPx[0];
+        double buyprice = aggFlat ? instru.askPx[0] + instru.tickSize : instru.bidPx[0];
+
+        // C++: Go aggressive if the book is thin (DI1F/DI1N)
+        // Ref: ExecutionStrategy.cpp:2375-2383
+        if (!aggFlat && (instru.symbol.startsWith("DI1F") || instru.symbol.startsWith("DI1N"))) {
+            if ((instru.bidQty[0] < thold.AGGFLAT_BOOKSIZE
+                    && instru.bidQty[0] / instru.askQty[0] < thold.AGGFLAT_BOOKFRAC)
+                    || (int) (instru.askPx[0] - instru.bidPx[0] + 0.1 * instru.tickSize) > 0) {
+                sellprice = instru.askPx[0] - instru.tickSize;
+            }
+            if ((instru.askQty[0] < thold.AGGFLAT_BOOKSIZE
+                    && instru.askQty[0] / instru.bidQty[0] < thold.AGGFLAT_BOOKFRAC)
+                    || (int) (instru.askPx[0] - instru.bidPx[0] + 0.1 * instru.tickSize) > 0) {
+                buyprice = instru.bidPx[0] + instru.tickSize;
+            }
+        }
+
+        // C++: sellprice = sellprice <= 0 ? m_instru->bidPx[0] : sellprice;
+        // C++: buyprice = buyprice <= 0 ? m_instru->askPx[0] : buyprice;
+        // Ref: ExecutionStrategy.cpp:2384-2385
+        sellprice = sellprice <= 0 ? instru.bidPx[0] : sellprice;
+        buyprice = buyprice <= 0 ? instru.askPx[0] : buyprice;
+
+        // C++: 撤销价格不利的挂单
+        // Ref: ExecutionStrategy.cpp:2389-2406
+        if (!askMap.isEmpty() || !bidMap.isEmpty()) {
+            // C++: for (PriceMapIter iter = m_askMap.begin(); ...)
+            for (OrderStats order : new ArrayList<>(askMap.values())) {
+                // C++: if (m_onCancel || (!m_optionStrategy && sellprice < iter->second->m_price)
+                //      || (m_optionStrategy && sellprice != iter->second->m_price) || m_netpos == 0)
+                if (onCancel
+                        || (!optionStrategy && sellprice < order.price)
+                        || (optionStrategy && sellprice != order.price)
+                        || netpos == 0) {
+                    sendCancelOrder(order.orderID);
+                }
+            }
+
+            // C++: for (PriceMapIter iter = m_bidMap.begin(); ...)
+            for (OrderStats order : new ArrayList<>(bidMap.values())) {
+                // C++: if (m_onCancel || (!m_optionStrategy && buyprice > iter->second->m_price)
+                //      || (m_optionStrategy && buyprice != iter->second->m_price) || m_netpos == 0)
+                if (onCancel
+                        || (!optionStrategy && buyprice > order.price)
+                        || (optionStrategy && buyprice != order.price)
+                        || netpos == 0) {
+                    sendCancelOrder(order.orderID);
+                }
+            }
+        }
+
+        // C++: m_onCancel = false;
+        // Ref: ExecutionStrategy.cpp:2408
+        onCancel = false;
+
+        // C++: int32_t qty = m_netpos > 0 ? m_netpos : -1 * m_netpos;
+        // C++: qty = ((m_rmsQty != 0) && (qty > m_rmsQty)) ? m_rmsQty : qty;
+        // Ref: ExecutionStrategy.cpp:2417-2418
+        int qty = netpos > 0 ? netpos : -netpos;
+        qty = (rmsQty != 0 && qty > rmsQty) ? rmsQty : qty;
+
+        // C++: if (m_askMap.size() == 0 && m_bidMap.size() == 0)
+        // Ref: ExecutionStrategy.cpp:2420-2436
+        if (askMap.isEmpty() && bidMap.isEmpty()) {
+            if (netpos > 0) {
+                // C++: if (m_aggFlat) SendNewOrder(SELL, sellprice, qty, 0, QUOTE, CROSS);
+                //      else SendNewOrder(SELL, sellprice, qty, 0);
+                if (aggFlat) {
+                    sendNewOrder(Constants.SIDE_SELL, sellprice, qty, 0, OrderStats.TypeOfOrder.QUOTE, OrderStats.HitType.CROSS);
+                } else {
+                    sendNewOrder(Constants.SIDE_SELL, sellprice, qty, 0);
+                }
+            } else if (netpos < 0) {
+                // C++: if (m_aggFlat) SendNewOrder(BUY, buyprice, qty, 0, QUOTE, CROSS);
+                //      else SendNewOrder(BUY, buyprice, qty, 0);
+                if (aggFlat) {
+                    sendNewOrder(Constants.SIDE_BUY, buyprice, qty, 0, OrderStats.TypeOfOrder.QUOTE, OrderStats.HitType.CROSS);
+                } else {
+                    sendNewOrder(Constants.SIDE_BUY, buyprice, qty, 0);
+                }
+            }
         }
     }
 
@@ -1808,19 +2266,29 @@ public abstract class ExecutionStrategy {
      * @param instrument 要设置的合约
      */
     public void fillFixedFields(Instrument instrument) {
+        // C++: memset(&m_reqMsg, '\0', sizeof(m_reqMsg));
         // C++: m_instru = instrument;
+        // Ref: ExecutionStrategy.cpp:1487-1520
         this.instru = instrument;
+
         // C++: 以下字段在 Java 中由 CommonClient.sendNewOrder() 内部处理：
         //   m_reqMsg.Token = m_instru->m_token;
         //   m_reqMsg.AccountID = m_account;
         //   m_reqMsg.Contract_Description.InstrumentName = m_instruType;
         //   m_reqMsg.Contract_Description.Symbol = m_instru->m_symbol;
-        //   m_reqMsg.Contract_Description.OptionType = ...;
+        //   m_reqMsg.Contract_Description.OptionType = GetOptionType(m_instru->m_callPutFlag);
         //   m_reqMsg.Contract_Description.ExpiryDate = m_instru->m_expiryDate;
         //   m_reqMsg.Contract_Description.StrikePrice = m_instru->m_strike;
         //   m_reqMsg.OrdType = LIMIT;
         //   m_reqMsg.PxType = PERUNIT;
-        // CME 特殊处理省略（中国期货不使用）
+
+        // C++: if (!strcmp(m_instru->m_exchange, "CME")) { ... }
+        // Ref: ExecutionStrategy.cpp:1513-1519
+        // CME 特殊处理: InstrumentName = securitygroup, Future 时 OptionType = "X"
+        // [C++差异] Java 中 RequestMsg 字段由 CommonClient.sendNewOrder() 构建，
+        // CME 的 securitygroup/productType 字段已添加到 Instrument 类中。
+        // 当发送 CME 订单时，CommonClient 需读取 instru.securityGroup 和 instru.productType
+        // 来正确设置 Contract_Description 字段。
     }
 
     public double roundWorse(byte side, double price, double tick) {
@@ -1882,9 +2350,9 @@ public abstract class ExecutionStrategy {
         statTrTimeQ.addLast(currTime);
 
         // C++: double trade_diff = (m_instru->totalTradedQty - prev_tradeQty) / m_instru->m_lotSize;
-        double tradeDiff = (instru.totalTradedQty - prev_tradeQty) / instru.lotSize;
+        double tradeDiff = (instru.totalTradedQty - prevTradeQty) / instru.lotSize;
         // C++: prev_tradeQty = m_instru->totalTradedQty;
-        prev_tradeQty = instru.totalTradedQty;
+        prevTradeQty = instru.totalTradedQty;
 
         // C++: if (StatTradeQtyQ.size() > 0) instruAvgTradeQty += trade_diff; else instruAvgTradeQty = trade_diff;
         if (!statTradeQtyQ.isEmpty()) {
@@ -1904,10 +2372,10 @@ public abstract class ExecutionStrategy {
         // C++: double stat_multiplier = 2.0 / (1 + 2.8854 * 5);
         double statMultiplier = 2.0 / (1 + 2.8854 * 5);
         // C++: volume_ewa = stat_multiplier * instruAvgTradeQty + (1 - stat_multiplier) * volume_ewa;
-        volume_ewa = statMultiplier * instruAvgTradeQty + (1 - statMultiplier) * volume_ewa;
+        volumeEwa = statMultiplier * instruAvgTradeQty + (1 - statMultiplier) * volumeEwa;
 
         // C++: if (volume_ewa > m_thold->STAT_TRADE_THRESH) SET_HIGH = 0; else SET_HIGH = 1;
-        if (volume_ewa > thold.STAT_TRADE_THRESH) {
+        if (volumeEwa > thold.STAT_TRADE_THRESH) {
             SET_HIGH = 0;
         } else {
             SET_HIGH = 1;
@@ -1954,7 +2422,7 @@ public abstract class ExecutionStrategy {
             OrderStats o = e.getValue();
             // C++: iter->second->m_orderID \t m_price \t m_Qty \t m_openQty \t m_status \t m_typeOfOrder
             sb.append(String.format("  %d\t%.4f\t%d\t%d\t%s\n",
-                    o.orderID, o.price, o.qty, o.openQty, o.hitType));
+                    o.orderID, o.price, o.qty, o.openQty, o.ordType));
         }
         sb.append("DumpOurBook OUR ASK orders:\n");
         int askctr = 0;
@@ -1962,7 +2430,7 @@ public abstract class ExecutionStrategy {
             askctr++;
             OrderStats o = e.getValue();
             sb.append(String.format("  %d\t%.4f\t%d\t%d\t%s\n",
-                    o.orderID, o.price, o.qty, o.openQty, o.hitType));
+                    o.orderID, o.price, o.qty, o.openQty, o.ordType));
         }
         sb.append("BIDCTR: ").append(bidctr).append(" ASKCTR: ").append(askctr);
         log.info(sb.toString());
@@ -1975,7 +2443,7 @@ public abstract class ExecutionStrategy {
      *
      * [C++差异] C++ 遍历 m_simConfig->m_indicatorList 打印每个指标的
      * coefficient * indicator->Value(status) * tickSize。
-     * Java 版本简化为打印 targetPrice 和 currPrice，因为指标系统尚未完整迁移。
+     * Java 版本打印 targetPrice 和 currPrice。指标列表遍历依赖 Indicator 模块（独立迁移范围）。
      */
     public void dumpIndicators() {
         // C++: TBLOG << m_targetPrice << "\t" << m_currPrice << "\t";
@@ -1983,7 +2451,10 @@ public abstract class ExecutionStrategy {
         StringBuilder sb = new StringBuilder();
         sb.append("DumpIndicators: targetPrice=").append(targetPrice)
           .append(" currPrice=").append(currPrice);
-        // [C++差异] 指标列表遍历省略 — Java 指标系统尚未迁移
+        // [C++差异-用户确认] 指标列表遍历省略 — Java Indicator 系统为独立模块，
+        // 不在当前 ExecutionStrategy 迁移范围内。当 Indicator 模块迁移后，
+        // 在此处遍历 indicatorList 打印 coefficient * Value(status) * tickSize。
+        // 参见 ExecutionStrategy.cpp:1626-1634
         log.info(sb.toString());
     }
 

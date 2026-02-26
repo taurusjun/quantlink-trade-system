@@ -223,4 +223,33 @@ public class ThresholdSet {
 
     // 迁移自: TradeBotUtils.h:474 — product_name
     public String productName = "";
+
+    // ---- 以下字段来自 C++ ThresholdSet 完整定义 ----
+    // 迁移自: TradeBotUtils.h:430-460
+
+    // 模型/算法参数
+    public int MODE_INSTRUMENT1;
+    public int MODE_INSTRUMENT2;
+    public int TARGET_PNL_MODE;
+    public int StdevSqrOff_FLAG;
+    public int LEADLAG_FLAG;
+    public int DEP_BASKET;
+    public int MODEL_ALGO;
+    public int INP_FEAT_LENGTH;
+    public int HIDDEN_NEURONS;
+    public int LAGS;
+    public int DYNAMIC_WEIGHTS;
+    public double CONFIDENCE_INTERVAL_BEGIN;
+    public double CONFIDENCE_INTERVAL_CLOSE;
+    public int CONTINUOUS_TARGET_COMPUTATION;
+    public int DYNAMIC_DEVIATION_COMPUTATION;
+
+    // 模型文件路径
+    // 迁移自: TradeBotUtils.h:467-472
+    public String theta1_file = "";
+    public String theta2_file = "";
+    public String min_max_file = "";
+    public String ar_bask0_file = "";
+    public String ar_bask1_file = "";
+    public String cov_mat_file = "";
 }

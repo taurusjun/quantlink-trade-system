@@ -14,7 +14,7 @@ class OrderStatsTest {
     void test_defaultValues() {
         OrderStats os = new OrderStats();
         assertEquals(OrderStats.Status.INIT, os.status);
-        assertEquals(OrderStats.HitType.STANDARD, os.hitType);
+        assertEquals(OrderStats.HitType.STANDARD, os.ordType);
         assertEquals(Constants.SIDE_BUY, os.side);
         assertFalse(os.active);
         assertEquals(0, os.orderID);
@@ -58,7 +58,7 @@ class OrderStatsTest {
         os.qty = 5;
         os.openQty = 5;
         os.side = Constants.SIDE_BUY;
-        os.hitType = OrderStats.HitType.STANDARD;
+        os.ordType = OrderStats.HitType.STANDARD;
 
         // New order
         os.status = OrderStats.Status.NEW_ORDER;

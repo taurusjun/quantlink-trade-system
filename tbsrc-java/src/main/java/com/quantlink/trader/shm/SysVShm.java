@@ -9,8 +9,11 @@ import java.lang.invoke.MethodHandle;
  * 迁移自: hftbase/Ipc/include/sharedmemory.h  (illuminati::ipc::SharedMemory)
  * 迁移自: hftbase/Ipc/include/shmallocator.h   (illuminati::ipc::ShmAllocator)
  * <p>
- * [C++差异] C++ 使用继承体系 SharedMemory → ShmAllocator&lt;T,Header&gt;,
- *           Java 扁平化为工具类 + ShmSegment 值对象，与 Go 迁移方案一致。
+ * [C++差异] C++ 使用继承体系 SharedMemory → ShmAllocator&lt;T,Header&gt;
+ *           (sharedmemory.h → shmallocator.h)，子类通过继承获得 SHM 生命周期管理。
+ *           Java 无法复刻 C++ 的 RAII 析构语义和模板继承，
+ *           因此扁平化为工具类 (SysVShm) + ShmSegment 值对象（组合替代继承）。
+ *           Ref: hftbase/Ipc/include/sharedmemory.h, hftbase/Ipc/include/shmallocator.h
  * <p>
  * 通过 {@code Linker.nativeLinker().defaultLookup()} 查找 libc 中的
  * shmget/shmat/shmdt/shmctl 符号，跨 Linux/macOS 无需 syscall 编号。
@@ -308,10 +311,10 @@ public final class SysVShm {
                 // C++: if (errno == EEXIST) { m_balreadyExisting = true; }
                 // Ref: hftbase/Ipc/include/sharedmemory.h:65-66
                 //
-                // [C++差异] C++ 检查 errno == EEXIST; Java 通过 shmget 返回 -1 检测，
-                //           然后回退为不含 IPC_EXCL 的调用。如果回退也失败则抛出异常。
-                //           由于 Panama FFI 无法直接读取 errno，我们采用与 Go 相同的
-                //           回退策略：shmget 返回负值时尝试不带 IPC_EXCL 重新获取。
+                // [C++差异] C++ 检查 errno == EEXIST 判断 SHM 已存在;
+                //           Java Panama FFI 无法直接读取 errno（Linker.downcallHandle 不暴露 errno），
+                //           因此通过 shmget 返回 -1 检测失败，回退为不含 IPC_EXCL 的调用。
+                //           Ref: hftbase/Ipc/include/sharedmemory.h:65-66
 
                 // C++: m_shmid = shmget(shmkey, m_shmsize, flag);
                 // Ref: hftbase/Ipc/include/sharedmemory.h:84

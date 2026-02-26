@@ -36,6 +36,14 @@ public class OrderStats {
         MATCH
     }
 
+    // ---- 枚举: 订单类型 ----
+    // 迁移自: tbsrc/common/include/ORSBase.h — enum TypeOfOrder { QUOTE=0, PHEDGE, AHEDGE }
+    public enum TypeOfOrder {
+        QUOTE,    // 0 — 报价单
+        PHEDGE,   // 1 — 被动对冲
+        AHEDGE    // 2 — 主动对冲
+    }
+
     // ---- 字段 ----
     // 迁移自: ExecutionStrategyStructs.h — struct OrderStats 全部字段
 
@@ -43,7 +51,7 @@ public class OrderStats {
     public boolean isNew;          // C++: m_new
     public boolean modifyWait;     // C++: m_modifywait
     public boolean cancel;         // C++: m_cancel
-    public int modifyCount;        // C++: m_modify
+    public int modify;             // C++: m_modify
     public long lastTS;            // C++: m_lastTS (uint64_t)
     public int orderID;            // C++: m_orderID (uint32_t → Java int)
     public int oldQty;             // C++: m_oldQty
@@ -57,14 +65,14 @@ public class OrderStats {
     public double price;           // C++: m_price
     public double newPrice;        // C++: m_newprice
     public double oldPrice;        // C++: m_oldprice
-    public int typeOfOrder;        // C++: m_typeOfOrder (TypeOfOrder enum) — 使用 Constants 值
-    public HitType hitType;        // C++: m_ordType (OrderHitType)
+    public TypeOfOrder typeOfOrder = TypeOfOrder.QUOTE; // C++: m_typeOfOrder (TypeOfOrder enum)
+    public HitType ordType;        // C++: m_ordType (OrderHitType)
     public Status status;          // C++: m_status (OrderStatus)
     public byte side;              // C++: m_side (TransactionType) — Constants.SIDE_BUY/SELL
 
     public OrderStats() {
         this.status = Status.INIT;
-        this.hitType = HitType.STANDARD;
+        this.ordType = HitType.STANDARD;
         this.side = Constants.SIDE_BUY;
     }
 
@@ -72,6 +80,6 @@ public class OrderStats {
     public String toString() {
         return String.format("Order[id=%d, px=%.2f, qty=%d, open=%d, done=%d, status=%s, hit=%s, side=%s]",
                 orderID, price, qty, openQty, doneQty, status,
-                hitType, side == Constants.SIDE_BUY ? "BUY" : "SELL");
+                ordType, side == Constants.SIDE_BUY ? "BUY" : "SELL");
     }
 }

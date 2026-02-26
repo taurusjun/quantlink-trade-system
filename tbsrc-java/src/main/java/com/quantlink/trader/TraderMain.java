@@ -5,6 +5,7 @@ import com.quantlink.trader.api.SnapshotCollector;
 import com.quantlink.trader.config.*;
 import com.quantlink.trader.connector.Connector;
 import com.quantlink.trader.core.*;
+import com.quantlink.trader.shm.Types;
 import com.quantlink.trader.strategy.PairwiseArbStrategy;
 
 import java.lang.foreign.MemorySegment;
@@ -175,6 +176,7 @@ public class TraderMain {
         Instrument instru1 = new Instrument();
         instru1.symbol = sym1;
         instru1.origBaseName = controlCfg.baseName;
+        instru1.exchange = controlCfg.exchange != null ? controlCfg.exchange : "";
         instru1.tickSize = tickSize;
         instru1.lotSize = lotSize;
         instru1.priceMultiplier = lotSize;
@@ -184,6 +186,7 @@ public class TraderMain {
         Instrument instru2 = new Instrument();
         instru2.symbol = sym2;
         instru2.origBaseName = controlCfg.secondName;
+        instru2.exchange = controlCfg.exchange != null ? controlCfg.exchange : "";
         instru2.tickSize = tickSize;
         instru2.lotSize = lotSize;
         instru2.priceMultiplier = lotSize;
@@ -246,10 +249,34 @@ public class TraderMain {
         logger.info("[main] daily_init 已加载: " + dailyInitPath);
 
         // ---- 设置回调 ----
-        // C++: MDcallback → strategy.MDCallBack()
-        // C++: ORScallback → strategy.ORSCallBack()
+        // C++: client->Initialize(&MDcallback, &ORScallback, &IndicatorCallBack, &AuctionCallBack, ...)
+        // Ref: main.cpp:985
         client.setMDCallback(md -> strategy.mdCallBack(md));
         client.setORSCallback(resp -> strategy.orsCallBack(resp));
+
+        // C++: IndicatorCallBack() — main.cpp:313-369
+        // 对齐 C++ 中 useArbStrategy==1 路径 (main.cpp:364-366):
+        //   configParams->m_simConfig->m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
+        // C++ 中 currPrice/targetPrice/targetBidPNL/targetAskPNL 是全局变量 (main.cpp:75):
+        //   double currPrice=0, targetPrice=0, targetBidPNL[5]={1,1,1,1,1}, targetAskPNL[5]={1,1,1,1,1}
+        // Java 中对应字段已在 PairwiseArbStrategy 构造函数中初始化为相同值。
+        final double[] indCbTargetBidPNL = {1.0, 1.0, 1.0, 1.0, 1.0}; // main.cpp:489-490
+        final double[] indCbTargetAskPNL = {1.0, 1.0, 1.0, 1.0, 1.0}; // main.cpp:489-490
+        client.setINDCallback(() -> {
+            // 迁移自: main.cpp:313-369 — IndicatorCallBack()
+            // C++: if (indicatorlist != NULL && configParams->m_simConfig->m_dateConfig.m_simActive)
+            // Ref: main.cpp:315
+            // [C++差异] Java 中没有 IndicatorList 和 m_simActive，
+            // 但 indCallback 仅在 sendINDUpdate 中 significantUpdate==true 时调用，语义等价。
+
+            // C++: if (strategyType == 1 && m_execStrategy != NULL && useArbStrategy == 1)
+            // Ref: main.cpp:364
+            // useArbStrategy==1 路径: 直接调用 SetTargetValue，不经过 CalculateTargetPNL
+            // C++: m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
+            // Ref: main.cpp:366
+            strategy.setTargetValue(0.0, 0.0, indCbTargetBidPNL, indCbTargetAskPNL);
+        });
+
         client.setSimConfigs(new SimConfig[]{simConfig1, simConfig2});
 
         // ---- Step 12: 启动 API Server (对齐 Go api.NewServer + Start) ----
@@ -262,8 +289,16 @@ public class TraderMain {
 
     /**
      * 行情回调入口 — 由 Connector 轮询线程调用。
+     * 迁移自: main.cpp:247-260 — MDcallback(MarketUpdateNew *up)
+     * C++: if (!up->m_endPkt) { ... MDCallBack(up); }
      */
     private void onMarketData(MemorySegment md) {
+        // C++: if (!up->m_endPkt)
+        // Ref: main.cpp:249
+        byte endPkt = (byte) Types.MDD_END_PKT_VH.get(md, Types.MU_DATA_OFFSET);
+        if (endPkt != 0) {
+            return; // endPkt 标志位为 true，跳过
+        }
         client.sendInfraMDUpdate(md);
     }
 
@@ -318,13 +353,19 @@ public class TraderMain {
     private void registerSignalHandlers() {
         try {
             // SIGUSR1: 激活策略
-            // C++: main.cpp:140-148 — HandleSquareON() + set m_Active = true
+            // C++: main.cpp:140-148 — 顺序: 重置标志 → active=true → HandleSquareON()
             sun.misc.Signal.handle(new sun.misc.Signal("USR1"), sig -> {
                 logger.info("[main] 收到 SIGUSR1，激活策略");
-                strategy.handleSquareON();
+                // C++: Strategy->m_onExit = false; Strategy->m_onCancel = false; Strategy->m_onFlat = false;
+                strategy.onExit = false;
+                strategy.onCancel = false;
+                strategy.onFlat = false;
+                // C++: Strategy->m_Active = true;
                 strategy.active = true;
                 strategy.firstStrat.active = true;
                 strategy.secondStrat.active = true;
+                // C++: Strategy->HandleSquareON();
+                strategy.handleSquareON();
             });
 
             // SIGUSR2: 热加载阈值
@@ -334,8 +375,14 @@ public class TraderMain {
             });
 
             // SIGTSTP: 平仓
+            // C++: main.cpp:132-138 — 顺序: 设置标志 → HandleSquareoff()
             sun.misc.Signal.handle(new sun.misc.Signal("TSTP"), sig -> {
                 logger.info("[main] 收到 SIGTSTP，平仓退出");
+                // C++: Strategy->m_onExit = true; Strategy->m_onCancel = true; Strategy->m_onFlat = true;
+                strategy.onExit = true;
+                strategy.onCancel = true;
+                strategy.onFlat = true;
+                // C++: Strategy->HandleSquareoff();
                 strategy.handleSquareoff();
             });
 
@@ -370,11 +417,14 @@ public class TraderMain {
                     logger.info("[main] 收到 Web 命令: " + cmd);
                     switch (cmd) {
                         case "activate" -> {
-                            // C++: main.cpp:140-148 — SIGUSR1 处理
-                            strategy.handleSquareON();
+                            // C++: main.cpp:140-148 — 顺序: 重置标志 → active=true → HandleSquareON()
+                            strategy.onExit = false;
+                            strategy.onCancel = false;
+                            strategy.onFlat = false;
                             strategy.active = true;
                             strategy.firstStrat.active = true;
                             strategy.secondStrat.active = true;
+                            strategy.handleSquareON();
                             logger.info("[main] 策略已通过 Web 激活");
                         }
                         case "deactivate" -> {
@@ -384,6 +434,10 @@ public class TraderMain {
                             logger.info("[main] 策略已通过 Web 停用");
                         }
                         case "squareoff" -> {
+                            // C++: main.cpp:132-138 — 顺序: 设置标志 → HandleSquareoff()
+                            strategy.onExit = true;
+                            strategy.onCancel = true;
+                            strategy.onFlat = true;
                             strategy.handleSquareoff();
                             logger.info("[main] 策略已通过 Web 平仓");
                         }

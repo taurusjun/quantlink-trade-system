@@ -70,8 +70,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
     // 迁移自: PairwiseArbStrategy.h:41-43, 54-62
     public double maxloss_limit;
     public double count;
-    public double curr_time_val;
-    public double last_time_val;
+    public double currTime;
+    public double lastTime;
     public double tValue;
     public boolean is_valid_mkdata = true;
     public int netpos_agg1;
@@ -131,8 +131,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         currSpreadRatio = 0;
         currSpreadRatio_prev = 0;
         count = 100000;
-        curr_time_val = 0;
-        last_time_val = 0;
+        currTime = 0;
+        lastTime = 0;
         second_ordIDstart = 10;
 
         // ---- LoadMatrix2 + 昨仓初始化 ----
@@ -169,11 +169,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         int netpos_agg2_val = Integer.parseInt(row.getOrDefault("ytd2", "0"));
 
         // C++: m_firstStrat->m_netpos_pass_ytd = netpos_ytd1
-        firstStrat.netpos_pass_ytd = netpos_ytd1;
+        firstStrat.netposPassYtd = netpos_ytd1;
         firstStrat.netpos = netpos_ytd1 + netpos_2day1;
-        firstStrat.netpos_pass = netpos_ytd1 + netpos_2day1;
+        firstStrat.netposPass = netpos_ytd1 + netpos_2day1;
         secondStrat.netpos = netpos_agg2_val;
-        secondStrat.netpos_agg = netpos_agg2_val;
+        secondStrat.netposAgg = netpos_agg2_val;
 
         log.info("avgSpreadRatio_ori:" + avgSpreadRatio_ori
                 + " origBaseName1:" + name1 + " netpos_ytd1:" + netpos_ytd1
@@ -230,8 +230,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             out.println(strategyID + " 0 " + avgSpreadRatio_ori
                     + " " + firstStrat.instru.origBaseName
                     + " " + secondStrat.instru.origBaseName
-                    + " " + firstStrat.netpos_pass
-                    + " " + secondStrat.netpos_agg);
+                    + " " + firstStrat.netposPass
+                    + " " + secondStrat.netposAgg);
         } catch (IOException e) {
             log.severe("Failed to save daily_init to " + filepath + ": " + e.getMessage());
         }
@@ -272,13 +272,13 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         // C++: 撤销 firstStrat 中 CROSS/MATCH 类型的订单
         for (OrderStats order : new ArrayList<>(ordMap1.values())) {
-            if (order.hitType == OrderStats.HitType.CROSS || order.hitType == OrderStats.HitType.MATCH) {
+            if (order.ordType == OrderStats.HitType.CROSS || order.ordType == OrderStats.HitType.MATCH) {
                 firstStrat.sendCancelOrder(firstinstru, order.orderID);
             }
         }
         // C++: 撤销 secondStrat 中 CROSS/MATCH 类型的订单
         for (OrderStats order : new ArrayList<>(ordMap2.values())) {
-            if (order.hitType == OrderStats.HitType.CROSS || order.hitType == OrderStats.HitType.MATCH) {
+            if (order.ordType == OrderStats.HitType.CROSS || order.ordType == OrderStats.HitType.MATCH) {
                 secondStrat.sendCancelOrder(secondinstru, order.orderID);
             }
         }
@@ -325,9 +325,9 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                     double passive_sellprice1 = firstinstru.askPx[level];
                     passive_sellprice1 = getAskPriceFirst(passive_sellprice1, level);
 
-                    if (firstStrat.netpos_pass * -1 < firstStrat.tholdAskMaxPos) {
+                    if (firstStrat.netposPass * -1 < firstStrat.tholdAskMaxPos) {
                         if (firstStrat.sellOpenOrders > firstStrat.thold.SUPPORTING_ORDERS
-                                || firstStrat.sellOpenQty + -1 * firstStrat.netpos_pass >= firstStrat.tholdAskMaxPos) {
+                                || firstStrat.sellOpenQty + -1 * firstStrat.netposPass >= firstStrat.tholdAskMaxPos) {
                             // 找最远卖单，如果新价格更优则撤销最远单
                             double askHigh1 = findHighestConfirmedAskPrice(askMap1);
                             if (!askMap1.containsKey(passive_sellprice1) && passive_sellprice1 < askHigh1) {
@@ -354,9 +354,9 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                     double passive_buyprice1 = firstinstru.bidPx[level];
                     passive_buyprice1 = getBidPriceFirst(passive_buyprice1, level);
 
-                    if (firstStrat.netpos_pass < firstStrat.tholdBidMaxPos) {
+                    if (firstStrat.netposPass < firstStrat.tholdBidMaxPos) {
                         if (firstStrat.buyOpenOrders > firstStrat.thold.SUPPORTING_ORDERS
-                                || firstStrat.buyOpenQty + firstStrat.netpos_pass >= firstStrat.tholdBidMaxPos) {
+                                || firstStrat.buyOpenQty + firstStrat.netposPass >= firstStrat.tholdBidMaxPos) {
                             double bidLow1 = findLowestConfirmedBidPrice(bidMap1);
                             if (!bidMap1.containsKey(passive_buyprice1) && passive_buyprice1 > bidLow1) {
                                 if (bidLow1 != 0) {
@@ -382,32 +382,32 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             int pending_netpos_agg2 = calcPendingNetposAgg();
             long now_ts = System.nanoTime() / 1000; // microseconds
 
-            int netExposure = firstStrat.netpos_pass + secondStrat.netpos_agg + pending_netpos_agg2;
+            int netExposure = firstStrat.netposPass + secondStrat.netposAgg + pending_netpos_agg2;
 
             if (netExposure > 0
                     && secondStrat.sellAggOrder <= firstStrat.thold.SUPPORTING_ORDERS
-                    && (secondStrat.last_agg_side != Constants.SIDE_SELL
-                    || (secondStrat.last_agg_side == Constants.SIDE_SELL
-                    && now_ts / 1000 - secondStrat.last_agg_time > 100))) {
+                    && (secondStrat.lastAggSide != Constants.SIDE_SELL
+                    || (secondStrat.lastAggSide == Constants.SIDE_SELL
+                    && now_ts / 1000 - secondStrat.lastAggTime > 100))) {
                 // 价差净多头，第二腿卖出对冲
                 secondStrat.sendAskOrder2(secondinstru, 0,
                         secondinstru.bidPx[0] - secondStrat.instru.tickSize,
                         OrderStats.HitType.CROSS, netExposure);
                 secondStrat.sellAggOrder++;
-                secondStrat.last_agg_time = now_ts / 1000;
-                secondStrat.last_agg_side = Constants.SIDE_SELL;
+                secondStrat.lastAggTime = now_ts / 1000;
+                secondStrat.lastAggSide = Constants.SIDE_SELL;
             } else if (netExposure < 0
                     && secondStrat.buyAggOrder <= firstStrat.thold.SUPPORTING_ORDERS
-                    && (secondStrat.last_agg_side != Constants.SIDE_BUY
-                    || (secondStrat.last_agg_side == Constants.SIDE_BUY
-                    && now_ts / 1000 - secondStrat.last_agg_time > 100))) {
+                    && (secondStrat.lastAggSide != Constants.SIDE_BUY
+                    || (secondStrat.lastAggSide == Constants.SIDE_BUY
+                    && now_ts / 1000 - secondStrat.lastAggTime > 100))) {
                 // 价差净空头，第二腿买入对冲
                 secondStrat.sendBidOrder2(secondinstru, 0,
                         secondinstru.askPx[0] + secondStrat.instru.tickSize,
                         OrderStats.HitType.CROSS, -netExposure);
                 secondStrat.buyAggOrder++;
-                secondStrat.last_agg_time = now_ts / 1000;
-                secondStrat.last_agg_side = Constants.SIDE_BUY;
+                secondStrat.lastAggTime = now_ts / 1000;
+                secondStrat.lastAggSide = Constants.SIDE_BUY;
             }
         }
     }
@@ -427,18 +427,18 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         int pending_netpos_agg2 = calcPendingNetposAgg();
         long now_ts = System.nanoTime() / 1000; // microseconds
-        int netExposure = firstStrat.netpos_pass + secondStrat.netpos_agg + pending_netpos_agg2;
+        int netExposure = firstStrat.netposPass + secondStrat.netposAgg + pending_netpos_agg2;
 
         if (netExposure > 0 && secondStrat.sellAggOrder <= secondStrat.thold.SUPPORTING_ORDERS) {
-            if (secondStrat.last_agg_side != Constants.SIDE_SELL
-                    || (secondStrat.last_agg_side == Constants.SIDE_SELL
-                    && now_ts / 1000 - secondStrat.last_agg_time > 500)) {
+            if (secondStrat.lastAggSide != Constants.SIDE_SELL
+                    || (secondStrat.lastAggSide == Constants.SIDE_SELL
+                    && now_ts / 1000 - secondStrat.lastAggTime > 500)) {
                 // 首次或超过500ms，按市场行情发单
                 secondStrat.sendAskOrder2(secondinstru, 0,
                         secondinstru.bidPx[0], OrderStats.HitType.CROSS, netExposure);
                 secondStrat.sellAggOrder++;
-                secondStrat.last_agg_time = now_ts / 1000;
-                secondStrat.last_agg_side = Constants.SIDE_SELL;
+                secondStrat.lastAggTime = now_ts / 1000;
+                secondStrat.lastAggSide = Constants.SIDE_SELL;
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
@@ -453,20 +453,20 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                     if (ret) {
                         agg_repeat++;
                         secondStrat.sellAggOrder++;
-                        secondStrat.last_agg_time = now_ts / 1000;
-                        secondStrat.last_agg_side = Constants.SIDE_SELL;
+                        secondStrat.lastAggTime = now_ts / 1000;
+                        secondStrat.lastAggSide = Constants.SIDE_SELL;
                     }
                 }
             }
         } else if (netExposure < 0 && secondStrat.buyAggOrder <= secondStrat.thold.SUPPORTING_ORDERS) {
-            if (secondStrat.last_agg_side != Constants.SIDE_BUY
-                    || (secondStrat.last_agg_side == Constants.SIDE_BUY
-                    && now_ts / 1000 - secondStrat.last_agg_time > 500)) {
+            if (secondStrat.lastAggSide != Constants.SIDE_BUY
+                    || (secondStrat.lastAggSide == Constants.SIDE_BUY
+                    && now_ts / 1000 - secondStrat.lastAggTime > 500)) {
                 secondStrat.sendBidOrder2(secondinstru, 0,
                         secondinstru.askPx[0], OrderStats.HitType.CROSS, -netExposure);
                 secondStrat.buyAggOrder++;
-                secondStrat.last_agg_time = now_ts / 1000;
-                secondStrat.last_agg_side = Constants.SIDE_BUY;
+                secondStrat.lastAggTime = now_ts / 1000;
+                secondStrat.lastAggSide = Constants.SIDE_BUY;
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
@@ -480,8 +480,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                     if (ret) {
                         agg_repeat++;
                         secondStrat.buyAggOrder++;
-                        secondStrat.last_agg_time = now_ts / 1000;
-                        secondStrat.last_agg_side = Constants.SIDE_BUY;
+                        secondStrat.lastAggTime = now_ts / 1000;
+                        secondStrat.lastAggSide = Constants.SIDE_BUY;
                     }
                 }
             }
@@ -505,10 +505,10 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             firstStrat.tholdBeginPos = thold_first.BEGIN_SIZE;
             firstStrat.tholdSize = thold_first.SIZE;
 
-            firstStrat.tholdBidSize = thold.BID_SIZE;
-            firstStrat.tholdBidMaxPos = thold.BID_MAX_SIZE;
-            firstStrat.tholdAskSize = thold.ASK_SIZE;
-            firstStrat.tholdAskMaxPos = thold.ASK_MAX_SIZE;
+            firstStrat.tholdBidSize = thold_first.BID_SIZE;
+            firstStrat.tholdBidMaxPos = thold_first.BID_MAX_SIZE;
+            firstStrat.tholdAskSize = thold_first.ASK_SIZE;
+            firstStrat.tholdAskMaxPos = thold_first.ASK_MAX_SIZE;
         } else {
             firstStrat.tholdMaxPos = (int) (thold_first.MAX_SIZE * firstinstru.lotSize);
             firstStrat.tholdBeginPos = (int) (thold_first.BEGIN_SIZE * firstinstru.lotSize);
@@ -521,23 +521,23 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         double longRemoveDiff = thold_first.LONG_REMOVE - thold_first.BEGIN_REMOVE;
         double shortRemoveDiff = thold_first.BEGIN_REMOVE - thold_first.SHORT_REMOVE;
 
-        if (firstStrat.netpos_pass == 0) {
+        if (firstStrat.netposPass == 0) {
             firstStrat.tholdBidPlace = thold_first.BEGIN_PLACE;
             firstStrat.tholdBidRemove = thold_first.BEGIN_REMOVE;
             firstStrat.tholdAskPlace = thold_first.BEGIN_PLACE;
             firstStrat.tholdAskRemove = thold_first.BEGIN_REMOVE;
-        } else if (firstStrat.netpos_pass > 0) {
+        } else if (firstStrat.netposPass > 0) {
             // C++: m_tholdBidPlace = BEGIN_PLACE + longPlaceDiff * netpos_pass / tholdMaxPos
-            firstStrat.tholdBidPlace = thold_first.BEGIN_PLACE + longPlaceDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdBidRemove = thold_first.BEGIN_REMOVE + longRemoveDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdAskPlace = thold_first.BEGIN_PLACE - shortPlaceDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdAskRemove = thold_first.BEGIN_REMOVE - shortRemoveDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
+            firstStrat.tholdBidPlace = thold_first.BEGIN_PLACE + longPlaceDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdBidRemove = thold_first.BEGIN_REMOVE + longRemoveDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdAskPlace = thold_first.BEGIN_PLACE - shortPlaceDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdAskRemove = thold_first.BEGIN_REMOVE - shortRemoveDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
         } else {
             // netpos_pass < 0
-            firstStrat.tholdBidPlace = thold_first.BEGIN_PLACE + shortPlaceDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdBidRemove = thold_first.BEGIN_REMOVE + shortRemoveDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdAskPlace = thold_first.BEGIN_PLACE - longPlaceDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
-            firstStrat.tholdAskRemove = thold_first.BEGIN_REMOVE - longRemoveDiff * firstStrat.netpos_pass / firstStrat.tholdMaxPos;
+            firstStrat.tholdBidPlace = thold_first.BEGIN_PLACE + shortPlaceDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdBidRemove = thold_first.BEGIN_REMOVE + shortRemoveDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdAskPlace = thold_first.BEGIN_PLACE - longPlaceDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
+            firstStrat.tholdAskRemove = thold_first.BEGIN_REMOVE - longRemoveDiff * firstStrat.netposPass / firstStrat.tholdMaxPos;
         }
     }
 
@@ -603,6 +603,9 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         secondStrat.mdCallBack(update);
 
         // C++: 计算当前价差
+        // C++: if (firstBid <= 0 || firstAsk <= 0 || secondBid <= 0 && secondAsk <= 0)
+        // 注意: C++/Java 中 && 优先级高于 ||，所以 second leg 需要 bid AND ask 都 <= 0 才跳过。
+        // 这是 C++ 原代码行为，保持一致。Ref: PairwiseArbStrategy.cpp:496
         if (firstStrat.instru.bidPx[0] <= 0 || firstStrat.instru.askPx[0] <= 0
                 || secondStrat.instru.bidPx[0] <= 0 && secondStrat.instru.askPx[0] <= 0) {
             // currSpreadRatio 不变
@@ -763,7 +766,7 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
     public int calcPendingNetposAgg() {
         int netpos_agg_pending = 0;
         for (OrderStats order : ordMap2.values()) {
-            if (order.hitType == OrderStats.HitType.CROSS || order.hitType == OrderStats.HitType.MATCH) {
+            if (order.ordType == OrderStats.HitType.CROSS || order.ordType == OrderStats.HitType.MATCH) {
                 if (order.side == Constants.SIDE_BUY) {
                     netpos_agg_pending += order.openQty;
                 } else {
@@ -808,18 +811,75 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
      * 获取第一腿买价（考虑隐藏订单簿优化）。
      * 迁移自: PairwiseArbStrategy::GetBidPrice_first(double&, OrderHitType&, int32_t&)
      * Ref: PairwiseArbStrategy.cpp:802-820
+     *
+     * 逻辑:
+     * 1. 检测 bidPx[level] 与 bidPx[level-1] 之间是否有超过 1 tick 的间隙
+     * 2. 计算假设上移 1 tick 后的 spread（bidInv）
+     * 3. 如果 bidInv 仍满足 BEGIN_PLACE 阈值且当前档位有 quantAhead > lotSize，则上移 1 tick
      */
     public double getBidPriceFirst(double price, int level) {
-        // C++: 简化版 — 不含 invisible book 逻辑（configParams.bUseInvisibleBook 未迁移）
+        // C++: price = m_firstStrat->m_instru->bidPx[level];
+        // (price 已由调用方设置为 firstinstru.bidPx[level])
+
+        // C++: if (m_configParams->m_bUseInvisibleBook && level != 0
+        //      && price < m_firstStrat->m_instru->bidPx[level - 1] - m_firstStrat->m_instru->m_tickSize)
+        if (configParams.bUseInvisibleBook && level != 0
+                && price < firstStrat.instru.bidPx[level - 1] - firstStrat.instru.tickSize) {
+            // C++: double bidInv = m_firstStrat->m_instru->bidPx[level] - m_secondStrat->m_instru->bidPx[0]
+            //                    + m_firstStrat->m_instru->m_tickSize;
+            double bidInv = firstStrat.instru.bidPx[level] - secondStrat.instru.bidPx[0]
+                    + firstStrat.instru.tickSize;
+
+            // C++: if (bidInv <= avgSpreadRatio - m_firstStrat->m_thold->BEGIN_PLACE)
+            if (bidInv <= avgSpreadRatio - firstStrat.thold.BEGIN_PLACE) {
+                // C++: PriceMapIter iter = m_bidMap1.find(price);
+                OrderStats existing = bidMap1.get(price);
+                // C++: if (iter != m_bidMap1.end() && iter->second->m_quantAhead > m_firstinstru->m_lotSize)
+                if (existing != null && existing.quantAhead > firstinstru.lotSize) {
+                    log.fine("1st One"); // C++: TBLOG << "1st One" << endl;
+                    // C++: price = m_firstStrat->m_instru->bidPx[level] + m_firstStrat->m_instru->m_tickSize;
+                    price = firstStrat.instru.bidPx[level] + firstStrat.instru.tickSize;
+                }
+            }
+        }
         return price;
     }
 
     /**
-     * 获取第一腿卖价。
+     * 获取第一腿卖价（考虑隐藏订单簿优化）。
      * 迁移自: PairwiseArbStrategy::GetAskPrice_first(double&, OrderHitType&, int32_t&)
      * Ref: PairwiseArbStrategy.cpp:822-840
+     *
+     * 逻辑:
+     * 1. 检测 askPx[level] 与 askPx[level-1] 之间是否有超过 1 tick 的间隙
+     * 2. 计算假设下移 1 tick 后的 spread（askInv）
+     * 3. 如果 askInv 仍满足 BEGIN_PLACE 阈值且当前档位有 quantAhead > lotSize，则下移 1 tick
      */
     public double getAskPriceFirst(double price, int level) {
+        // C++: price = m_firstStrat->m_instru->askPx[level];
+        // (price 已由调用方设置为 firstinstru.askPx[level])
+
+        // C++: if (m_configParams->m_bUseInvisibleBook && level != 0
+        //      && price > m_firstStrat->m_instru->askPx[level - 1] + m_firstStrat->m_instru->m_tickSize)
+        if (configParams.bUseInvisibleBook && level != 0
+                && price > firstStrat.instru.askPx[level - 1] + firstStrat.instru.tickSize) {
+            // C++: double askInv = m_firstStrat->m_instru->askPx[level] - m_secondStrat->m_instru->askPx[0]
+            //                    - m_firstStrat->m_instru->m_tickSize;
+            double askInv = firstStrat.instru.askPx[level] - secondStrat.instru.askPx[0]
+                    - firstStrat.instru.tickSize;
+
+            // C++: if (askInv >= avgSpreadRatio + m_firstStrat->m_thold->BEGIN_PLACE)
+            if (askInv >= avgSpreadRatio + firstStrat.thold.BEGIN_PLACE) {
+                // C++: PriceMapIter iter = m_askMap1.find(price);
+                OrderStats existing = askMap1.get(price);
+                // C++: if (iter != m_askMap1.end() && iter->second->m_quantAhead > m_firstinstru->m_lotSize)
+                if (existing != null && existing.quantAhead > firstinstru.lotSize) {
+                    log.fine("2nd One"); // C++: TBLOG << "2nd One" << endl;
+                    // C++: price = m_firstStrat->m_instru->askPx[level] - m_firstStrat->m_instru->m_tickSize;
+                    price = firstStrat.instru.askPx[level] - firstStrat.instru.tickSize;
+                }
+            }
+        }
         return price;
     }
 
@@ -907,9 +967,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         try {
             // C++: m_tcache->store(std::to_string(m_strategyID) + "_pos_" + std::string(m_firstinstru->m_instrument), m_firstStrat->m_netpos_pass);
             String key = strategyID + "_pos_" + firstinstru.origBaseName;
-            int pos = firstStrat.netpos_pass;
+            int pos = firstStrat.netposPass;
             log.info("Write Pos:" + key + " pos:" + firstinstru.origBaseName + " netPos:" + pos);
-            // TODO: 实现 TCache 写入（当 Java 版 TCache 可用时）
+            // [C++差异-用户确认] TCache 为独立模块，不在当前策略迁移范围内。
+            // 当 Java 版 TCache 可用时，在此处调用 tcache.store(key, pos)。
+            // 参见 PairwiseArbStrategy.cpp:1320
         } catch (Exception e) {
             log.warning("Write Pos failed:" + e.getMessage());
         }
@@ -957,7 +1019,7 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
     public String toString() {
         return String.format("PairwiseArbStrategy[id=%d, spread=%.4f, avg=%.4f, firstNetpos=%d, secondNetpos=%d]",
                 strategyID, currSpreadRatio, avgSpreadRatio,
-                firstStrat != null ? firstStrat.netpos_pass : 0,
-                secondStrat != null ? secondStrat.netpos_agg : 0);
+                firstStrat != null ? firstStrat.netposPass : 0,
+                secondStrat != null ? secondStrat.netposAgg : 0);
     }
 }

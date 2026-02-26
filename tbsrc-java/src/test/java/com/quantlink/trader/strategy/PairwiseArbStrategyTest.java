@@ -139,19 +139,19 @@ class PairwiseArbStrategyTest {
 
         assertEquals(10.5, strat.avgSpreadRatio_ori, 0.001);
         assertEquals(10.5, strat.avgSpreadRatio, 0.001);
-        assertEquals(3, strat.firstStrat.netpos_pass_ytd);
+        assertEquals(3, strat.firstStrat.netposPassYtd);
         assertEquals(3, strat.firstStrat.netpos);
-        assertEquals(3, strat.firstStrat.netpos_pass);
+        assertEquals(3, strat.firstStrat.netposPass);
         assertEquals(-3, strat.secondStrat.netpos);
-        assertEquals(-3, strat.secondStrat.netpos_agg);
+        assertEquals(-3, strat.secondStrat.netposAgg);
     }
 
     @Test
     void test_saveMatrix2(@TempDir Path tempDir) throws Exception {
         strategy.strategyID = 92201;
         strategy.avgSpreadRatio_ori = 10.5;
-        strategy.firstStrat.netpos_pass = 3;
-        strategy.secondStrat.netpos_agg = -3;
+        strategy.firstStrat.netposPass = 3;
+        strategy.secondStrat.netposAgg = -3;
 
         Path file = tempDir.resolve("daily_init.92201");
         strategy.saveMatrix2(file.toString());
@@ -168,7 +168,7 @@ class PairwiseArbStrategyTest {
         strategy.secondinstru = instru2;
         strategy.thold_first = simConfig.thresholdSet;
         strategy.thold_second = simConfig.thresholdSet;
-        strategy.firstStrat.netpos_pass = 0;
+        strategy.firstStrat.netposPass = 0;
 
         strategy.setThresholds();
 
@@ -185,7 +185,7 @@ class PairwiseArbStrategyTest {
         strategy.thold_first = simConfig.thresholdSet;
         strategy.thold_second = simConfig.thresholdSet;
         strategy.firstStrat.tholdMaxPos = 10;
-        strategy.firstStrat.netpos_pass = 5;
+        strategy.firstStrat.netposPass = 5;
 
         strategy.setThresholds();
 
@@ -204,7 +204,7 @@ class PairwiseArbStrategyTest {
         strategy.thold_first = simConfig.thresholdSet;
         strategy.thold_second = simConfig.thresholdSet;
         strategy.firstStrat.tholdMaxPos = 10;
-        strategy.firstStrat.netpos_pass = -5;
+        strategy.firstStrat.netposPass = -5;
 
         strategy.setThresholds();
 
@@ -221,7 +221,7 @@ class PairwiseArbStrategyTest {
         // 添加 CROSS 买单到 ordMap2
         OrderStats buy = new OrderStats();
         buy.side = Constants.SIDE_BUY;
-        buy.hitType = OrderStats.HitType.CROSS;
+        buy.ordType = OrderStats.HitType.CROSS;
         buy.openQty = 3;
         buy.orderID = 101;
         strategy.ordMap2.put(101, buy);
@@ -229,7 +229,7 @@ class PairwiseArbStrategyTest {
         // 添加 CROSS 卖单
         OrderStats sell = new OrderStats();
         sell.side = Constants.SIDE_SELL;
-        sell.hitType = OrderStats.HitType.CROSS;
+        sell.ordType = OrderStats.HitType.CROSS;
         sell.openQty = 2;
         sell.orderID = 102;
         strategy.ordMap2.put(102, sell);
@@ -237,7 +237,7 @@ class PairwiseArbStrategyTest {
         // 添加 STANDARD 单（不计入）
         OrderStats std = new OrderStats();
         std.side = Constants.SIDE_BUY;
-        std.hitType = OrderStats.HitType.STANDARD;
+        std.ordType = OrderStats.HitType.STANDARD;
         std.openQty = 5;
         std.orderID = 103;
         strategy.ordMap2.put(103, std);
