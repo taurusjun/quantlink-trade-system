@@ -1,5 +1,5 @@
 ---
-name: live-test
+name: live-test-go
 description: 启动 CTP 实盘测试的完整流程。编译部署、启动网关、启动策略、检查日志。
 ---
 
