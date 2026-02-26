@@ -45,6 +45,21 @@ public class Instrument {
     public final double[] askOrderCount = new double[20];
     public int bookDepth = 20;
 
+    // ---- StratBook 档位 ----
+    // 迁移自: Instrument.h — bidPxStrat[20], askPxStrat[20], bidQtyStrat[20], askQtyStrat[20]
+    // C++ 用于 UseStratBook 模式下的策略内部订单簿
+    public final double[] bidPxStrat = new double[20];
+    public final double[] askPxStrat = new double[20];
+    public final double[] bidQtyStrat = new double[20];
+    public final double[] askQtyStrat = new double[20];
+    public final double[] bidOrderCountStrat = new double[20];
+    public final double[] askOrderCountStrat = new double[20];
+
+    // ---- 有效档位数 ----
+    // 迁移自: Instrument.h — m_validBids, m_validAsks
+    public int validBids = 20;
+    public int validAsks = 20;
+
     // ---- 成交数据 ----
     // 迁移自: Instrument.h — lastTradePx, lastTradeqty, totalTradedQty 等
     public double lastTradePx;

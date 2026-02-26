@@ -49,6 +49,19 @@ public class ExtraStrategy extends ExecutionStrategy {
         super.mdCallBack(update);
     }
 
+    /**
+     * 初始化监控策略数据 — 上报当前持仓。
+     * 迁移自: ExtraStrategy::InitMonitorStratDatas()
+     * Ref: ExtraStrategy.cpp:12-17
+     */
+    public void initMonitorStratDatas() {
+        // C++: SendMonitorStratPos(m_product, m_strategyID, m_instru->m_instrument, m_buyPrice, m_sellPrice,
+        //        m_buyAvgPrice, m_sellAvgPrice, m_buyQty, m_sellQty, m_buyTotalQty, m_sellTotalQty, m_netpos_pass);
+        sendMonitorStratPos(product, strategyID, instru.origBaseName,
+                buyPrice, sellPrice, buyAvgPrice, sellAvgPrice,
+                buyQty, sellQty, buyTotalQty, sellTotalQty, netpos_pass);
+    }
+
     // =======================================================================
     //  Instrument 参数化订单方法
     // =======================================================================

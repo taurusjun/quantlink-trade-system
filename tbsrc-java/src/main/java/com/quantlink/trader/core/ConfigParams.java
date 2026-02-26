@@ -76,6 +76,14 @@ public class ConfigParams {
     public int optionStrategy = 0;
     public boolean sweepStrategy = false;
 
+    // ---- 订单簿模式 ----
+    // 迁移自: ConfigParams — m_bUseInvisibleBook, m_bUseStratBook, m_bCrossBook, m_bCrossBook2, m_bCrossBookEnd
+    public boolean bUseInvisibleBook = false;
+    public boolean bUseStratBook = false;
+    public boolean bCrossBook = false;
+    public boolean bCrossBook2 = false;
+    public boolean bCrossBookEnd = false;
+
     // ---- 产品标识（eric625） ----
     // 迁移自: ConfigParams::m_product
     public String product = "";

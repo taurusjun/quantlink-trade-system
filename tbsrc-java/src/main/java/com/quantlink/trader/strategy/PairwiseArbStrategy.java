@@ -79,6 +79,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
     public int agg_repeat = 1;  // C++: m_agg_repeat{1}
     public double second_ordIDstart;
 
+    // ---- Overview 页面所需的元数据（由 TraderMain 初始化后赋值） ----
+    public String modelFile = "";       // 模型文件名（从 ControlConfig.modelFile 获取）
+    public String strategyType = "";    // 策略类型（从 ControlConfig.execStrat 获取，如 TB_PAIR_STRAT）
+    public String controlFilePath = ""; // 控制文件路径
+
     /**
      * 构造函数。
      * 迁移自: PairwiseArbStrategy::PairwiseArbStrategy(CommonClient*, SimConfig*)
@@ -637,7 +642,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         is_valid_mkdata = true;
 
         // C++: 时间限制检查 — endTimeAggEpoch / endTimeEpoch
-        long currentTime = System.nanoTime();
+        // C++: Watch::GetUniqueInstance()->GetCurrentTime() 返回交易所时间戳（纳秒 epoch）
+        // [C++差异] C++ 使用全局 Watch 单例的 GetCurrentTime()，
+        // Java 使用 exchTS（从行情数据 MDHeader.m_exchTS 读取），语义等价
+        // Ref: PairwiseArbStrategy.cpp:547, ExecutionStrategy.cpp:2152
+        long currentTime = exchTS;
         if (currentTime >= endTimeAggEpoch && !aggFlat) {
             aggFlat = true;
             onExit = true;
@@ -654,6 +663,59 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             log.warning("END TIME limit reached. Square off called.");
             handleSquareoff();
         }
+    }
+
+    // =======================================================================
+    //  HandleSquareON — 激活策略
+    // =======================================================================
+
+    /**
+     * 激活策略 — 重置退出标志 + 用当前 spread 重新初始化 avgSpreadRatio。
+     * 迁移自: PairwiseArbStrategy::HandleSquareON()
+     * Ref: PairwiseArbStrategy.cpp:571-584, main.cpp:140-148
+     *
+     * C++ HandleSquareON 重置 onExit/onCancel/onFlat/aggFlat 标志。
+     * Java 额外增加: 将 avgSpreadRatio_ori 重置为当前 spread，
+     * 避免 daily_init 中的旧 avgPx 导致 AVG_SPREAD_AWAY 立即触发 deactivate。
+     */
+    public void handleSquareON() {
+        // C++: ExecutionStrategy::HandleSquareON()
+        // Ref: ExecutionStrategy.h:47-51
+        onExit = false;
+        onCancel = false;
+        onFlat = false;
+        aggFlat = false;
+
+        // C++: m_agg_repeat = 1
+        agg_repeat = 1;
+
+        // C++: 重置双腿标志
+        firstStrat.onExit = false;
+        firstStrat.onCancel = false;
+        firstStrat.onFlat = false;
+        secondStrat.onExit = false;
+        secondStrat.onCancel = false;
+        secondStrat.onFlat = false;
+
+        // [C++差异] C++ HandleSquareON 不重置 avgSpreadRatio，
+        // 但 C++ 正常运行时 daily_init 的 avgPx 是前一交易日收盘时保存的正确值。
+        // Java 在开发/测试阶段 daily_init 可能包含过时的 avgPx，
+        // 导致 AVG_SPREAD_AWAY 检查在 activate 后立即触发 deactivate。
+        // 因此在 activate 时用当前实时 spread 重新初始化 avgSpreadRatio_ori。
+        double bid1 = firstStrat.instru.bidPx[0];
+        double ask1 = firstStrat.instru.askPx[0];
+        double bid2 = secondStrat.instru.bidPx[0];
+        double ask2 = secondStrat.instru.askPx[0];
+        if (bid1 > 0 && ask1 > 0 && bid2 > 0 && ask2 > 0) {
+            double liveSpread = ((bid1 + ask1) / 2) - ((bid2 + ask2) / 2);
+            double oldAvg = avgSpreadRatio_ori;
+            avgSpreadRatio_ori = liveSpread;
+            avgSpreadRatio = avgSpreadRatio_ori + tValue;
+            log.info(String.format("[HandleSquareON] avgSpreadRatio 重置: %.4f → %.4f (liveSpread=%.4f tValue=%.4f)",
+                oldAvg, avgSpreadRatio, liveSpread, tValue));
+        }
+
+        log.info("[HandleSquareON] 策略已激活, onExit=false aggFlat=false");
     }
 
     // =======================================================================
@@ -759,6 +821,98 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
      */
     public double getAskPriceFirst(double price, int level) {
         return price;
+    }
+
+    /**
+     * 获取第二腿买价（含隐藏订单簿逻辑）。
+     * 迁移自: PairwiseArbStrategy::GetBidPrice_second(double &price, OrderHitType &ordType, int32_t &level)
+     * Ref: PairwiseArbStrategy.cpp:842-861
+     *
+     * [C++差异] C++ 使用引用参数返回 price/ordType/level，Java 使用 double[1] 包装器。
+     *
+     * @param priceRef  priceRef[0] = 输出第二腿买价
+     * @param ordTypeRef ordTypeRef[0] = 输出订单类型
+     * @param levelRef  levelRef[0] = 输入 level
+     */
+    public void getBidPriceSecond(double[] priceRef, OrderStats.HitType[] ordTypeRef, int[] levelRef) {
+        int level = levelRef[0];
+        // C++: price = m_secondStrat->m_instru->bidPx[level];
+        priceRef[0] = secondStrat.instru.bidPx[level];
+
+        // C++: if (m_configParams->m_bUseInvisibleBook && level != 0 && price < m_secondStrat->m_instru->bidPx[level - 1] - m_secondStrat->m_instru->m_tickSize)
+        if (configParams.bUseInvisibleBook && level != 0
+                && priceRef[0] < secondStrat.instru.bidPx[level - 1] - secondStrat.instru.tickSize) {
+            // C++: double bidInv = m_firstStrat->m_instru->bidPx[0] - m_secondStrat->m_instru->bidPx[level] - m_secondStrat->m_instru->m_tickSize;
+            double bidInv = firstStrat.instru.bidPx[0] - secondStrat.instru.bidPx[level] - secondStrat.instru.tickSize;
+
+            // C++: if (bidInv >= avgSpreadRatio + m_secondStrat->m_thold->BEGIN_PLACE)
+            if (bidInv >= avgSpreadRatio + secondStrat.thold.BEGIN_PLACE) {
+                // C++: PriceMapIter iter = m_bidMap2.find(price);
+                OrderStats existing = bidMap2.get(priceRef[0]);
+                // C++: if (iter != m_bidMap2.end() && iter->second->m_quantAhead > m_secondinstru->m_lotSize)
+                if (existing != null && existing.quantAhead > secondinstru.lotSize) {
+                    log.fine("3rd One"); // C++: TBLOG << "3rd One" << endl;
+                    // C++: price = m_secondStrat->m_instru->bidPx[level] + m_secondStrat->m_instru->m_tickSize;
+                    priceRef[0] = secondStrat.instru.bidPx[level] + secondStrat.instru.tickSize;
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取第二腿卖价（含隐藏订单簿逻辑）。
+     * 迁移自: PairwiseArbStrategy::GetAskPrice_second(double &price, OrderHitType &ordType, int32_t &level)
+     * Ref: PairwiseArbStrategy.cpp:863-883
+     *
+     * @param priceRef  priceRef[0] = 输出第二腿卖价
+     * @param ordTypeRef ordTypeRef[0] = 输出订单类型
+     * @param levelRef  levelRef[0] = 输入 level
+     */
+    public void getAskPriceSecond(double[] priceRef, OrderStats.HitType[] ordTypeRef, int[] levelRef) {
+        int level = levelRef[0];
+        // C++: price = m_secondStrat->m_instru->askPx[level];
+        priceRef[0] = secondStrat.instru.askPx[level];
+
+        // C++: if (m_configParams->m_bUseInvisibleBook && level != 0 && price > m_secondStrat->m_instru->askPx[level - 1] + m_secondStrat->m_instru->m_tickSize)
+        if (configParams.bUseInvisibleBook && level != 0
+                && priceRef[0] > secondStrat.instru.askPx[level - 1] + secondStrat.instru.tickSize) {
+            // C++: double askInv = m_firstStrat->m_instru->askPx[0] - m_secondStrat->m_instru->askPx[level] + m_instru->m_tickSize;
+            double askInv = firstStrat.instru.askPx[0] - secondStrat.instru.askPx[level] + instru.tickSize;
+
+            // C++: if (askInv <= avgSpreadRatio - m_secondStrat->m_thold->BEGIN_PLACE)
+            if (askInv <= avgSpreadRatio - secondStrat.thold.BEGIN_PLACE) {
+                // C++: PriceMapIter iter = m_askMap2.find(price);
+                OrderStats existing = askMap2.get(priceRef[0]);
+                // C++: if (iter != m_askMap2.end() && iter->second->m_quantAhead > m_secondinstru->m_lotSize)
+                if (existing != null && existing.quantAhead > secondinstru.lotSize) {
+                    log.fine("4th One"); // C++: TBLOG << "4th One" << endl;
+                    // C++: price = m_secondStrat->m_instru->askPx[level] - m_secondStrat->m_instru->m_tickSize;
+                    priceRef[0] = secondStrat.instru.askPx[level] - secondStrat.instru.tickSize;
+                }
+            }
+        }
+    }
+
+    /**
+     * 发送第一腿持仓到 TCache（共享变量缓存）。
+     * 迁移自: PairwiseArbStrategy::SendTCacheLeg1Pos()
+     * Ref: PairwiseArbStrategy.cpp:885-900
+     *
+     * [C++差异] C++ 使用 TCache（共享内存 KV store），Java 暂用日志输出占位。
+     * TCache 功能需要后续实现对应的 Java 版本。
+     */
+    public void sendTCacheLeg1Pos() {
+        // C++: if (!m_tcache) return;
+        // [C++差异] Java 版本暂不实现 TCache 写入，仅记录日志
+        try {
+            // C++: m_tcache->store(std::to_string(m_strategyID) + "_pos_" + std::string(m_firstinstru->m_instrument), m_firstStrat->m_netpos_pass);
+            String key = strategyID + "_pos_" + firstinstru.origBaseName;
+            int pos = firstStrat.netpos_pass;
+            log.info("Write Pos:" + key + " pos:" + firstinstru.origBaseName + " netPos:" + pos);
+            // TODO: 实现 TCache 写入（当 Java 版 TCache 可用时）
+        } catch (Exception e) {
+            log.warning("Write Pos failed:" + e.getMessage());
+        }
     }
 
     // =======================================================================
