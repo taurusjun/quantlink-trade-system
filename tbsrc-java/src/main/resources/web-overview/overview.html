@@ -330,23 +330,38 @@
 
             <!-- ③ Account Table -->
             <div class="panel">
-                <div class="panel-header">Account Table</div>
+                <div class="panel-header">
+                    Account Table
+                    <span class="badge">{{ overview.accounts ? overview.accounts.length : 0 }}</span>
+                </div>
                 <div class="panel-body">
                     <table>
                         <thead>
                             <tr>
-                                <th>Pro</th>
-                                <th>Ex</th>
+                                <th>Broker</th>
+                                <th>AccountID</th>
                                 <th>TotalAsset</th>
                                 <th>AvailCash</th>
                                 <th>Margin</th>
                                 <th>Risk(%)</th>
+                                <th>ClosePnL</th>
+                                <th>PosPnL</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr>
-                                <td colspan="6" style="text-align:center;color:#999;padding:20px;">
-                                    TODO: CTP 资金查询
+                            <tr v-for="(a, i) in (overview.accounts || [])" :key="'acct-'+i">
+                                <td>{{ a.broker }}</td>
+                                <td>{{ a.account_id }}</td>
+                                <td>{{ fmtMoney(a.total_asset) }}</td>
+                                <td>{{ fmtMoney(a.avail_cash) }}</td>
+                                <td>{{ fmtMoney(a.margin) }}</td>
+                                <td :class="a.risk_percent > 50 ? 'pnl-negative' : ''">{{ a.risk_percent.toFixed(1) }}%</td>
+                                <td :class="pnlClass(a.close_profit)">{{ fmtMoney(a.close_profit) }}</td>
+                                <td :class="pnlClass(a.position_profit)">{{ fmtMoney(a.position_profit) }}</td>
+                            </tr>
+                            <tr v-if="!overview.accounts || overview.accounts.length === 0">
+                                <td colspan="8" style="text-align:center;color:#999;padding:20px;">
+                                    Waiting for counter_bridge...
                                 </td>
                             </tr>
                         </tbody>
@@ -531,7 +546,8 @@ createApp({
             positions: [],
             orders: [],
             fills: [],
-            spread_trades: []
+            spread_trades: [],
+            accounts: []
         });
 
         const wsConnected = ref(false);
@@ -697,6 +713,11 @@ createApp({
             }
         }
 
+        function fmtMoney(val) {
+            if (val == null || val === 0) return '0.00';
+            return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
         function showToast(msg, type = 'toast-success') {
             if (toastTimer) clearTimeout(toastTimer);
             toast.value = { show: true, msg, type };
@@ -755,7 +776,7 @@ createApp({
             orderStrategyOptions, orderSymbolOptions, filteredOrders,
             posProductOptions, posSymbolOptions, filteredPositions,
             clearFilters, statusLabel, posClass, pnlClass,
-            shortModelFile, formatTime,
+            shortModelFile, formatTime, fmtMoney,
             sendCmd, stopAll, cxlAll, openDashboard
         };
     }

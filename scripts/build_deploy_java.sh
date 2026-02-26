@@ -278,15 +278,15 @@ else
     echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (CTP, queue=${QUEUE_SIZE})"
 fi
 
-# 2. Counter Bridge
+# 2. Counter Bridge (HTTP :8082 — /account, /health)
 if [ "$MODE" = "sim" ]; then
     ./bin/counter_bridge simulator:config/simulator.yaml > "log/counter_bridge.${DATE}.log" 2>&1 &
     sleep 1
-    echo -e "${GREEN}[INFO]${NC} Counter Bridge (Simulator)"
+    echo -e "${GREEN}[INFO]${NC} Counter Bridge (Simulator, HTTP :8082)"
 else
     ./bin/counter_bridge ctp:"$CTP_TD_CONFIG" > "log/counter_bridge.${DATE}.log" 2>&1 &
     sleep 2
-    echo -e "${GREEN}[INFO]${NC} Counter Bridge (CTP)"
+    echo -e "${GREEN}[INFO]${NC} Counter Bridge (CTP, HTTP :8082)"
 fi
 
 # 3. Java OverviewServer (端口 8080)

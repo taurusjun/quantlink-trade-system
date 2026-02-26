@@ -399,10 +399,54 @@ void HandleSimulatorAccount(const httplib::Request& /*req*/, httplib::Response& 
     res.set_content(json.str(), "application/json");
 }
 
-void StartHTTPServer(int port = 8080) {
+// Generic /account endpoint — works with any broker plugin (CTP or Simulator)
+void HandleAccount(const httplib::Request& /*req*/, httplib::Response& res) {
+    // Find first available (logged-in) broker plugin
+    ITDPlugin* plugin = nullptr;
+    std::string broker_name;
+    for (auto& [name, broker] : g_brokers) {
+        if (broker && broker->IsLoggedIn()) {
+            plugin = broker.get();
+            broker_name = name;
+            break;
+        }
+    }
+
+    if (!plugin) {
+        res.set_content("{\"success\":false,\"error\":\"No broker plugin available\"}", "application/json");
+        return;
+    }
+
+    hft::plugin::AccountInfo account;
+    if (!plugin->QueryAccount(account)) {
+        res.set_content("{\"success\":false,\"error\":\"Failed to query account from " + broker_name + "\"}", "application/json");
+        return;
+    }
+
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"success\": true,\n";
+    json << "  \"broker\": \"" << JsonEscape(broker_name) << "\",\n";
+    json << "  \"account_id\": \"" << JsonEscape(account.account_id) << "\",\n";
+    json << "  \"balance\": " << account.balance << ",\n";
+    json << "  \"available\": " << account.available << ",\n";
+    json << "  \"margin\": " << account.margin << ",\n";
+    json << "  \"frozen_margin\": " << account.frozen_margin << ",\n";
+    json << "  \"commission\": " << account.commission << ",\n";
+    json << "  \"close_profit\": " << account.close_profit << ",\n";
+    json << "  \"position_profit\": " << account.position_profit << "\n";
+    json << "}\n";
+
+    res.set_content(json.str(), "application/json");
+}
+
+void StartHTTPServer(int port = 8082) {
     g_http_server = std::make_unique<httplib::Server>();
 
-    // Simulator endpoints (kept)
+    // Generic account endpoint — works with any broker (CTP or Simulator)
+    g_http_server->Get("/account", HandleAccount);
+
+    // Simulator endpoints (kept for backward compat)
     g_http_server->Get("/simulator/stats", HandleSimulatorStats);
     g_http_server->Get("/simulator/account", HandleSimulatorAccount);
 
@@ -845,9 +889,9 @@ int main(int argc, char** argv) {
     std::cout << "\n[Main] Waiting for broker systems ready (3 seconds)..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
-    // 4. Start HTTP server (health check + simulator stats only)
+    // 4. Start HTTP server (account query + health check + simulator stats)
     std::cout << "\n[Main] Starting HTTP server..." << std::endl;
-    StartHTTPServer(8080);
+    StartHTTPServer(8082);
 
     // 5. Start order processor thread
     std::cout << "\n[Main] Starting order processor thread..." << std::endl;
@@ -872,8 +916,9 @@ int main(int argc, char** argv) {
         std::cout << "║" << std::endl;
     }
     std::cout << "╚════════════════════════════════════════════════════════════╝" << std::endl;
-    std::cout << "\nHTTP Endpoints:" << std::endl;
-    std::cout << "  - Health Check: http://localhost:8080/health" << std::endl;
+    std::cout << "\nHTTP Endpoints (port 8082):" << std::endl;
+    std::cout << "  - Account Query: http://localhost:8082/account" << std::endl;
+    std::cout << "  - Health Check:  http://localhost:8082/health" << std::endl;
     std::cout << "\nWaiting for orders from Go trader via MWMR SHM..." << std::endl;
     std::cout << "Press Ctrl+C to stop...\n" << std::endl;
 

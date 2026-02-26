@@ -1,5 +1,6 @@
 package com.quantlink.trader.api.overview;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quantlink.trader.api.DashboardSnapshot;
 import io.javalin.Javalin;
@@ -30,6 +31,8 @@ public class OverviewServer {
     private static final Logger logger = Logger.getLogger(OverviewServer.class.getName());
     private static final ObjectMapper mapper = new ObjectMapper();
 
+    private static final String COUNTER_BRIDGE_URL = "http://localhost:8082/account";
+
     private final int port;
     private Javalin app;
     private StrategyConnector connector;
@@ -40,6 +43,10 @@ public class OverviewServer {
 
     // 心跳定时器
     private ScheduledExecutorService heartbeatExecutor;
+
+    // 资金查询定时器 + 缓存
+    private ScheduledExecutorService accountQueryExecutor;
+    private volatile List<OverviewSnapshot.AccountRow> cachedAccounts = List.of();
 
     public OverviewServer(int port) {
         this.port = port;
@@ -100,6 +107,14 @@ public class OverviewServer {
         });
         heartbeatExecutor.scheduleAtFixedRate(this::sendPing, 30, 30, TimeUnit.SECONDS);
 
+        // 资金查询 — 每 10 秒从 counter_bridge 查询
+        accountQueryExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "account-query");
+            t.setDaemon(true);
+            return t;
+        });
+        accountQueryExecutor.scheduleAtFixedRate(this::queryCounterBridgeAccount, 3, 10, TimeUnit.SECONDS);
+
         app.start(port);
         logger.info("[OverviewServer] 已启动 (port " + port + ")");
     }
@@ -108,6 +123,7 @@ public class OverviewServer {
      * 停止 OverviewServer。
      */
     public void stop() {
+        if (accountQueryExecutor != null) accountQueryExecutor.shutdownNow();
         if (heartbeatExecutor != null) heartbeatExecutor.shutdownNow();
         if (connector != null) connector.stop();
         for (WsContext ctx : wsClients) {
@@ -125,7 +141,7 @@ public class OverviewServer {
     private void onTraderSnapshot(int port, DashboardSnapshot snap) {
         // 每次收到任一 trader 推送 → 重新聚合 → 推送给前端
         OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses());
+                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
         broadcastOverview(overview);
     }
 
@@ -158,7 +174,7 @@ public class OverviewServer {
     private void sendCurrentSnapshot(WsContext ctx) {
         try {
             OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                    connector.getSnapshots(), connector.getStatuses());
+                    connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
             Map<String, Object> msg = Map.of(
                     "type", "overview_update",
                     "timestamp", Instant.now().toString(),
@@ -177,28 +193,28 @@ public class OverviewServer {
     /** GET /api/v1/overview — 完整聚合快照 */
     private void handleOverview(Context ctx) {
         OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses());
+                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
         ctx.json(Map.of("success", true, "data", overview));
     }
 
     /** GET /api/v1/positions — 全局持仓 */
     private void handlePositions(Context ctx) {
         OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses());
+                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
         ctx.json(Map.of("success", true, "data", overview.positions));
     }
 
     /** GET /api/v1/all-orders — 全局挂单 */
     private void handleAllOrders(Context ctx) {
         OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses());
+                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
         ctx.json(Map.of("success", true, "data", overview.orders));
     }
 
     /** GET /api/v1/all-fills — 全局成交 */
     private void handleAllFills(Context ctx) {
         OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses());
+                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
         ctx.json(Map.of("success", true, "data", overview.fills));
     }
 
@@ -302,6 +318,53 @@ public class OverviewServer {
             } catch (Exception e) {
                 wsClients.remove(ctx);
             }
+        }
+    }
+
+    // =======================================================================
+    //  资金查询 — 定时从 counter_bridge HTTP 获取
+    // =======================================================================
+
+    private void queryCounterBridgeAccount() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(COUNTER_BRIDGE_URL))
+                    .GET()
+                    .timeout(Duration.ofSeconds(3))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                return;
+            }
+
+            JsonNode root = mapper.readTree(response.body());
+            if (!root.has("success") || !root.get("success").asBoolean()) {
+                return;
+            }
+
+            OverviewSnapshot.AccountRow row = new OverviewSnapshot.AccountRow();
+            row.broker = root.has("broker") ? root.get("broker").asText() : "";
+            row.accountId = root.has("account_id") ? root.get("account_id").asText() : "";
+            row.totalAsset = root.has("balance") ? root.get("balance").asDouble() : 0;
+            row.availCash = root.has("available") ? root.get("available").asDouble() : 0;
+            row.margin = root.has("margin") ? root.get("margin").asDouble() : 0;
+            row.closeProfit = root.has("close_profit") ? root.get("close_profit").asDouble() : 0;
+            row.positionProfit = root.has("position_profit") ? root.get("position_profit").asDouble() : 0;
+            row.commission = root.has("commission") ? root.get("commission").asDouble() : 0;
+            row.riskPercent = row.totalAsset > 0 ? (row.margin / row.totalAsset * 100.0) : 0;
+
+            cachedAccounts = List.of(row);
+
+            // 资金更新后也推送给前端
+            OverviewSnapshot overview = OverviewSnapshot.aggregate(
+                    connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
+            broadcastOverview(overview);
+
+        } catch (java.net.ConnectException e) {
+            // counter_bridge 未启动，静默忽略
+        } catch (Exception e) {
+            logger.fine("[AccountQuery] 查询失败: " + e.getMessage());
         }
     }
 

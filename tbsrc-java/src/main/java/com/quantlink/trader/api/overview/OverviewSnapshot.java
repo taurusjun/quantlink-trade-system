@@ -19,6 +19,7 @@ public class OverviewSnapshot {
     @JsonProperty("orders")     public List<OrderRow> orders = new ArrayList<>();
     @JsonProperty("fills")      public List<FillRow> fills = new ArrayList<>();
     @JsonProperty("spread_trades") public List<SpreadTradeRow> spreadTrades = new ArrayList<>();
+    @JsonProperty("accounts")   public List<AccountRow> accounts = new ArrayList<>();
 
     /** ② 策略列表表格 — 每行一个策略实例 */
     public static class StrategyRow {
@@ -81,6 +82,19 @@ public class OverviewSnapshot {
         @JsonProperty("pro")        public String pro = "";
     }
 
+    /** ③ Account Table — 资金账户 */
+    public static class AccountRow {
+        @JsonProperty("broker")          public String broker = "";          // 券商名 (simulator/ctp)
+        @JsonProperty("account_id")      public String accountId = "";       // 账户 ID
+        @JsonProperty("total_asset")     public double totalAsset;           // 总资产 (balance)
+        @JsonProperty("avail_cash")      public double availCash;            // 可用资金
+        @JsonProperty("margin")          public double margin;               // 占用保证金
+        @JsonProperty("risk_percent")    public double riskPercent;          // 风险度 (margin / balance * 100)
+        @JsonProperty("close_profit")    public double closeProfit;          // 平仓盈亏
+        @JsonProperty("position_profit") public double positionProfit;       // 持仓盈亏
+        @JsonProperty("commission")      public double commission;           // 手续费
+    }
+
     // =======================================================================
     //  聚合逻辑
     // =======================================================================
@@ -91,9 +105,24 @@ public class OverviewSnapshot {
     public static OverviewSnapshot aggregate(
             Map<Integer, DashboardSnapshot> snapshots,
             Map<Integer, StrategyConnector.ConnectionStatus> statuses) {
+        return aggregate(snapshots, statuses, null);
+    }
+
+    /**
+     * 从 StrategyConnector 的数据聚合生成 OverviewSnapshot（含资金信息）。
+     */
+    public static OverviewSnapshot aggregate(
+            Map<Integer, DashboardSnapshot> snapshots,
+            Map<Integer, StrategyConnector.ConnectionStatus> statuses,
+            List<AccountRow> accountRows) {
 
         OverviewSnapshot overview = new OverviewSnapshot();
         overview.timestamp = Instant.now().toString();
+
+        // 合并资金数据
+        if (accountRows != null) {
+            overview.accounts.addAll(accountRows);
+        }
 
         // 遍历所有端口
         for (var entry : statuses.entrySet()) {
