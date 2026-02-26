@@ -232,6 +232,66 @@ md_shm_feeder → [SysV MWMR SHM 0x1001] → Go trader → [SysV MWMR SHM 0x2001
   - `union` → Java 多字段
   - `#ifdef` 条件编译 → Java 配置开关
 
+**原则 7: 严禁 workaround，必须严格对齐 C++ 调用链路**
+- C++ 中存在的回调、调用链路，Java 必须完整对齐实现，不得跳过或用 workaround 替代
+- 如果 C++ 有 `A → B → C` 的调用链，Java 不得把 `C` 的逻辑直接塞进 `A` 里
+- 缺失的中间层（如 `IndicatorCallBack`、`CommonClient` 回调注册等）必须先补齐，再按 C++ 原有链路调用
+- 示例（禁止）:
+  ```java
+  // ❌ 错误: C++ 的 IndicatorCallBack → SetTargetValue → SendOrder → SetThresholds
+  // 不得跳过 IndicatorCallBack，直接在 mdCallBack() 里调用 setTargetValue()
+  public void mdCallBack(MemorySegment update) {
+      // ... 行情处理 ...
+      setTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL); // ❌ workaround
+  }
+  ```
+- 示例（正确）:
+  ```java
+  // ✅ 正确: 先在 CommonClient 中实现 indicatorCallBack 注册机制，
+  // 然后在 main.cpp 对应的 TraderMain.java 中注册 indicatorCallBack，
+  // 由 CommonClient 在正确时机触发，与 C++ 调用链路完全一致
+  client.setIndicatorCallback(indicatorList -> {
+      strategy.setTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
+  });
+  ```
+- 当发现 Java 缺少 C++ 中的某个回调/机制时，必须:
+  1. 先找到 C++ 原代码中该机制的完整实现（`tbsrc/`、`hftbase/`、`ors/`）
+  2. 向用户展示 C++ 原代码
+  3. 在 Java 中对齐实现该机制
+  4. 再按 C++ 链路完成后续调用
+
+**原则 8: 严禁任何形式的省略或简化，必须完整迁移 C++ 逻辑**
+- 迁移 C++ 代码时，**任何省略都必须先询问用户并获得明确确认**
+- 不得自行判断"某逻辑在当前场景不需要"而省略
+- 不得以"中国期货场景不使用"、"PairwiseArbStrategy 不需要"、"待补齐"等理由跳过 C++ 逻辑
+- 不得自行标注"待补齐"/"TODO"来掩盖省略行为——省略就是省略，未经用户确认的省略一律禁止
+- 后续会迁移其他策略和场景，所有 C++ 逻辑必须完整迁移
+- **唯一允许省略的情况**: 用户明确确认可以省略，且必须在注释中标注"经用户确认"
+- 如果遇到无法直接迁移的 C++ 逻辑，必须:
+  1. **停下来，询问用户**，说明该段 C++ 逻辑是什么、为什么无法直接迁移
+  2. **等待用户回复**，得到明确确认后才能省略或替代
+  3. 在注释中标注 `[C++差异-用户确认]`，说明省略内容、原因、用户确认的替代方案
+- 示例（禁止）:
+  ```java
+  // ❌ 错误: 自行判断简化
+  // [C++差异] C++ 有 commonBook/selfBook 更新逻辑，
+  // 以上简化均不影响 PairwiseArbStrategy 在中国期货场景的核心功能。
+
+  // ❌ 错误: 自行标注"待补齐"来掩盖省略
+  // [C++差异] C++ 包含 invisible book 逻辑，待补齐。
+
+  // ❌ 错误: 自行判断不需要
+  // C++: optionStrategy 相关逻辑省略（中国期货不使用）
+  ```
+- 示例（正确）:
+  ```java
+  // ✅ 正确: 完整迁移 C++ 逻辑，无省略
+
+  // ✅ 正确: 经用户确认后的省略
+  // [C++差异-用户确认] C++ 使用 MemLog SHM 推送监控数据（依赖 hftbase MemLog 库），
+  // 经用户确认（2026-02-26），Java 使用日志输出替代。
+  ```
+
 ### 配置文件 (`config/`)
 
 - **格式**: YAML
