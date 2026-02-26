@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantLink Overview</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 12px;
+            background: #f5f5f5;
+            min-width: 1400px;
+        }
+
+        /* ---- 7 区域 CSS Grid 布局 ---- */
+        .app-container {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            grid-template-columns: 1fr;
+            height: 100vh;
+            gap: 2px;
+            padding: 2px;
+        }
+
+        /* ① 顶部控制栏 */
+        .top-bar {
+            background: #2c3e50;
+            color: #fff;
+            padding: 6px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .top-bar .title {
+            font-weight: bold;
+            font-size: 14px;
+            margin-right: 20px;
+        }
+        .top-bar select {
+            padding: 3px 6px;
+            font-size: 11px;
+            border: 1px solid #555;
+            background: #34495e;
+            color: #fff;
+            border-radius: 3px;
+        }
+        .top-bar label {
+            font-size: 11px;
+            color: #bdc3c7;
+        }
+        .btn-danger {
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            padding: 4px 14px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-clear {
+            background: #7f8c8d;
+            color: #fff;
+            border: none;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .btn-clear:hover { background: #95a5a6; }
+        .ws-status {
+            margin-left: auto;
+            font-size: 11px;
+        }
+        .ws-status .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .dot-green { background: #2ecc71; }
+        .dot-red { background: #e74c3c; }
+        .dot-yellow { background: #f39c12; }
+
+        /* ② + ③ 中间区域 */
+        .middle-area {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 2px;
+            overflow: hidden;
+        }
+
+        /* ④⑤⑥⑦ 底部区域 */
+        .bottom-area {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 2px;
+            height: 250px;
+        }
+
+        /* ---- 通用表格样式 ---- */
+        .panel {
+            background: #fff;
+            border: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .panel-header {
+            background: #34495e;
+            color: #fff;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .panel-header .badge {
+            background: #2980b9;
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-size: 10px;
+        }
+        .panel-body {
+            overflow: auto;
+            flex: 1;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+        }
+        thead {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        th {
+            background: #ecf0f1;
+            padding: 3px 5px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 1px solid #ccc;
+            white-space: nowrap;
+        }
+        td {
+            padding: 2px 5px;
+            border-bottom: 1px solid #eee;
+            white-space: nowrap;
+        }
+        tbody tr:nth-child(even) { background: #fafafa; }
+        tbody tr:hover { background: #e8f4fd; }
+
+        /* ---- 着色 ---- */
+        .status-running { color: #fff; background: #27ae60; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+        .status-disconnected { color: #fff; background: #f39c12; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+        .status-no_process { color: #fff; background: #95a5a6; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+        .pos-positive { color: #27ae60; font-weight: bold; }
+        .pos-negative { color: #e74c3c; font-weight: bold; }
+        .pos-zero { color: #95a5a6; }
+        .pnl-positive { color: #27ae60; font-weight: bold; }
+        .pnl-negative { color: #e74c3c; font-weight: bold; }
+
+        /* ---- 操作按钮 ---- */
+        .action-btn {
+            padding: 1px 6px;
+            font-size: 10px;
+            border: 1px solid #bdc3c7;
+            background: #fff;
+            cursor: pointer;
+            border-radius: 2px;
+            margin: 0 1px;
+        }
+        .action-btn:hover:not(:disabled) { background: #ecf0f1; }
+        .action-btn.start { color: #27ae60; border-color: #27ae60; }
+        .action-btn.stop { color: #e74c3c; border-color: #e74c3c; }
+        .action-btn.pause { color: #f39c12; border-color: #f39c12; }
+        .action-btn.log { color: #2980b9; border-color: #2980b9; }
+        .action-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            background: #f0f0f0;
+        }
+
+        .btn-cxl-all {
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            padding: 2px 8px;
+            font-size: 10px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        /* Toast 提示 */
+        .toast {
+            position: fixed;
+            top: 40px;
+            right: 20px;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast-success { background: #27ae60; color: #fff; }
+        .toast-error { background: #e74c3c; color: #fff; }
+
+        /* 底部面板筛选 */
+        .panel-header select {
+            padding: 1px 4px;
+            font-size: 10px;
+            background: #2c3e50;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <!-- ① 顶部控制栏 -->
+    <div class="app-container">
+        <div class="top-bar">
+            <span class="title">QuantLink Overview</span>
+            <button class="btn-danger" @click="stopAll">stopAll</button>
+            <label>Product:</label>
+            <select v-model="filters.product">
+                <option value="">All</option>
+                <option v-for="p in productOptions" :key="p" :value="p">{{ p }}</option>
+            </select>
+            <label>Strategy:</label>
+            <select v-model="filters.strategy">
+                <option value="">All</option>
+                <option v-for="s in strategyOptions" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <label>Status:</label>
+            <select v-model="filters.status">
+                <option value="">All</option>
+                <option value="running">Running</option>
+                <option value="disconnected">Disconnected</option>
+                <option value="no_process">No Process</option>
+            </select>
+            <button class="btn-clear" @click="clearFilters">Clear</button>
+
+            <div class="ws-status">
+                <span class="dot" :class="wsConnected ? 'dot-green' : 'dot-red'"></span>
+                {{ wsConnected ? 'Connected' : 'Disconnected' }}
+                <span v-if="lastUpdate"> | {{ lastUpdate }}</span>
+            </div>
+        </div>
+
+        <!-- ②+③ 中间: 策略列表 + Account -->
+        <div class="middle-area">
+            <!-- ② 策略列表表格 -->
+            <div class="panel">
+                <div class="panel-header">
+                    Strategy List
+                    <span class="badge">{{ filteredStrategies.length }}</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Alert</th>
+                                <th>AT</th>
+                                <th>Pro</th>
+                                <th>ID</th>
+                                <th>IP</th>
+                                <th>ModelFile</th>
+                                <th>StrategyType</th>
+                                <th>Key</th>
+                                <th>val</th>
+                                <th>1(L1)</th>
+                                <th>2(L2)</th>
+                                <th>PNL</th>
+                                <th>Time</th>
+                                <th>Information</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="s in filteredStrategies" :key="s.id + '-' + s.port">
+                                <td><span :class="'status-' + s.status">{{ statusLabel(s.status) }}</span></td>
+                                <td>{{ s.alert }}</td>
+                                <td>{{ s.at ? 'ON' : 'OFF' }}</td>
+                                <td>{{ s.pro }}</td>
+                                <td>{{ s.id }}</td>
+                                <td>{{ s.ip }}</td>
+                                <td>{{ shortModelFile(s.model_file) }}</td>
+                                <td>{{ s.strategy_type }}</td>
+                                <td>{{ s.key }}</td>
+                                <td>{{ s.val ? 'Y' : 'N' }}</td>
+                                <td :class="posClass(s.l1)">{{ s.l1 }}</td>
+                                <td :class="posClass(s.l2)">{{ s.l2 }}</td>
+                                <td :class="pnlClass(s.pnl)">{{ s.pnl.toFixed(2) }}</td>
+                                <td>{{ formatTime(s.time) }}</td>
+                                <td>{{ s.information }}</td>
+                                <td>
+                                    <button class="action-btn start" @click="sendCmd(s.port, 'activate')"
+                                        :disabled="s.status !== 'running' || s.at">Start</button>
+                                    <button class="action-btn stop" @click="sendCmd(s.port, 'deactivate')"
+                                        :disabled="s.status !== 'running' || !s.at">Stop</button>
+                                    <button class="action-btn pause" @click="sendCmd(s.port, 'squareoff')"
+                                        :disabled="s.status !== 'running' || !s.at">Flat</button>
+                                    <button class="action-btn log" @click="openDashboard(s.port)"
+                                        :disabled="s.status !== 'running'">Log</button>
+                                </td>
+                            </tr>
+                            <tr v-if="filteredStrategies.length === 0">
+                                <td colspan="16" style="text-align:center;color:#999;padding:20px;">
+                                    {{ overview.strategies.length === 0 ? 'Waiting for trader connections...' : 'No matching strategies' }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ③ Account Table -->
+            <div class="panel">
+                <div class="panel-header">Account Table</div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Pro</th>
+                                <th>Ex</th>
+                                <th>TotalAsset</th>
+                                <th>AvailCash</th>
+                                <th>Margin</th>
+                                <th>Risk(%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="6" style="text-align:center;color:#999;padding:20px;">
+                                    TODO: CTP 资金查询
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ④⑤⑥⑦ 底部 4 表格 -->
+        <div class="bottom-area">
+            <!-- ④ Spread Trades -->
+            <div class="panel">
+                <div class="panel-header">
+                    Spread Trades
+                    <span class="badge">{{ overview.spread_trades.length }}</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ModelFile</th>
+                                <th>S</th>
+                                <th>Qty</th>
+                                <th>Spread</th>
+                                <th>Time</th>
+                                <th>Pro</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(t, i) in overview.spread_trades" :key="'st-'+i">
+                                <td>{{ shortModelFile(t.model_file) }}</td>
+                                <td :class="t.side === 'BUY' ? 'pos-positive' : 'pos-negative'">{{ t.side }}</td>
+                                <td>{{ t.qty }}</td>
+                                <td>{{ t.spread.toFixed(2) }}</td>
+                                <td>{{ t.time }}</td>
+                                <td>{{ t.pro }}</td>
+                            </tr>
+                            <tr v-if="overview.spread_trades.length === 0">
+                                <td colspan="6" style="text-align:center;color:#999;">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ⑤ Orders -->
+            <div class="panel">
+                <div class="panel-header">
+                    Orders
+                    <span class="badge">{{ filteredOrders.length }}</span>
+                    <button class="btn-cxl-all" @click="cxlAll">cxl All</button>
+                    <select v-model="orderFilters.strategy" style="margin-left:auto;">
+                        <option value="">All</option>
+                        <option v-for="s in orderStrategyOptions" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                    <select v-model="orderFilters.symbol">
+                        <option value="">All</option>
+                        <option v-for="s in orderSymbolOptions" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>S</th>
+                                <th>Qty</th>
+                                <th>Price</th>
+                                <th>Modelfile</th>
+                                <th>ID</th>
+                                <th>Pro</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(o, i) in filteredOrders" :key="'ord-'+i">
+                                <td>{{ o.symbol }}</td>
+                                <td :class="o.side === 'BUY' ? 'pos-positive' : 'pos-negative'">{{ o.side }}</td>
+                                <td>{{ o.qty }}</td>
+                                <td>{{ o.price.toFixed(1) }}</td>
+                                <td>{{ shortModelFile(o.model_file) }}</td>
+                                <td>{{ o.id }}</td>
+                                <td>{{ o.pro }}</td>
+                            </tr>
+                            <tr v-if="filteredOrders.length === 0">
+                                <td colspan="7" style="text-align:center;color:#999;">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ⑥ Position Table -->
+            <div class="panel">
+                <div class="panel-header">
+                    Position Table
+                    <span class="badge">{{ filteredPositions.length }}</span>
+                    <select v-model="posFilters.product" style="margin-left:auto;">
+                        <option value="">All</option>
+                        <option v-for="p in posProductOptions" :key="p" :value="p">{{ p }}</option>
+                    </select>
+                    <select v-model="posFilters.symbol">
+                        <option value="">All</option>
+                        <option v-for="s in posSymbolOptions" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Pos</th>
+                                <th>CXLRio</th>
+                                <th>Pro</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(p, i) in filteredPositions" :key="'pos-'+i">
+                                <td>{{ p.symbol }}</td>
+                                <td :class="posClass(p.pos)">{{ p.pos }}</td>
+                                <td>{{ p.cxl_rio }}</td>
+                                <td>{{ p.pro }}</td>
+                            </tr>
+                            <tr v-if="filteredPositions.length === 0">
+                                <td colspan="4" style="text-align:center;color:#999;">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ⑦ Fills -->
+            <div class="panel">
+                <div class="panel-header">
+                    Fills
+                    <span class="badge">{{ overview.fills.length }}</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Symbol</th>
+                                <th>S</th>
+                                <th>Price</th>
+                                <th>Qty</th>
+                                <th>ID</th>
+                                <th>Pro</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(f, i) in overview.fills" :key="'fill-'+i">
+                                <td>{{ f.time }}</td>
+                                <td>{{ f.symbol }}</td>
+                                <td :class="f.side === 'BUY' ? 'pos-positive' : 'pos-negative'">{{ f.side }}</td>
+                                <td>{{ f.price.toFixed(1) }}</td>
+                                <td>{{ f.qty }}</td>
+                                <td>{{ f.id }}</td>
+                                <td>{{ f.pro }}</td>
+                            </tr>
+                            <tr v-if="overview.fills.length === 0">
+                                <td colspan="7" style="text-align:center;color:#999;">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Toast 提示 -->
+    <div class="toast" :class="[toast.show ? 'show' : '', toast.type]">{{ toast.msg }}</div>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+createApp({
+    setup() {
+        // ---- 数据 ----
+        const overview = ref({
+            timestamp: '',
+            strategies: [],
+            positions: [],
+            orders: [],
+            fills: [],
+            spread_trades: []
+        });
+
+        const wsConnected = ref(false);
+        const lastUpdate = ref('');
+        const toast = ref({ show: false, msg: '', type: 'toast-success' });
+        let ws = null;
+        let reconnectTimer = null;
+        let toastTimer = null;
+
+        // ---- 筛选 ----
+        const filters = ref({ product: '', strategy: '', status: '' });
+        const orderFilters = ref({ strategy: '', symbol: '' });
+        const posFilters = ref({ product: '', symbol: '' });
+
+        // ---- 计算属性 ----
+        const productOptions = computed(() => {
+            const set = new Set();
+            overview.value.strategies.forEach(s => { if (s.pro) set.add(s.pro); });
+            return [...set].sort();
+        });
+
+        const strategyOptions = computed(() => {
+            const set = new Set();
+            overview.value.strategies.forEach(s => { if (s.strategy_type) set.add(s.strategy_type); });
+            return [...set].sort();
+        });
+
+        const filteredStrategies = computed(() => {
+            return overview.value.strategies.filter(s => {
+                if (filters.value.product && s.pro !== filters.value.product) return false;
+                if (filters.value.strategy && s.strategy_type !== filters.value.strategy) return false;
+                if (filters.value.status && s.status !== filters.value.status) return false;
+                return true;
+            });
+        });
+
+        const orderStrategyOptions = computed(() => {
+            const set = new Set();
+            overview.value.orders.forEach(o => { if (o.model_file) set.add(o.model_file); });
+            return [...set].sort();
+        });
+
+        const orderSymbolOptions = computed(() => {
+            const set = new Set();
+            overview.value.orders.forEach(o => { if (o.symbol) set.add(o.symbol); });
+            return [...set].sort();
+        });
+
+        const filteredOrders = computed(() => {
+            return overview.value.orders.filter(o => {
+                if (orderFilters.value.strategy && o.model_file !== orderFilters.value.strategy) return false;
+                if (orderFilters.value.symbol && o.symbol !== orderFilters.value.symbol) return false;
+                return true;
+            });
+        });
+
+        const posProductOptions = computed(() => {
+            const set = new Set();
+            overview.value.positions.forEach(p => { if (p.pro) set.add(p.pro); });
+            return [...set].sort();
+        });
+
+        const posSymbolOptions = computed(() => {
+            const set = new Set();
+            overview.value.positions.forEach(p => { if (p.symbol) set.add(p.symbol); });
+            return [...set].sort();
+        });
+
+        const filteredPositions = computed(() => {
+            return overview.value.positions.filter(p => {
+                if (posFilters.value.product && p.pro !== posFilters.value.product) return false;
+                if (posFilters.value.symbol && p.symbol !== posFilters.value.symbol) return false;
+                return true;
+            });
+        });
+
+        // ---- WebSocket ----
+        function connectWS() {
+            const host = window.location.host;
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${host}/ws`);
+
+            ws.onopen = () => {
+                wsConnected.value = true;
+                if (reconnectTimer) {
+                    clearInterval(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'overview_update' && msg.data) {
+                        overview.value = msg.data;
+                        const now = new Date();
+                        lastUpdate.value = now.toTimeString().split(' ')[0];
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                wsConnected.value = false;
+                scheduleReconnect();
+            };
+
+            ws.onerror = () => {
+                wsConnected.value = false;
+            };
+        }
+
+        function scheduleReconnect() {
+            if (!reconnectTimer) {
+                reconnectTimer = setInterval(() => {
+                    if (!wsConnected.value) {
+                        connectWS();
+                    }
+                }, 3000);
+            }
+        }
+
+        // ---- 方法 ----
+        function clearFilters() {
+            filters.value = { product: '', strategy: '', status: '' };
+        }
+
+        function statusLabel(status) {
+            switch(status) {
+                case 'running': return 'Running';
+                case 'disconnected': return 'Disconn';
+                case 'no_process': return 'NoProc';
+                default: return status;
+            }
+        }
+
+        function posClass(val) {
+            if (val > 0) return 'pos-positive';
+            if (val < 0) return 'pos-negative';
+            return 'pos-zero';
+        }
+
+        function pnlClass(val) {
+            if (val > 0) return 'pnl-positive';
+            if (val < 0) return 'pnl-negative';
+            return '';
+        }
+
+        function shortModelFile(path) {
+            if (!path) return '';
+            const parts = path.split('/');
+            return parts[parts.length - 1];
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '';
+            try {
+                const d = new Date(ts);
+                return d.toTimeString().split(' ')[0];
+            } catch(e) {
+                return ts;
+            }
+        }
+
+        function showToast(msg, type = 'toast-success') {
+            if (toastTimer) clearTimeout(toastTimer);
+            toast.value = { show: true, msg, type };
+            toastTimer = setTimeout(() => { toast.value.show = false; }, 2000);
+        }
+
+        async function sendCmd(port, action) {
+            try {
+                const resp = await fetch(`/api/v1/command/${port}/${action}`, { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast(`${action} sent to ${port}`, 'toast-success');
+                } else {
+                    showToast(`Failed: ${data.message}`, 'toast-error');
+                }
+            } catch(e) {
+                showToast(`Error: ${e.message}`, 'toast-error');
+            }
+        }
+
+        async function stopAll() {
+            if (!confirm('Stop ALL strategies?')) return;
+            try {
+                const resp = await fetch('/api/v1/stop-all', { method: 'POST' });
+                const data = await resp.json();
+                showToast(data.message, data.success ? 'toast-success' : 'toast-error');
+            } catch(e) {
+                showToast('Error: ' + e.message, 'toast-error');
+            }
+        }
+
+        async function cxlAll() {
+            if (!confirm('Cancel ALL orders?')) return;
+            // TODO: 需要 trader 端支持批量撤单 API
+            alert('cxl All not yet implemented');
+        }
+
+        function openDashboard(port) {
+            window.open(`http://localhost:${port}/dashboard.html`, '_blank');
+        }
+
+        // ---- 生命周期 ----
+        onMounted(() => {
+            connectWS();
+        });
+
+        onUnmounted(() => {
+            if (ws) ws.close();
+            if (reconnectTimer) clearInterval(reconnectTimer);
+        });
+
+        return {
+            overview, wsConnected, lastUpdate, toast,
+            filters, orderFilters, posFilters,
+            productOptions, strategyOptions, filteredStrategies,
+            orderStrategyOptions, orderSymbolOptions, filteredOrders,
+            posProductOptions, posSymbolOptions, filteredPositions,
+            clearFilters, statusLabel, posClass, pnlClass,
+            shortModelFile, formatTime,
+            sendCmd, stopAll, cxlAll, openDashboard
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>

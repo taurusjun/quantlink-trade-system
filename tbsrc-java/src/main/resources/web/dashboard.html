@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tbsrc-golang Dashboard</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #667eea; --primary-dark: #764ba2;
+            --success: #28a745; --danger: #dc3545;
+            --warning: #ffc107; --info: #17a2b8;
+            --text: #212529; --muted: #6c757d;
+            --bg: #f8f9fa; --border: #dee2e6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg); min-height: 100vh; color: var(--text); font-size: 13px;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .dot.on { background: var(--success); animation: pulse 2s infinite; }
+        .dot.off { background: var(--danger); }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+        .container { display: grid; grid-template-columns: 1fr 1fr 300px; gap: 16px; padding: 16px; max-width: 1600px; margin: 0 auto; }
+        @media (max-width: 1200px) { .container { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 768px) { .container { grid-template-columns: 1fr; } }
+
+        /* 统计卡 */
+        .stats { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        @media (max-width: 768px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+        .stat-card { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+        .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+        .stat-value { font-size: 24px; font-weight: 700; }
+        .positive { color: var(--success); }
+        .negative { color: var(--danger); }
+
+        /* 卡片 */
+        .card { background: white; border-radius: 10px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); overflow: hidden; }
+        .card-hdr { padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+        .card-body { padding: 12px 16px; }
+
+        /* 行 */
+        .row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+        .row:last-child { border-bottom: none; }
+        .row-label { color: var(--muted); font-size: 12px; }
+        .row-value { font-weight: 500; }
+
+        /* Badge */
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-danger { background: #f8d7da; color: #721c24; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-secondary { background: #e2e3e5; color: #383d41; }
+
+        /* 按钮 */
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-activate { background: linear-gradient(135deg, var(--success) 0%, #20c997 100%); color: white; }
+        .btn-deactivate { background: var(--muted); color: white; }
+        .btn-squareoff { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; }
+        .btn-reload { background: linear-gradient(135deg, var(--info) 0%, #6f42c1 100%); color: white; }
+        .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
+
+        .ctrl-panel { display: flex; flex-direction: column; gap: 8px; }
+
+        /* 订单列表 */
+        .order-list { max-height: 300px; overflow-y: auto; }
+        .order-item { padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
+        .order-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .order-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+        .order-item.completed { opacity: 0.55; }
+
+        /* 价差面板 */
+        .spread-bar { height: 6px; background: #e9ecef; border-radius: 3px; margin: 8px 0; position: relative; overflow: hidden; }
+        .spread-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+        .spread-fill.valid { background: linear-gradient(90deg, var(--success), var(--info)); }
+        .spread-fill.invalid { background: var(--danger); }
+
+        /* Toast */
+        .toast-box { position: fixed; top: 60px; right: 16px; z-index: 1000; }
+        .toast { padding: 10px 16px; border-radius: 6px; margin-bottom: 8px; animation: slideIn 0.3s; box-shadow: 0 3px 10px rgba(0,0,0,0.12); font-size: 13px; }
+        .toast-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .toast-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        @keyframes slideIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
+
+        .empty { text-align: center; padding: 20px; color: var(--muted); }
+    </style>
+</head>
+<body>
+<div id="app">
+    <!-- Header -->
+    <header class="header">
+        <div style="display:flex;align-items:center;gap:12px">
+            <h1>tbsrc-golang Dashboard</h1>
+            <span class="badge" :class="snapshot.active ? 'badge-success' : 'badge-secondary'">
+                {{ snapshot.active ? 'Active' : 'Inactive' }}
+            </span>
+            <span class="badge badge-info">ID: {{ snapshot.strategy_id }}</span>
+        </div>
+        <div class="header-right">
+            <span><span class="dot" :class="connected ? 'on' : 'off'"></span>{{ connected ? 'Connected' : 'Disconnected' }}</span>
+            <span style="color:rgba(255,255,255,0.7)">{{ lastRefresh }}</span>
+        </div>
+    </header>
+
+    <!-- Toast -->
+    <div class="toast-box">
+        <div v-for="(t,i) in toasts" :key="i" class="toast" :class="'toast-'+t.type">{{ t.msg }}</div>
+    </div>
+
+    <!-- Stats Row -->
+    <div style="padding:16px 16px 0;max-width:1600px;margin:0 auto">
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-label">Net Exposure</div>
+                <div class="stat-value" :class="snapshot.exposure >= 0 ? 'positive' : 'negative'">{{ snapshot.exposure }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Leg1 Net PNL</div>
+                <div class="stat-value" :class="snapshot.leg1.net_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg1.net_pnl) }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Leg2 Net PNL</div>
+                <div class="stat-value" :class="snapshot.leg2.net_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg2.net_pnl) }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total PNL</div>
+                <div class="stat-value" :class="totalPnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(totalPnl) }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="container">
+        <!-- Spread Panel (full width) -->
+        <div class="card" style="grid-column: 1 / -1">
+            <div class="card-hdr">
+                Spread Analysis
+                <span class="badge" :class="snapshot.spread.is_valid ? 'badge-success' : 'badge-danger'">
+                    {{ snapshot.spread.is_valid ? 'Valid' : 'Invalid' }}
+                </span>
+            </div>
+            <div class="card-body">
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center">
+                    <div><div class="stat-label">Current</div><div style="font-size:18px;font-weight:700">{{ fmtNum(snapshot.spread.current) }}</div></div>
+                    <div><div class="stat-label">EWA Mean</div><div style="font-size:18px;font-weight:700">{{ fmtNum(snapshot.spread.avg_spread) }}</div></div>
+                    <div><div class="stat-label">Deviation</div><div style="font-size:18px;font-weight:700" :class="Math.abs(snapshot.spread.deviation) > 0.5 ? 'positive' : ''">{{ fmtNum(snapshot.spread.deviation) }}</div></div>
+                    <div><div class="stat-label">T-Value</div><div style="font-size:18px;font-weight:700">{{ fmtNum(snapshot.spread.t_value) }}</div></div>
+                    <div><div class="stat-label">Alpha</div><div style="font-size:18px;font-weight:700">{{ snapshot.spread.alpha }}</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leg1 -->
+        <div class="card">
+            <div class="card-hdr">
+                Leg1: {{ snapshot.leg1.symbol }}
+                <span class="badge badge-info">{{ snapshot.leg1.exchange }}</span>
+            </div>
+            <div class="card-body">
+                <div style="font-weight:600;margin-bottom:8px">Market Data</div>
+                <div class="row"><span class="row-label">Bid</span><span class="row-value">{{ fmtPx(snapshot.leg1.bid_px) }} x {{ snapshot.leg1.bid_qty }}</span></div>
+                <div class="row"><span class="row-label">Ask</span><span class="row-value">{{ fmtPx(snapshot.leg1.ask_px) }} x {{ snapshot.leg1.ask_qty }}</span></div>
+                <div class="row"><span class="row-label">Mid</span><span class="row-value">{{ fmtPx(snapshot.leg1.mid_px) }}</span></div>
+                <div class="row"><span class="row-label">Last Trade</span><span class="row-value">{{ fmtPx(snapshot.leg1.last_trade_px) }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Position</div>
+                <div class="row"><span class="row-label">Netpos</span><span class="row-value">{{ snapshot.leg1.netpos }}</span></div>
+                <div class="row"><span class="row-label">NetposPass</span><span class="row-value">{{ snapshot.leg1.netpos_pass }}</span></div>
+                <div class="row"><span class="row-label">NetposAgg</span><span class="row-value">{{ snapshot.leg1.netpos_agg }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">PNL</div>
+                <div class="row"><span class="row-label">Realised</span><span class="row-value" :class="snapshot.leg1.realised_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg1.realised_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Unrealised</span><span class="row-value" :class="snapshot.leg1.unrealised_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg1.unrealised_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Net PNL</span><span class="row-value" :class="snapshot.leg1.net_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg1.net_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Max PNL</span><span class="row-value">{{ fmtPnl(snapshot.leg1.max_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Drawdown</span><span class="row-value negative">{{ fmtPnl(snapshot.leg1.drawdown) }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Stats</div>
+                <div class="row"><span class="row-label">Trades / Orders</span><span class="row-value">{{ snapshot.leg1.trade_count }} / {{ snapshot.leg1.order_count }}</span></div>
+                <div class="row"><span class="row-label">Rejects / Cancels</span><span class="row-value">{{ snapshot.leg1.reject_count }} / {{ snapshot.leg1.cancel_count }}</span></div>
+                <div class="row"><span class="row-label">Buy/Sell Qty</span><span class="row-value">{{ snapshot.leg1.buy_total_qty }} / {{ snapshot.leg1.sell_total_qty }}</span></div>
+                <div class="row"><span class="row-label">Open Orders B/S</span><span class="row-value">{{ snapshot.leg1.buy_open_orders }} / {{ snapshot.leg1.sell_open_orders }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Thresholds</div>
+                <div class="row"><span class="row-label">Bid Place/Remove</span><span class="row-value">{{ fmtNum(snapshot.leg1.thold_bid_place) }} / {{ fmtNum(snapshot.leg1.thold_bid_remove) }}</span></div>
+                <div class="row"><span class="row-label">Ask Place/Remove</span><span class="row-value">{{ fmtNum(snapshot.leg1.thold_ask_place) }} / {{ fmtNum(snapshot.leg1.thold_ask_remove) }}</span></div>
+                <div class="row"><span class="row-label">Max Pos / Size</span><span class="row-value">{{ snapshot.leg1.thold_max_pos }} / {{ snapshot.leg1.thold_size }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Flags</div>
+                <div class="row"><span class="row-label">OnExit / OnFlat / StopLoss</span>
+                    <span>
+                        <span class="badge" :class="snapshot.leg1.on_exit ? 'badge-danger' : 'badge-secondary'">Exit</span>
+                        <span class="badge" :class="snapshot.leg1.on_flat ? 'badge-warning' : 'badge-secondary'">Flat</span>
+                        <span class="badge" :class="snapshot.leg1.on_stop_loss ? 'badge-danger' : 'badge-secondary'">SL</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leg2 -->
+        <div class="card">
+            <div class="card-hdr">
+                Leg2: {{ snapshot.leg2.symbol }}
+                <span class="badge badge-info">{{ snapshot.leg2.exchange }}</span>
+            </div>
+            <div class="card-body">
+                <div style="font-weight:600;margin-bottom:8px">Market Data</div>
+                <div class="row"><span class="row-label">Bid</span><span class="row-value">{{ fmtPx(snapshot.leg2.bid_px) }} x {{ snapshot.leg2.bid_qty }}</span></div>
+                <div class="row"><span class="row-label">Ask</span><span class="row-value">{{ fmtPx(snapshot.leg2.ask_px) }} x {{ snapshot.leg2.ask_qty }}</span></div>
+                <div class="row"><span class="row-label">Mid</span><span class="row-value">{{ fmtPx(snapshot.leg2.mid_px) }}</span></div>
+                <div class="row"><span class="row-label">Last Trade</span><span class="row-value">{{ fmtPx(snapshot.leg2.last_trade_px) }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Position</div>
+                <div class="row"><span class="row-label">Netpos</span><span class="row-value">{{ snapshot.leg2.netpos }}</span></div>
+                <div class="row"><span class="row-label">NetposPass</span><span class="row-value">{{ snapshot.leg2.netpos_pass }}</span></div>
+                <div class="row"><span class="row-label">NetposAgg</span><span class="row-value">{{ snapshot.leg2.netpos_agg }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">PNL</div>
+                <div class="row"><span class="row-label">Realised</span><span class="row-value" :class="snapshot.leg2.realised_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg2.realised_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Unrealised</span><span class="row-value" :class="snapshot.leg2.unrealised_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg2.unrealised_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Net PNL</span><span class="row-value" :class="snapshot.leg2.net_pnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(snapshot.leg2.net_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Max PNL</span><span class="row-value">{{ fmtPnl(snapshot.leg2.max_pnl) }}</span></div>
+                <div class="row"><span class="row-label">Drawdown</span><span class="row-value negative">{{ fmtPnl(snapshot.leg2.drawdown) }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Stats</div>
+                <div class="row"><span class="row-label">Trades / Orders</span><span class="row-value">{{ snapshot.leg2.trade_count }} / {{ snapshot.leg2.order_count }}</span></div>
+                <div class="row"><span class="row-label">Rejects / Cancels</span><span class="row-value">{{ snapshot.leg2.reject_count }} / {{ snapshot.leg2.cancel_count }}</span></div>
+                <div class="row"><span class="row-label">Buy/Sell Qty</span><span class="row-value">{{ snapshot.leg2.buy_total_qty }} / {{ snapshot.leg2.sell_total_qty }}</span></div>
+                <div class="row"><span class="row-label">Open Orders B/S</span><span class="row-value">{{ snapshot.leg2.buy_open_orders }} / {{ snapshot.leg2.sell_open_orders }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Thresholds</div>
+                <div class="row"><span class="row-label">Bid Place/Remove</span><span class="row-value">{{ fmtNum(snapshot.leg2.thold_bid_place) }} / {{ fmtNum(snapshot.leg2.thold_bid_remove) }}</span></div>
+                <div class="row"><span class="row-label">Ask Place/Remove</span><span class="row-value">{{ fmtNum(snapshot.leg2.thold_ask_place) }} / {{ fmtNum(snapshot.leg2.thold_ask_remove) }}</span></div>
+                <div class="row"><span class="row-label">Max Pos / Size</span><span class="row-value">{{ snapshot.leg2.thold_max_pos }} / {{ snapshot.leg2.thold_size }}</span></div>
+
+                <div style="font-weight:600;margin:10px 0 8px">Flags</div>
+                <div class="row"><span class="row-label">OnExit / OnFlat / StopLoss</span>
+                    <span>
+                        <span class="badge" :class="snapshot.leg2.on_exit ? 'badge-danger' : 'badge-secondary'">Exit</span>
+                        <span class="badge" :class="snapshot.leg2.on_flat ? 'badge-warning' : 'badge-secondary'">Flat</span>
+                        <span class="badge" :class="snapshot.leg2.on_stop_loss ? 'badge-danger' : 'badge-secondary'">SL</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Sidebar: Controls + Orders -->
+        <div style="display:flex;flex-direction:column;gap:16px">
+            <!-- Control Panel -->
+            <div class="card">
+                <div class="card-hdr">Strategy Control</div>
+                <div class="card-body ctrl-panel">
+                    <button class="btn btn-activate" @click="sendCmd('activate')" :disabled="processing">Activate (kill -10)</button>
+                    <button class="btn btn-deactivate" @click="sendCmd('deactivate')" :disabled="processing">Deactivate</button>
+                    <button class="btn btn-squareoff" @click="confirmCmd('squareoff')" :disabled="processing">Squareoff (kill -20)</button>
+                    <button class="btn btn-reload" @click="sendCmd('reload_thresholds')" :disabled="processing">Reload Thresholds (kill -12)</button>
+                </div>
+            </div>
+
+            <!-- Connection -->
+            <div class="card">
+                <div class="card-hdr">Connection</div>
+                <div class="card-body">
+                    <div class="row"><span class="row-label">Host</span><input v-model="host" style="border:1px solid var(--border);border-radius:4px;padding:4px 8px;width:120px;font-size:12px"></div>
+                    <div class="row"><span class="row-label">Port</span><input v-model.number="port" type="number" style="border:1px solid var(--border);border-radius:4px;padding:4px 8px;width:80px;font-size:12px"></div>
+                    <button class="btn" :class="connected ? 'btn-deactivate' : 'btn-activate'" @click="toggleWs" style="width:100%;margin-top:8px">
+                        {{ connected ? 'Disconnect' : 'Connect' }}
+                    </button>
+                </div>
+            </div>
+
+            <!-- Leg1 Orders -->
+            <div class="card">
+                <div class="card-hdr">
+                    Leg1 Orders
+                    <span class="badge badge-secondary">{{ (snapshot.leg1.orders || []).length }}</span>
+                </div>
+                <div class="card-body">
+                    <div v-if="!snapshot.leg1.orders || snapshot.leg1.orders.length === 0" class="empty">No orders</div>
+                    <div v-else class="order-list">
+                        <div v-for="o in snapshot.leg1.orders" :key="o.order_id" class="order-item" :class="{ completed: isCompleted(o.status) }">
+                            <div class="order-header">
+                                <span :class="o.side === 'BUY' ? 'positive' : 'negative'" style="font-weight:600">{{ o.side }}</span>
+                                <span>
+                                    <span v-if="o.time" style="font-size:11px;color:var(--muted);margin-right:4px">{{ o.time }}</span>
+                                    <span class="badge" :class="orderBadge(o.status)">{{ o.status }}</span>
+                                </span>
+                            </div>
+                            <div class="order-grid">
+                                <span class="row-label">Price:</span><span>{{ fmtPx(o.price) }}</span>
+                                <span class="row-label">Qty:</span><span>{{ o.done_qty }}/{{ o.open_qty + o.done_qty }}</span>
+                                <span class="row-label">Type:</span><span>{{ o.ord_type }}</span>
+                                <span class="row-label">ID:</span><span>{{ o.order_id }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Leg2 Orders -->
+            <div class="card">
+                <div class="card-hdr">
+                    Leg2 Orders
+                    <span class="badge badge-secondary">{{ (snapshot.leg2.orders || []).length }}</span>
+                </div>
+                <div class="card-body">
+                    <div v-if="!snapshot.leg2.orders || snapshot.leg2.orders.length === 0" class="empty">No orders</div>
+                    <div v-else class="order-list">
+                        <div v-for="o in snapshot.leg2.orders" :key="o.order_id" class="order-item" :class="{ completed: isCompleted(o.status) }">
+                            <div class="order-header">
+                                <span :class="o.side === 'BUY' ? 'positive' : 'negative'" style="font-weight:600">{{ o.side }}</span>
+                                <span>
+                                    <span v-if="o.time" style="font-size:11px;color:var(--muted);margin-right:4px">{{ o.time }}</span>
+                                    <span class="badge" :class="orderBadge(o.status)">{{ o.status }}</span>
+                                </span>
+                            </div>
+                            <div class="order-grid">
+                                <span class="row-label">Price:</span><span>{{ fmtPx(o.price) }}</span>
+                                <span class="row-label">Qty:</span><span>{{ o.done_qty }}/{{ o.open_qty + o.done_qty }}</span>
+                                <span class="row-label">Type:</span><span>{{ o.ord_type }}</span>
+                                <span class="row-label">ID:</span><span>{{ o.order_id }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+const emptyLeg = () => ({
+    symbol:'', exchange:'',
+    bid_px:0, ask_px:0, mid_px:0, bid_qty:0, ask_qty:0, last_trade_px:0,
+    netpos:0, netpos_pass:0, netpos_agg:0,
+    realised_pnl:0, unrealised_pnl:0, net_pnl:0, gross_pnl:0, max_pnl:0, drawdown:0,
+    trade_count:0, order_count:0, reject_count:0, cancel_count:0, buy_total_qty:0, sell_total_qty:0,
+    thold_bid_place:0, thold_bid_remove:0, thold_ask_place:0, thold_ask_remove:0, thold_max_pos:0, thold_size:0,
+    buy_open_orders:0, sell_open_orders:0, buy_open_qty:0, sell_open_qty:0,
+    on_exit:false, on_flat:false, on_stop_loss:false,
+    orders:[]
+});
+
+createApp({
+    setup() {
+        const host = ref('localhost');
+        const port = ref(9201);
+        const connected = ref(false);
+        const processing = ref(false);
+        const lastRefresh = ref('-');
+        const toasts = ref([]);
+
+        const snapshot = ref({
+            timestamp: '', strategy_id: 0, active: false, account: '', exposure: 0,
+            spread: { current:0, avg_spread:0, avg_ori:0, t_value:0, deviation:0, is_valid:false, alpha:0 },
+            leg1: emptyLeg(), leg2: emptyLeg()
+        });
+
+        let ws = null;
+        let reconnTimer = null;
+
+        const totalPnl = computed(() => snapshot.value.leg1.net_pnl + snapshot.value.leg2.net_pnl);
+
+        const fmtPnl = (v) => { if (!v && v !== 0) return '0.00'; return (v >= 0 ? '+' : '') + v.toFixed(2); };
+        const fmtPx = (v) => v ? v.toFixed(2) : '0.00';
+        const fmtNum = (v) => v !== undefined && v !== null ? (Math.abs(v) < 10 ? v.toFixed(4) : v.toFixed(2)) : '0';
+
+        const orderBadge = (s) => {
+            if (s === 'NEW_CONFIRM' || s === 'MODIFY_CONFIRM') return 'badge-info';
+            if (s === 'TRADED') return 'badge-success';
+            if (s === 'CANCEL_CONFIRM') return 'badge-secondary';
+            if (s.includes('REJECT')) return 'badge-danger';
+            return 'badge-warning';
+        };
+
+        const isCompleted = (s) => s === 'TRADED' || s === 'CANCEL_CONFIRM' || s === 'NEW_REJECT';
+
+        const showToast = (msg, type='success') => {
+            const t = { msg, type };
+            toasts.value.push(t);
+            setTimeout(() => { const i = toasts.value.indexOf(t); if (i > -1) toasts.value.splice(i, 1); }, 3000);
+        };
+
+        const getApiBase = () => `http://${host.value}:${port.value}`;
+        const getWsUrl = () => `ws://${host.value}:${port.value}/ws`;
+
+        const connectWs = () => {
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+            try {
+                ws = new WebSocket(getWsUrl());
+                ws.onopen = () => { connected.value = true; showToast('WebSocket connected'); if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; } };
+                ws.onmessage = (e) => {
+                    try {
+                        const msg = JSON.parse(e.data);
+                        if (msg.type === 'dashboard_update' && msg.data) {
+                            snapshot.value = msg.data;
+                            lastRefresh.value = new Date().toLocaleTimeString();
+                        } else if (msg.type === 'ping') {
+                            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'pong'}));
+                        }
+                    } catch(err) { console.error('WS parse error:', err); }
+                };
+                ws.onerror = () => { connected.value = false; };
+                ws.onclose = () => { connected.value = false; showToast('Disconnected, reconnecting...', 'error'); reconnTimer = setTimeout(connectWs, 3000); };
+            } catch(err) { console.error('WS error:', err); connected.value = false; }
+        };
+
+        const disconnectWs = () => {
+            if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+            if (ws) { ws.close(); ws = null; }
+            connected.value = false;
+        };
+
+        const toggleWs = () => { connected.value ? disconnectWs() : connectWs(); };
+
+        const sendCmd = async (cmd) => {
+            if (processing.value) return;
+            processing.value = true;
+            const endpoints = {
+                activate: '/api/v1/strategy/activate',
+                deactivate: '/api/v1/strategy/deactivate',
+                squareoff: '/api/v1/strategy/squareoff',
+                reload_thresholds: '/api/v1/strategy/reload-thresholds'
+            };
+            try {
+                const res = await fetch(getApiBase() + endpoints[cmd], { method: 'POST' });
+                const data = await res.json();
+                if (data.success) showToast(data.message || cmd + ' sent');
+                else showToast(data.message || 'Failed', 'error');
+            } catch(err) { showToast('Error: ' + err.message, 'error'); }
+            finally { processing.value = false; }
+        };
+
+        const confirmCmd = (cmd) => { if (confirm('Confirm ' + cmd + '?')) sendCmd(cmd); };
+
+        onMounted(connectWs);
+        onUnmounted(disconnectWs);
+
+        return {
+            host, port, connected, processing, lastRefresh, toasts, snapshot, totalPnl,
+            fmtPnl, fmtPx, fmtNum, orderBadge, isCompleted, showToast, toggleWs, sendCmd, confirmCmd
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>

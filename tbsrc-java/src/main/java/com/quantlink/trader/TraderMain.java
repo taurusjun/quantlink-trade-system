@@ -1,5 +1,7 @@
 package com.quantlink.trader;
 
+import com.quantlink.trader.api.ApiServer;
+import com.quantlink.trader.api.SnapshotCollector;
 import com.quantlink.trader.config.*;
 import com.quantlink.trader.connector.Connector;
 import com.quantlink.trader.core.*;
@@ -9,6 +11,7 @@ import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.FileHandler;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
@@ -34,6 +37,10 @@ public class TraderMain {
     CommonClient client;
     PairwiseArbStrategy strategy;
     String dailyInitPath;
+
+    // Web 控制台 — 对齐 Go pkg/api/
+    ApiServer apiServer;
+    SnapshotCollector snapshotCollector;
 
     // CLI 参数
     String controlFile;
@@ -194,6 +201,7 @@ public class TraderMain {
         simConfig1.instrumentSec = instru2;
         simConfig1.useArbStrat = true;
         simConfig1.strategyID = strategyID;
+        simConfig1.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
 
         List<SimConfig> simList1 = new ArrayList<>();
         simList1.add(simConfig1);
@@ -204,6 +212,7 @@ public class TraderMain {
         simConfig2.instrumentSec = instru1;
         simConfig2.useArbStrat = true;
         simConfig2.strategyID = strategyID;
+        simConfig2.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
 
         List<SimConfig> simList2 = new ArrayList<>();
         simList2.add(simConfig2);
@@ -230,6 +239,10 @@ public class TraderMain {
         dailyInitPath = dataDir + "/daily_init." + strategyID;
         strategy = new PairwiseArbStrategy(client, simConfig1, dailyInitPath);
         simConfig1.executionStrategy = strategy;
+        // Overview 页面所需元数据
+        strategy.modelFile = controlCfg.modelFile != null ? controlCfg.modelFile : "";
+        strategy.strategyType = controlCfg.execStrat != null ? controlCfg.execStrat : "";
+        strategy.controlFilePath = controlFile != null ? controlFile : "";
         logger.info("[main] daily_init 已加载: " + dailyInitPath);
 
         // ---- 设置回调 ----
@@ -238,6 +251,11 @@ public class TraderMain {
         client.setMDCallback(md -> strategy.mdCallBack(md));
         client.setORSCallback(resp -> strategy.orsCallBack(resp));
         client.setSimConfigs(new SimConfig[]{simConfig1, simConfig2});
+
+        // ---- Step 12: 启动 API Server (对齐 Go api.NewServer + Start) ----
+        apiServer = new ApiServer(9201);
+        apiServer.start();
+        logger.info("[main] API Server 已启动 (port 9201)");
 
         logger.info("[main] 初始化完成, strategyID=" + strategyID);
     }
@@ -265,15 +283,22 @@ public class TraderMain {
         connector.startAsync();
         logger.info("[main] Connector 已启动，开始接收行情和回报");
 
+        // ---- 启动 SnapshotCollector (对齐 Go ticker 每秒采集) ----
+        snapshotCollector = new SnapshotCollector(strategy, apiServer);
+        snapshotCollector.start();
+
         // ---- 策略未激活 (Live 模式) ----
-        logger.info("[main] 策略未激活 (Live 模式，等待 SIGUSR1 激活)");
+        logger.info("[main] 策略未激活 (Live 模式，等待 SIGUSR1 或 Web 控制台激活)");
 
         // ---- 信号处理 ----
         // C++: sigfillset + sigwait 循环
         // Java: 使用 sun.misc.Signal
         registerSignalHandlers();
 
-        logger.info("[main] 进入主事件循环 (信号)");
+        // ---- 启动 Web 命令消费线程 (对齐 Go: for cmd := range apiServer.CommandChan()) ----
+        startCommandConsumer();
+
+        logger.info("[main] 进入主事件循环 (信号 + Web 命令)");
 
         // 阻塞等待关闭
         try {
@@ -293,8 +318,10 @@ public class TraderMain {
     private void registerSignalHandlers() {
         try {
             // SIGUSR1: 激活策略
+            // C++: main.cpp:140-148 — HandleSquareON() + set m_Active = true
             sun.misc.Signal.handle(new sun.misc.Signal("USR1"), sig -> {
                 logger.info("[main] 收到 SIGUSR1，激活策略");
+                strategy.handleSquareON();
                 strategy.active = true;
                 strategy.firstStrat.active = true;
                 strategy.secondStrat.active = true;
@@ -330,6 +357,53 @@ public class TraderMain {
     }
 
     /**
+     * 启动 Web 命令消费线程。
+     * 对齐: tbsrc-golang/cmd/trader/main.go 中 for cmd := range apiServer.CommandChan()
+     */
+    private void startCommandConsumer() {
+        Thread cmdThread = new Thread(() -> {
+            while (running) {
+                try {
+                    String cmd = apiServer.commandQueue().poll(1, TimeUnit.SECONDS);
+                    if (cmd == null) continue;
+
+                    logger.info("[main] 收到 Web 命令: " + cmd);
+                    switch (cmd) {
+                        case "activate" -> {
+                            // C++: main.cpp:140-148 — SIGUSR1 处理
+                            strategy.handleSquareON();
+                            strategy.active = true;
+                            strategy.firstStrat.active = true;
+                            strategy.secondStrat.active = true;
+                            logger.info("[main] 策略已通过 Web 激活");
+                        }
+                        case "deactivate" -> {
+                            strategy.active = false;
+                            strategy.firstStrat.active = false;
+                            strategy.secondStrat.active = false;
+                            logger.info("[main] 策略已通过 Web 停用");
+                        }
+                        case "squareoff" -> {
+                            strategy.handleSquareoff();
+                            logger.info("[main] 策略已通过 Web 平仓");
+                        }
+                        case "reload_thresholds" -> {
+                            reloadThresholds();
+                            logger.info("[main] 阈值已通过 Web 热加载");
+                        }
+                        default -> logger.warning("[main] 未知 Web 命令: " + cmd);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "cmd-consumer");
+        cmdThread.setDaemon(true);
+        cmdThread.start();
+    }
+
+    /**
      * 热加载阈值。
      * C++: SIGUSR2 触发 LoadThresholds(simConfig)
      */
@@ -354,19 +428,29 @@ public class TraderMain {
         if (!running) return;
         running = false;
 
-        // 1. 策略平仓 + 保存 daily_init
+        // 1. 停止 SnapshotCollector
+        if (snapshotCollector != null) {
+            snapshotCollector.stop();
+        }
+
+        // 2. 停止 API Server
+        if (apiServer != null) {
+            apiServer.stop();
+        }
+
+        // 3. 策略平仓 + 保存 daily_init
         if (strategy != null) {
             strategy.handleSquareoff();
             logger.info("[main] 策略已停止，daily_init 已保存");
         }
 
-        // 2. 停止 Connector
+        // 4. 停止 Connector
         if (connector != null) {
             connector.stop();
             logger.info("[main] Connector 已停止");
         }
 
-        // 3. 释放 SHM
+        // 5. 释放 SHM
         if (connector != null) {
             connector.close();
         }

@@ -58,17 +58,20 @@ log_section() {
 
 # 配置
 DEPLOY_DIR="${PROJECT_ROOT}/deploy_new"
+DEPLOY_JAVA_DIR="${PROJECT_ROOT}/deploy_java"
 DATA_DIR="${PROJECT_ROOT}/data_new"
 BUILD_GO=true
 BUILD_CPP=true
+BUILD_JAVA=false
 CLEAN_BUILD=false
 DEPLOY_MODE="sim"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --go)    BUILD_GO=true; BUILD_CPP=false; shift ;;
-        --cpp)   BUILD_GO=false; BUILD_CPP=true; shift ;;
+        --go)    BUILD_GO=true; BUILD_CPP=false; BUILD_JAVA=false; shift ;;
+        --cpp)   BUILD_GO=false; BUILD_CPP=true; BUILD_JAVA=false; shift ;;
+        --java)  BUILD_GO=false; BUILD_CPP=false; BUILD_JAVA=true; shift ;;
         --clean) CLEAN_BUILD=true; shift ;;
         --mode)
             if [[ -z "$2" || "$2" == --* ]]; then
@@ -87,6 +90,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --mode sim|live  部署模式（默认: sim）"
             echo "  --go             仅编译 Go 组件"
             echo "  --cpp            仅编译 C++ 组件"
+            echo "  --java           仅编译 Java 组件 (→ deploy_java/)"
             echo "  --clean          清理后重新编译"
             echo "  --help           显示帮助"
             echo ""
@@ -106,6 +110,7 @@ log_info "数据目录:   ${DATA_DIR}"
 log_info "部署模式:   ${DEPLOY_MODE}"
 log_info "编译 Go:    ${BUILD_GO}"
 log_info "编译 C++:   ${BUILD_CPP}"
+log_info "编译 Java:  ${BUILD_JAVA}"
 
 # ==================== 清理 ====================
 if [ "$CLEAN_BUILD" = true ]; then
@@ -203,6 +208,215 @@ if [ "$BUILD_GO" = true ]; then
 
     cd "${PROJECT_ROOT}"
     log_info "Go 组件编译完成"
+fi
+
+# ==================== 编译 Java ====================
+if [ "$BUILD_JAVA" = true ]; then
+    log_section "编译 Java 策略组件"
+
+    JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+    export JAVA_HOME
+    MVN_CMD="${MVN_CMD:-/opt/homebrew/bin/mvn}"
+
+    if [ ! -f "$MVN_CMD" ]; then
+        MVN_CMD="$(which mvn 2>/dev/null || true)"
+    fi
+    if [ -z "$MVN_CMD" ] || [ ! -f "$MVN_CMD" ]; then
+        log_error "Maven 未找到，请安装 Maven 或设置 MVN_CMD 环境变量"
+        exit 1
+    fi
+
+    log_info "JAVA_HOME: ${JAVA_HOME}"
+    log_info "Maven: ${MVN_CMD}"
+
+    if [ "$CLEAN_BUILD" = true ]; then
+        log_info "清理 Java 构建..."
+        "$MVN_CMD" -f "${PROJECT_ROOT}/tbsrc-java/pom.xml" clean -q 2>&1 || true
+    fi
+
+    log_info "编译 + 打包..."
+    "$MVN_CMD" -f "${PROJECT_ROOT}/tbsrc-java/pom.xml" package -DskipTests -q 2>&1
+
+    # 部署到 deploy_java
+    mkdir -p "${DEPLOY_JAVA_DIR}/lib"
+    mkdir -p "${DEPLOY_JAVA_DIR}/scripts"
+    mkdir -p "${DEPLOY_JAVA_DIR}/log"
+    mkdir -p "${DEPLOY_JAVA_DIR}/data"
+
+    log_info "部署 JAR 到 deploy_java/lib/..."
+    cp "${PROJECT_ROOT}/tbsrc-java/target/trader-1.0-SNAPSHOT.jar" "${DEPLOY_JAVA_DIR}/lib/"
+    cp "${PROJECT_ROOT}/tbsrc-java/target/lib/"*.jar "${DEPLOY_JAVA_DIR}/lib/" 2>/dev/null || true
+    log_info "  trader-1.0-SNAPSHOT.jar + $(ls "${PROJECT_ROOT}/tbsrc-java/target/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个依赖"
+
+    # 合并 data_new 配置到 deploy_java（如果尚未存在）
+    if [ -d "${DATA_DIR}/common" ]; then
+        for dir in config controls models; do
+            if [ -d "${DATA_DIR}/common/${dir}" ] && [ ! -d "${DEPLOY_JAVA_DIR}/${dir}" ]; then
+                cp -R "${DATA_DIR}/common/${dir}" "${DEPLOY_JAVA_DIR}/"
+                log_info "  common/${dir}/ → deploy_java/"
+            fi
+        done
+    fi
+
+    # 生成 Java 启动脚本
+    log_info "生成 Java 启动脚本..."
+
+    # --- start_java_trader.sh ---
+    cat > "${DEPLOY_JAVA_DIR}/scripts/start_java_trader.sh" << 'JSCRIPT_EOF'
+#!/bin/bash
+# 启动 Java Trader 策略引擎
+# 用法: ./scripts/start_java_trader.sh <strategyID>
+set -e
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+export JAVA_HOME
+
+STRATEGY_ID="${1:-92201}"
+
+# 查找 controlFile (支持 day/ 子目录)
+CONTROL_FILE=$(find "$DEPLOY_DIR/controls" -name "*.${STRATEGY_ID}" -type f 2>/dev/null | head -1)
+CONFIG_FILE="$DEPLOY_DIR/config/config_CHINA.${STRATEGY_ID}.cfg"
+
+if [ -z "$CONTROL_FILE" ] || [ ! -f "$CONTROL_FILE" ]; then
+    echo "[ERROR] controlFile not found for strategyID=$STRATEGY_ID"
+    exit 1
+fi
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[ERROR] configFile not found: $CONFIG_FILE"
+    exit 1
+fi
+
+mkdir -p "$DEPLOY_DIR/data" "$DEPLOY_DIR/log"
+
+echo "[INFO] Starting Java Trader (strategyID=$STRATEGY_ID)"
+echo "  controlFile: $CONTROL_FILE"
+echo "  configFile: $CONFIG_FILE"
+echo "  dataDir: $DEPLOY_DIR/data"
+
+CLASSPATH="$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar"
+for jar in "$DEPLOY_DIR/lib/"*.jar; do
+    [ "$jar" = "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" ] && continue
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+cd "$DEPLOY_DIR"
+nohup "$JAVA_HOME/bin/java" \
+    --enable-native-access=ALL-UNNAMED \
+    -cp "$CLASSPATH" \
+    com.quantlink.trader.TraderMain \
+    --Live \
+    -controlFile "$CONTROL_FILE" \
+    -strategyID "$STRATEGY_ID" \
+    -configFile "$CONFIG_FILE" \
+    -dataDir "$DEPLOY_DIR/data" \
+    -logFile "$DEPLOY_DIR/log/trader.$STRATEGY_ID.log" \
+    > "nohup.out.$STRATEGY_ID" 2>&1 &
+
+TRADER_PID=$!
+echo "$TRADER_PID" > "$DEPLOY_DIR/trader.$STRATEGY_ID.pid"
+echo "[INFO] Java Trader started (PID=$TRADER_PID)"
+echo "[INFO] 日志: tail -f $DEPLOY_DIR/nohup.out.$STRATEGY_ID"
+
+sleep 2
+if kill -0 "$TRADER_PID" 2>/dev/null; then
+    echo "[INFO] 进程运行正常"
+else
+    echo "[ERROR] 进程已退出，检查日志"
+    tail -20 "nohup.out.$STRATEGY_ID" 2>/dev/null
+    exit 1
+fi
+JSCRIPT_EOF
+
+    # --- start_overview.sh ---
+    cat > "${DEPLOY_JAVA_DIR}/scripts/start_overview.sh" << 'JSCRIPT_EOF'
+#!/bin/bash
+# 启动 OverviewServer (端口 8080)
+# 用法: ./scripts/start_overview.sh [port]
+set -e
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+JAVA_HOME="${JAVA_HOME:-/Users/user/Library/Java/JavaVirtualMachines/openjdk-25.0.1/Contents/Home}"
+export JAVA_HOME
+
+PORT="${1:-8080}"
+
+echo "[INFO] Starting OverviewServer (port=$PORT)"
+
+CLASSPATH="$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar"
+for jar in "$DEPLOY_DIR/lib/"*.jar; do
+    [ "$jar" = "$DEPLOY_DIR/lib/trader-1.0-SNAPSHOT.jar" ] && continue
+    CLASSPATH="$CLASSPATH:$jar"
+done
+
+cd "$DEPLOY_DIR"
+mkdir -p log
+nohup "$JAVA_HOME/bin/java" \
+    -cp "$CLASSPATH" \
+    com.quantlink.trader.api.overview.OverviewServer \
+    "$PORT" \
+    > "nohup.out.overview" 2>&1 &
+
+OVERVIEW_PID=$!
+echo "$OVERVIEW_PID" > "$DEPLOY_DIR/overview.pid"
+echo "[INFO] OverviewServer started (PID=$OVERVIEW_PID)"
+echo "[INFO] 页面: http://localhost:$PORT/overview.html"
+echo "[INFO] 日志: tail -f $DEPLOY_DIR/nohup.out.overview"
+
+sleep 2
+if kill -0 "$OVERVIEW_PID" 2>/dev/null; then
+    echo "[INFO] 进程运行正常"
+else
+    echo "[ERROR] 进程已退出，检查日志"
+    tail -20 "nohup.out.overview" 2>/dev/null
+    exit 1
+fi
+JSCRIPT_EOF
+
+    # --- stop_all_java.sh ---
+    cat > "${DEPLOY_JAVA_DIR}/scripts/stop_all_java.sh" << 'JSCRIPT_EOF'
+#!/bin/bash
+# 停止所有 Java 组件（Trader + OverviewServer）
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+echo "[INFO] 停止所有 Java 组件..."
+
+# 停止 OverviewServer
+if [ -f "$DEPLOY_DIR/overview.pid" ]; then
+    PID=$(cat "$DEPLOY_DIR/overview.pid")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "[INFO] 停止 OverviewServer (PID=$PID)"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$DEPLOY_DIR/overview.pid"
+fi
+
+# 停止所有 Trader
+for pid_file in "$DEPLOY_DIR"/trader.*.pid; do
+    [ -f "$pid_file" ] || continue
+    PID=$(cat "$pid_file")
+    SID=$(basename "$pid_file" .pid | sed 's/trader\.//')
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "[INFO] 停止 Trader $SID (PID=$PID)"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+done
+
+# 等待退出
+sleep 3
+
+# 强制清理残留
+pkill -f "OverviewServer" 2>/dev/null || true
+pkill -f "TraderMain" 2>/dev/null || true
+
+echo "[INFO] 所有 Java 组件已停止"
+JSCRIPT_EOF
+
+    chmod +x "${DEPLOY_JAVA_DIR}/scripts/"*.sh
+    log_info "  start_java_trader.sh (Java Trader)"
+    log_info "  start_overview.sh    (OverviewServer port 8080)"
+    log_info "  stop_all_java.sh     (停止所有 Java 组件)"
+
+    log_info "Java 组件编译部署完成 → deploy_java/"
 fi
 
 # ==================== 生成启动脚本 ====================
