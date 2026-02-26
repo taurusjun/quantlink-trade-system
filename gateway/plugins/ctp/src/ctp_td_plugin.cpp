@@ -720,7 +720,9 @@ bool CTPTDPlugin::QueryAccount(AccountInfo& account_info) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_query_mutex);
+    // 使用 unique_lock 保护整个查询流程（发送请求 + 等待回调）
+    // 注意: 不能用 lock_guard + unique_lock 双重锁同一个 mutex，会死锁
+    std::unique_lock<std::mutex> lock(m_query_mutex);
     m_query_finished = false;
 
     CThostFtdcQryTradingAccountField req = {};
@@ -734,8 +736,7 @@ bool CTPTDPlugin::QueryAccount(AccountInfo& account_info) {
     }
 
     // 等待查询完成（超时5秒）
-    std::unique_lock<std::mutex> ulock(m_query_mutex);
-    m_query_cv.wait_for(ulock, std::chrono::seconds(5), [this] { return m_query_finished; });
+    m_query_cv.wait_for(lock, std::chrono::seconds(5), [this] { return m_query_finished; });
 
     if (!m_query_finished) {
         std::cerr << "[CTPTDPlugin] ❌ Query account timeout" << std::endl;
@@ -879,7 +880,7 @@ bool CTPTDPlugin::QueryOrders(std::vector<OrderInfo>& orders) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_query_mutex);
+    std::unique_lock<std::mutex> lock(m_query_mutex);
     m_query_finished = false;
     m_cached_orders.clear();
 
@@ -894,8 +895,7 @@ bool CTPTDPlugin::QueryOrders(std::vector<OrderInfo>& orders) {
     }
 
     // 等待查询完成
-    std::unique_lock<std::mutex> ulock(m_query_mutex);
-    m_query_cv.wait_for(ulock, std::chrono::seconds(5), [this] { return m_query_finished; });
+    m_query_cv.wait_for(lock, std::chrono::seconds(5), [this] { return m_query_finished; });
 
     if (!m_query_finished) {
         std::cerr << "[CTPTDPlugin] ❌ Query orders timeout" << std::endl;
@@ -936,7 +936,7 @@ bool CTPTDPlugin::QueryTrades(std::vector<TradeInfo>& trades) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_query_mutex);
+    std::unique_lock<std::mutex> lock(m_query_mutex);
     m_query_finished = false;
     m_cached_trades.clear();
 
@@ -951,8 +951,7 @@ bool CTPTDPlugin::QueryTrades(std::vector<TradeInfo>& trades) {
     }
 
     // 等待查询完成
-    std::unique_lock<std::mutex> ulock(m_query_mutex);
-    m_query_cv.wait_for(ulock, std::chrono::seconds(5), [this] { return m_query_finished; });
+    m_query_cv.wait_for(lock, std::chrono::seconds(5), [this] { return m_query_finished; });
 
     if (!m_query_finished) {
         std::cerr << "[CTPTDPlugin] ❌ Query trades timeout" << std::endl;
