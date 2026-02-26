@@ -33,8 +33,17 @@ OverviewServer 独立运行在端口 8080，负责：
 - 操作按钮: 启动/停止/暂停/日志
 
 **③ Account Table**（右侧）
-列: Pro | Ex(交易所) | TotalAsset | AvailCash | Margin | Risk(%)
-- 当前阶段: 显示表头和空行占位，后续对接 CTP 资金查询
+列: Broker | AccountID | TotalAsset | AvailCash | Margin | Risk(%) | ClosePnL | PosPnL
+
+OverviewServer SHALL 每 10 秒通过 HTTP GET 查询 `http://localhost:8082/account` 获取资金数据。
+
+查询结果 SHALL 缓存为 `AccountRow` 列表，在每次聚合 OverviewSnapshot 时合并到 `accounts` 字段。
+
+Account Table SHALL 通过 Vue 数据绑定渲染 `overview.accounts` 数组。
+
+Risk(%) SHALL 计算为 `margin / balance * 100`，超过 50% 时以红色高亮显示。
+
+当 counter_bridge 未启动或查询失败时，Account Table SHALL 显示 "Waiting for counter_bridge..." 占位文字。
 
 **④ Spread Trades**（底部左）
 列: ModelFile | S(方向) | Qty | Spread | Time | Pro
