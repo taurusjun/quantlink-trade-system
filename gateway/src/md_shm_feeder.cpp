@@ -24,6 +24,8 @@
 #include <chrono>
 #include <random>
 #include <cmath>
+#include <map>
+#include <algorithm>
 
 #include "hftbase_shm.h"
 #include "hftbase_md_types.h"
@@ -53,6 +55,25 @@ struct MDFeederConfig {
 static std::atomic<bool> g_running{true};
 static MDQueue* g_md_queue = nullptr;
 static std::atomic<uint64_t> g_md_count{0};
+
+// symbolID mapping: symbol string → uint16_t ID (assigned in sorted order, matching C++ Connector)
+// C++ Connector uses std::set<string> (sorted) to assign symbolID from 0 incrementally.
+// Ref: hftbase/Connector/src/connector.cpp:48-62
+static std::map<std::string, uint16_t> g_symbol_id_map;
+
+// Build symbolID mapping from symbol list (sorted lexicographically, same as C++ std::set)
+void BuildSymbolIDMap(const std::vector<std::string>& symbols) {
+    std::vector<std::string> sorted_symbols(symbols);
+    std::sort(sorted_symbols.begin(), sorted_symbols.end());
+    uint16_t id = 0;
+    for (const auto& sym : sorted_symbols) {
+        g_symbol_id_map[sym] = id++;
+    }
+    std::cout << "[MDFeeder] SymbolID mapping:" << std::endl;
+    for (const auto& kv : g_symbol_id_map) {
+        std::cout << "[MDFeeder]   " << kv.first << " → " << kv.second << std::endl;
+    }
+}
 
 void SignalHandler(int signal) {
     std::cout << "\n[MDFeeder] Received signal " << signal << ", shutting down..." << std::endl;
@@ -199,6 +220,11 @@ void RunSimulator(const std::vector<std::string>& symbols, int rate_hz) {
             std::strncpy(md.m_symbol, inst.symbol.c_str(),
                          sizeof(md.m_symbol) - 1);
             md.m_exchangeName = inst.exchange;
+            // Set symbolID from pre-built mapping (matches C++ Connector behavior)
+            auto sid_it = g_symbol_id_map.find(inst.symbol);
+            if (sid_it != g_symbol_id_map.end()) {
+                md.m_symbolID = sid_it->second;
+            }
 
             // Build 5-level order book (CTP gives 5 levels)
             int valid_levels = 5;
@@ -232,7 +258,7 @@ void RunSimulator(const std::vector<std::string>& symbols, int rate_hz) {
             md.m_feedType = FEED_SNAPSHOT;
             md.m_updateType = MDUPDTYPE_NONE;
             md.m_side = MD_SIDE_NONE;
-            md.m_endPkt = 1;
+            md.m_endPkt = 0;  // 中国期货: 每个 snapshot 是完整包，非多段消息
 
             // Enqueue to MWMR
             g_md_queue->enqueue(md);
@@ -275,6 +301,9 @@ public:
         if (m_symbols.empty()) {
             m_symbols = config.instruments;
         }
+
+        // Build symbolID mapping (sorted alphabetical order, matching C++ Connector)
+        BuildSymbolIDMap(m_symbols);
 
         m_api = CThostFtdcMdApi::CreateFtdcMdApi("./ctp_flow/");
         m_api->RegisterSpi(this);
@@ -347,6 +376,11 @@ public:
         md.m_timestamp = now_ns;
         md.m_seqnum = ++m_seq;
         std::strncpy(md.m_symbol, pData->InstrumentID, sizeof(md.m_symbol) - 1);
+        // Set symbolID from pre-built mapping (matches C++ Connector behavior)
+        auto sid_it = g_symbol_id_map.find(pData->InstrumentID);
+        if (sid_it != g_symbol_id_map.end()) {
+            md.m_symbolID = sid_it->second;
+        }
 
         // Exchange: try ExchangeID field, fallback to guess
         std::string exchange_id(pData->ExchangeID);
@@ -393,7 +427,7 @@ public:
         md.m_feedType = FEED_SNAPSHOT;
         md.m_updateType = MDUPDTYPE_NONE;
         md.m_side = MD_SIDE_NONE;
-        md.m_endPkt = 1;
+        md.m_endPkt = 0;  // 中国期货: 每个 snapshot 是完整包，非多段消息
 
         // Enqueue
         g_md_queue->enqueue(md);
@@ -511,6 +545,7 @@ int main(int argc, char** argv) {
             std::cerr << "[MDFeeder] No symbols specified" << std::endl;
             return 1;
         }
+        BuildSymbolIDMap(symbols);
         RunSimulator(symbols, rate_hz);
 
     } else if (mode == "ctp") {

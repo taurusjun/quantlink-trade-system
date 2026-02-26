@@ -45,11 +45,16 @@ public class ConfigParams {
 
     // ---- SimConfig 映射 ----
     // 迁移自: ConfigParams::m_simConfigMap + m_simConfigList[100]
-    // C++: SimConfigMap m_simConfigMap — 原按 m_symbolID (int) 索引
+    // C++: SimConfigMap m_simConfigMap — 按 m_symbolID (int) 索引
     // Ref: CommonClient.h:130, CommonClient.cpp:418
-    // [C++差异] C++ 按 m_symbolID (int) 路由，但 md_shm_feeder 不设置 m_symbolID（memset 后为 0），
-    //           因此 Java 按 m_symbol (String) 路由，与 CommonClient.cpp:417 的字符串查找一致。
     public final Map<String, List<SimConfig>> simConfigMap = new HashMap<>();
+
+    // ---- SimConfig 数组 (symbolID 索引) ----
+    // 迁移自: ConfigParams::m_simConfigList[100]
+    // C++: SimConfigMapIter m_simConfigList[100] — symbolID → SimConfigMap 迭代器
+    // Ref: CommonClient.cpp:418 — simIter = m_configParams->m_simConfigList[update->m_symbolID]
+    // symbolID 由 Connector 排序 symbol 后分配 (0,1,2...)
+    public List<SimConfig>[] simConfigList;
 
     // ---- 当前活跃 SimConfig ----
     // 迁移自: ConfigParams::m_simConfig

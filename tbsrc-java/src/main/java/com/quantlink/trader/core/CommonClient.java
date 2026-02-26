@@ -154,7 +154,7 @@ public class CommonClient {
     }
 
     /**
-     * 按 symbol 分发行情到策略。
+     * 按 symbolID 分发行情到策略。
      * 迁移自: CommonClient::SendINDUpdate(MarketUpdateNew*)
      * Ref: CommonClient.cpp:401-769 (370 行)
      *
@@ -206,11 +206,15 @@ public class CommonClient {
 
         // C++: SimConfigMapIter simIter = m_configParams->m_simConfigList[update->m_symbolID]
         // Ref: CommonClient.cpp:418,428
-        // [C++差异] Java 按 m_symbol (String) 路由，而非 m_symbolID (int)。
-        //           原因: md_shm_feeder 不设置 m_symbolID（memset 后为 0）。
-        List<SimConfig> simConfigList = configParams.simConfigMap.get(symbol);
+        // symbolID 由 md_shm_feeder 设置 (BuildSymbolIDMap, 按字母排序分配 0,1,2...)
+        short symbolID = (short) Types.MDH_SYMBOL_ID_VH.get(mdUpdate, 0L);
+        if (configParams.simConfigList == null
+                || symbolID < 0 || symbolID >= configParams.simConfigList.length) {
+            return; // symbolID 未注册
+        }
+        List<SimConfig> simConfigList = configParams.simConfigList[symbolID];
         if (simConfigList == null) {
-            return; // symbol 未注册
+            return; // symbolID 未注册
         }
 
         // C++: bool indUpdate = false;
@@ -228,7 +232,11 @@ public class CommonClient {
 
             // C++: InstruMapIter iter = m_configParams->m_simConfig->m_instruList[update->m_symbolID]
             // Ref: CommonClient.cpp:437
-            Instrument iterInstru = simCfg.instruMap.get(symbol);
+            if (simCfg.instruList == null
+                    || symbolID >= simCfg.instruList.length) {
+                continue;
+            }
+            Instrument iterInstru = simCfg.instruList[symbolID];
             if (iterInstru == null) continue;
 
             // ================================================================

@@ -10,6 +10,7 @@ import com.quantlink.trader.strategy.PairwiseArbStrategy;
 
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -226,6 +227,32 @@ public class TraderMain {
         simConfig1.instruMap.put(sym2, instru2);
         simConfig2.instruMap.put(sym1, instru1);
         simConfig2.instruMap.put(sym2, instru2);
+
+        // ---- symbolID 数组构建 ----
+        // 迁移自: hftbase/Connector/src/connector.cpp:48-62 — Connector::AddSymbol()
+        // C++: std::set<string> sorted → assign symbolID 0,1,2... in sorted order
+        // C++: m_configParams->m_simConfigList[symbolID] = m_simConfigMap.find(symbol)
+        // C++: simConfig->m_instruList[symbolID] = simConfig->m_instruMap.find(symbol)
+        // md_shm_feeder 使用相同排序逻辑 (BuildSymbolIDMap)
+        String[] sortedSymbols = {sym1, sym2};
+        Arrays.sort(sortedSymbols);
+
+        int numSymbols = sortedSymbols.length;
+        @SuppressWarnings("unchecked")
+        List<SimConfig>[] scList = new List[numSymbols];
+        Instrument[] iList1 = new Instrument[numSymbols];
+        Instrument[] iList2 = new Instrument[numSymbols];
+
+        for (int i = 0; i < numSymbols; i++) {
+            String s = sortedSymbols[i];
+            scList[i] = params.simConfigMap.get(s);
+            iList1[i] = simConfig1.instruMap.get(s);
+            iList2[i] = simConfig2.instruMap.get(s);
+            logger.info(String.format("[main] symbolID %d → %s", i, s));
+        }
+        params.simConfigList = scList;
+        simConfig1.instruList = iList1;
+        simConfig2.instruList = iList2;
 
         // ---- Step 9: 加载阈值 ----
         // C++: LoadModelFile → ThresholdSet

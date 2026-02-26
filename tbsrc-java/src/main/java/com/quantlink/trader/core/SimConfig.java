@@ -18,10 +18,15 @@ public class SimConfig {
     // ---- Instrument 映射 ----
     // 迁移自: SimConfig::m_instruMap, m_instruList[100]
     // C++: unordered_map<string, InstruElem*> m_instruMap — 按 symbol 字符串路由
-    // Ref: CommonClient.cpp:437 — InstruMapIter iter = m_configParams->m_simConfig->m_instruList[symbolID]
-    // [C++差异] C++ 按 symbolID (int) 索引 m_instruList，Java 按 symbol (String) 索引。
-    //           原因同 ConfigParams.simConfigMap：md_shm_feeder 不设置 m_symbolID。
+    // Ref: CommonClient.cpp:437
     public final Map<String, Instrument> instruMap = new HashMap<>();
+
+    // ---- Instrument 数组 (symbolID 索引) ----
+    // 迁移自: SimConfig::m_instruList[100]
+    // C++: InstruMapIter m_instruList[100] — symbolID → InstruMap 迭代器
+    // Ref: CommonClient.cpp:437 — iter = m_configParams->m_simConfig->m_instruList[update->m_symbolID]
+    // symbolID 由 Connector 排序 symbol 后分配 (0,1,2...)
+    public Instrument[] instruList;
 
     // ---- 阈值 ----
     // 迁移自: SimConfig::m_tholdSet
