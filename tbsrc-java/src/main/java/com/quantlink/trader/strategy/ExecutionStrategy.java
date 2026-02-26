@@ -172,6 +172,22 @@ public abstract class ExecutionStrategy {
     public final Map<Double, OrderStats> bidMap = new TreeMap<>();
     public final Map<Double, OrderStats> askMap = new TreeMap<>();
 
+    // ---- Self-book Cache Map ----
+    // 迁移自: ExecutionStrategy.h — m_bidMapCache, m_askMapCache
+    // C++: PriceMap m_bidMapCache, m_askMapCache — used for self-book tracking
+    public final Map<Double, OrderStats> bidMapCache = new TreeMap<>();
+    public final Map<Double, OrderStats> askMapCache = new TreeMap<>();
+
+    // ---- 统计字段 ----
+    // 迁移自: ExecutionStrategy.h — instruAvgTradeQty, volume_ewa, SET_HIGH, prev_tradeQty
+    // C++: deque<uint64_t> StatTrTimeQ; deque<double> StatTradeQtyQ;
+    public double instruAvgTradeQty;
+    public double volume_ewa;
+    public int SET_HIGH;
+    public double prev_tradeQty;
+    public final Deque<Long> statTrTimeQ = new ArrayDeque<>();
+    public final Deque<Double> statTradeQtyQ = new ArrayDeque<>();
+
     // ---- PNL 目标 ----
     public double[] targetBidPNL;
     public double[] targetAskPNL;
@@ -1813,6 +1829,198 @@ public abstract class ExecutionStrategy {
         } else {
             return Math.ceil(price / tick) * tick;
         }
+    }
+
+    // =======================================================================
+    //  OptionType 枚举 + GetOptionType
+    // =======================================================================
+
+    /**
+     * 期权类型枚举。
+     * 迁移自: tbsrc/common/include/CommonDefs.h — enum OptionType { CALL, PUT, NILL }
+     */
+    public enum OptionType {
+        CALL, PUT, NILL
+    }
+
+    /**
+     * 将期权类型字符转换为枚举。
+     * 迁移自: ExecutionStrategy::GetOptionType(char optionType)
+     * Ref: ExecutionStrategy.cpp:484-498
+     *
+     * @param optionType 'C' for CALL, 'P' for PUT
+     * @return OptionType 枚举值
+     */
+    public OptionType getOptionType(char optionType) {
+        // C++: OptionType optType = NILL;
+        // C++: switch (optionType) { case 'C': optType = CALL; break; case 'P': optType = PUT; break; }
+        return switch (optionType) {
+            case 'C' -> OptionType.CALL;
+            case 'P' -> OptionType.PUT;
+            default -> OptionType.NILL;
+        };
+    }
+
+    // =======================================================================
+    //  GetInstrumentStats — 成交量 EWA 统计
+    // =======================================================================
+
+    /**
+     * 计算合约成交量统计 — 滑动窗口 EWA (指数加权平均)。
+     * 迁移自: ExecutionStrategy::GetInstrumentStats()
+     * Ref: ExecutionStrategy.cpp:398-420
+     *
+     * 逻辑:
+     * 1. 记录当前时刻和成交量增量到滑动窗口队列
+     * 2. 清除过期数据（超过 STAT_DURATION_SMALL 窗口期）
+     * 3. 计算 EWA: stat_multiplier * instruAvgTradeQty + (1-stat_multiplier) * volume_ewa
+     * 4. 根据 EWA 与 STAT_TRADE_THRESH 比较设置 SET_HIGH 标志
+     */
+    public void getInstrumentStats() {
+        // C++: StatTrTimeQ.push_back(Watch::GetUniqueInstance()->GetCurrentTime());
+        long currTime = exchTS;
+        statTrTimeQ.addLast(currTime);
+
+        // C++: double trade_diff = (m_instru->totalTradedQty - prev_tradeQty) / m_instru->m_lotSize;
+        double tradeDiff = (instru.totalTradedQty - prev_tradeQty) / instru.lotSize;
+        // C++: prev_tradeQty = m_instru->totalTradedQty;
+        prev_tradeQty = instru.totalTradedQty;
+
+        // C++: if (StatTradeQtyQ.size() > 0) instruAvgTradeQty += trade_diff; else instruAvgTradeQty = trade_diff;
+        if (!statTradeQtyQ.isEmpty()) {
+            instruAvgTradeQty += tradeDiff;
+        } else {
+            instruAvgTradeQty = tradeDiff;
+        }
+        statTradeQtyQ.addLast(tradeDiff);
+
+        // C++: while (StatTrTimeQ.size() > 0 && StatTrTimeQ.front() <= currTime - m_thold->STAT_DURATION_SMALL)
+        while (!statTrTimeQ.isEmpty() && statTrTimeQ.peekFirst() <= currTime - thold.STAT_DURATION_SMALL) {
+            // C++: instruAvgTradeQty -= StatTradeQtyQ.front();
+            instruAvgTradeQty -= statTradeQtyQ.pollFirst();
+            statTrTimeQ.pollFirst();
+        }
+
+        // C++: double stat_multiplier = 2.0 / (1 + 2.8854 * 5);
+        double statMultiplier = 2.0 / (1 + 2.8854 * 5);
+        // C++: volume_ewa = stat_multiplier * instruAvgTradeQty + (1 - stat_multiplier) * volume_ewa;
+        volume_ewa = statMultiplier * instruAvgTradeQty + (1 - statMultiplier) * volume_ewa;
+
+        // C++: if (volume_ewa > m_thold->STAT_TRADE_THRESH) SET_HIGH = 0; else SET_HIGH = 1;
+        if (volume_ewa > thold.STAT_TRADE_THRESH) {
+            SET_HIGH = 0;
+        } else {
+            SET_HIGH = 1;
+        }
+    }
+
+    // =======================================================================
+    //  AddtoCache — Self-book 缓存管理
+    // =======================================================================
+
+    /**
+     * 将订单添加到 self-book 价格缓存。
+     * 迁移自: ExecutionStrategy::AddtoCache(OrderMapIter &iter, double &price)
+     * Ref: ExecutionStrategy.cpp:821-834
+     *
+     * @param order 订单统计
+     * @param price 订单价格
+     */
+    public void addToCache(OrderStats order, double price) {
+        // C++: if (iter->second->m_side == BUY) priceMapCache = &m_bidMapCache; else priceMapCache = &m_askMapCache;
+        if (order.side == Constants.SIDE_BUY) {
+            bidMapCache.put(price, order);
+        } else {
+            askMapCache.put(price, order);
+        }
+    }
+
+    // =======================================================================
+    //  Dump 调试方法
+    // =======================================================================
+
+    /**
+     * 打印内部订单簿（我方挂单）。
+     * 迁移自: ExecutionStrategy::DumpOurBook()
+     * Ref: ExecutionStrategy.cpp:1605-1624
+     */
+    public void dumpOurBook() {
+        // C++: TBLOG << __PRETTY_FUNCTION__ << " OUR BID orders : " << endl;
+        StringBuilder sb = new StringBuilder();
+        sb.append("DumpOurBook OUR BID orders:\n");
+        int bidctr = 0;
+        for (Map.Entry<Double, OrderStats> e : bidMap.entrySet()) {
+            bidctr++;
+            OrderStats o = e.getValue();
+            // C++: iter->second->m_orderID \t m_price \t m_Qty \t m_openQty \t m_status \t m_typeOfOrder
+            sb.append(String.format("  %d\t%.4f\t%d\t%d\t%s\n",
+                    o.orderID, o.price, o.qty, o.openQty, o.hitType));
+        }
+        sb.append("DumpOurBook OUR ASK orders:\n");
+        int askctr = 0;
+        for (Map.Entry<Double, OrderStats> e : askMap.entrySet()) {
+            askctr++;
+            OrderStats o = e.getValue();
+            sb.append(String.format("  %d\t%.4f\t%d\t%d\t%s\n",
+                    o.orderID, o.price, o.qty, o.openQty, o.hitType));
+        }
+        sb.append("BIDCTR: ").append(bidctr).append(" ASKCTR: ").append(askctr);
+        log.info(sb.toString());
+    }
+
+    /**
+     * 打印指标值。
+     * 迁移自: ExecutionStrategy::DumpIndicators()
+     * Ref: ExecutionStrategy.cpp:1626-1634
+     *
+     * [C++差异] C++ 遍历 m_simConfig->m_indicatorList 打印每个指标的
+     * coefficient * indicator->Value(status) * tickSize。
+     * Java 版本简化为打印 targetPrice 和 currPrice，因为指标系统尚未完整迁移。
+     */
+    public void dumpIndicators() {
+        // C++: TBLOG << m_targetPrice << "\t" << m_currPrice << "\t";
+        // C++: for (iter : m_indicatorList) TBLOG << (*iter)->m_coefficient * (*iter)->m_indicator->Value(status) * m_instru->m_tickSize;
+        StringBuilder sb = new StringBuilder();
+        sb.append("DumpIndicators: targetPrice=").append(targetPrice)
+          .append(" currPrice=").append(currPrice);
+        // [C++差异] 指标列表遍历省略 — Java 指标系统尚未迁移
+        log.info(sb.toString());
+    }
+
+    /**
+     * 打印市场订单簿。
+     * 迁移自: ExecutionStrategy::DumpMktBook()
+     * Ref: ExecutionStrategy.cpp:1636-1641
+     */
+    public void dumpMktBook() {
+        // C++: for (i = 0; i < m_instru->m_level; ++i)
+        //   TBLOG << bidOrderCount[i] << bidQty[i] << bidPx[i] << " X " << askPx[i] << askQty[i] << askOrderCount[i]
+        StringBuilder sb = new StringBuilder("DumpMktBook:\n");
+        int levels = instru.level > 0 ? instru.level : instru.bookDepth;
+        for (int i = 0; i < levels; i++) {
+            sb.append(String.format("  %5.0f %8.0f %10.4f X %-10.4f %-8.0f %-5.0f\n",
+                    instru.bidOrderCount[i], instru.bidQty[i], instru.bidPx[i],
+                    instru.askPx[i], instru.askQty[i], instru.askOrderCount[i]));
+        }
+        log.info(sb.toString());
+    }
+
+    /**
+     * 打印策略订单簿。
+     * 迁移自: ExecutionStrategy::DumpStratBook()
+     * Ref: ExecutionStrategy.cpp:1643-1648
+     */
+    public void dumpStratBook() {
+        // C++: for (i = 0; i < m_instru->m_level; ++i)
+        //   TBLOG << bidOrderCountStrat[i] << bidQtyStrat[i] << bidPxStrat[i] << " X " << askPxStrat[i] << askQtyStrat[i] << askOrderCountStrat[i]
+        StringBuilder sb = new StringBuilder("DumpStratBook:\n");
+        int levels = instru.level > 0 ? instru.level : instru.bookDepth;
+        for (int i = 0; i < levels; i++) {
+            sb.append(String.format("  %5.0f %8.0f %10.4f X %-10.4f %-8.0f %-5.0f\n",
+                    instru.bidOrderCountStrat[i], instru.bidQtyStrat[i], instru.bidPxStrat[i],
+                    instru.askPxStrat[i], instru.askQtyStrat[i], instru.askOrderCountStrat[i]));
+        }
+        log.info(sb.toString());
     }
 
     @Override

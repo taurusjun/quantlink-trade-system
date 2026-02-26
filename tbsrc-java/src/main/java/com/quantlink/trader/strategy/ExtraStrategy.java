@@ -63,6 +63,29 @@ public class ExtraStrategy extends ExecutionStrategy {
     }
 
     // =======================================================================
+    //  Self-book 缓存 — AddtoCache
+    // =======================================================================
+
+    /**
+     * 将订单添加到 self-book 价格缓存（Instrument 参数化版本）。
+     * 迁移自: ExtraStrategy::AddtoCache(OrderMapIter &iter, double &price)
+     * Ref: ExtraStrategy.cpp:19-31
+     *
+     * 与基类 ExecutionStrategy::AddtoCache 逻辑完全一致，
+     * 但操作的是 ExtraStrategy 自身的 bidMapCache/askMapCache。
+     */
+    @Override
+    public void addToCache(OrderStats order, double price) {
+        // C++: if (iter->second->m_side == BUY) priceMapCache = &m_bidMapCache; else priceMapCache = &m_askMapCache;
+        // C++: (*priceMapCache)[price] = iter->second;
+        if (order.side == com.quantlink.trader.shm.Constants.SIDE_BUY) {
+            bidMapCache.put(price, order);
+        } else {
+            askMapCache.put(price, order);
+        }
+    }
+
+    // =======================================================================
     //  Instrument 参数化订单方法
     // =======================================================================
 
