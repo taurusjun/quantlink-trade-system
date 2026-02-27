@@ -356,8 +356,8 @@ const emptyLeg = () => ({
 
 createApp({
     setup() {
-        const host = ref('localhost');
-        const port = ref(9201);
+        const host = ref(window.location.hostname || '127.0.0.1');
+        const port = ref(parseInt(window.location.port) || 9201);
         const connected = ref(false);
         const processing = ref(false);
         const lastRefresh = ref('-');

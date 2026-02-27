@@ -176,6 +176,9 @@ public class TraderMain {
 
         Instrument instru1 = new Instrument();
         instru1.symbol = sym1;
+        // C++: strcpy(m_instrument, symbol); strcpy(m_symbol, m_instrument);
+        // Ref: tbsrc/common/Instrument.cpp:913-914 — 中国期货 m_instrument == m_symbol
+        instru1.instrument = sym1;
         instru1.origBaseName = controlCfg.baseName;
         instru1.exchange = controlCfg.exchange != null ? controlCfg.exchange : "";
         instru1.tickSize = tickSize;
@@ -186,6 +189,9 @@ public class TraderMain {
 
         Instrument instru2 = new Instrument();
         instru2.symbol = sym2;
+        // C++: strcpy(m_instrument, symbol); strcpy(m_symbol, m_instrument);
+        // Ref: tbsrc/common/Instrument.cpp:913-914 — 中国期货 m_instrument == m_symbol
+        instru2.instrument = sym2;
         instru2.origBaseName = controlCfg.secondName;
         instru2.exchange = controlCfg.exchange != null ? controlCfg.exchange : "";
         instru2.tickSize = tickSize;

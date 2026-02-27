@@ -6,6 +6,8 @@ import com.quantlink.trader.api.DashboardSnapshot;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.websocket.WsContext;
+import org.eclipse.jetty.server.AbstractConnector;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -44,6 +46,9 @@ public class OverviewServer {
     // 心跳定时器
     private ScheduledExecutorService heartbeatExecutor;
 
+    // 快照处理线程 — 避免在 StrategyConnector 的 WS 回调线程中同步发送
+    private ExecutorService snapshotExecutor;
+
     // 资金查询定时器 + 缓存
     private ScheduledExecutorService accountQueryExecutor;
     private volatile List<OverviewSnapshot.AccountRow> cachedAccounts = List.of();
@@ -60,6 +65,13 @@ public class OverviewServer {
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
 
+        // 快照处理线程 — StrategyConnector 的 WS 回调中不能阻塞（会导致连接关闭）
+        snapshotExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "overview-snapshot");
+            t.setDaemon(true);
+            return t;
+        });
+
         // 启动 StrategyConnector
         connector = new StrategyConnector();
         connector.setOnSnapshotReceived(this::onTraderSnapshot);
@@ -69,6 +81,11 @@ public class OverviewServer {
         app = Javalin.create(config -> {
             config.staticFiles.add("/web-overview");
             config.bundledPlugins.enableCors(cors -> cors.addRule(rule -> rule.anyHost()));
+            // WebSocket: 禁用 idle timeout，由应用层 30s ping 保活
+            config.jetty.modifyWebSocketServletFactory(factory -> {
+                factory.setIdleTimeout(Duration.ZERO);
+                factory.setMaxTextMessageSize(256 * 1024);  // 256KB
+            });
         });
 
         // ---- REST 端点 ----
@@ -82,6 +99,8 @@ public class OverviewServer {
         // ---- 前端 WebSocket ----
         app.ws("/ws", ws -> {
             ws.onConnect(ctx -> {
+                // 设置 idle timeout: 0=无限，依赖应用层 30s ping 保活
+                ctx.session.setIdleTimeout(Duration.ofSeconds(0));
                 wsClients.add(ctx);
                 logger.info("[OverviewWS] Client connected, total: " + wsClients.size());
                 // 立即发送当前聚合数据
@@ -116,6 +135,19 @@ public class OverviewServer {
         accountQueryExecutor.scheduleAtFixedRate(this::queryCounterBridgeAccount, 3, 10, TimeUnit.SECONDS);
 
         app.start(port);
+
+        // Jetty ServerConnector 默认 idle timeout = 30s，会断开 WebSocket 底层 TCP 连接（code=1001）。
+        try {
+            for (var connector : app.jettyServer().server().getConnectors()) {
+                if (connector instanceof AbstractConnector ac) {
+                    logger.info("[OverviewServer] Connector idle timeout: " + ac.getIdleTimeout() + "ms → 0");
+                    ac.setIdleTimeout(0);
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("[OverviewServer] 设置 connector idle timeout 失败: " + e.getMessage());
+        }
+
         logger.info("[OverviewServer] 已启动 (port " + port + ")");
     }
 
@@ -125,6 +157,7 @@ public class OverviewServer {
     public void stop() {
         if (accountQueryExecutor != null) accountQueryExecutor.shutdownNow();
         if (heartbeatExecutor != null) heartbeatExecutor.shutdownNow();
+        if (snapshotExecutor != null) snapshotExecutor.shutdownNow();
         if (connector != null) connector.stop();
         for (WsContext ctx : wsClients) {
             try { ctx.session.close(); } catch (Exception ignored) {}
@@ -139,10 +172,13 @@ public class OverviewServer {
     // =======================================================================
 
     private void onTraderSnapshot(int port, DashboardSnapshot snap) {
-        // 每次收到任一 trader 推送 → 重新聚合 → 推送给前端
-        OverviewSnapshot overview = OverviewSnapshot.aggregate(
-                connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
-        broadcastOverview(overview);
+        // 异步处理 — 不阻塞 StrategyConnector 的 WS 回调线程
+        // (java.net.http.WebSocket listener 被阻塞过久会导致连接关闭 code=1001)
+        snapshotExecutor.execute(() -> {
+            OverviewSnapshot overview = OverviewSnapshot.aggregate(
+                    connector.getSnapshots(), connector.getStatuses(), cachedAccounts);
+            broadcastOverview(overview);
+        });
     }
 
     private void broadcastOverview(OverviewSnapshot overview) {
@@ -164,9 +200,10 @@ public class OverviewServer {
 
         for (WsContext ctx : wsClients) {
             try {
-                ctx.send(json);
-            } catch (Exception e) {
-                wsClients.remove(ctx);
+                if (ctx.session.isOpen()) {
+                    ctx.session.getRemote().sendString(json, WriteCallback.NOOP);
+                }
+            } catch (Exception ignored) {
             }
         }
     }
@@ -180,7 +217,7 @@ public class OverviewServer {
                     "timestamp", Instant.now().toString(),
                     "data", overview
             );
-            ctx.send(mapper.writeValueAsString(msg));
+            ctx.session.getRemote().sendString(mapper.writeValueAsString(msg), WriteCallback.NOOP);
         } catch (Exception e) {
             logger.warning("[OverviewWS] 发送初始数据失败: " + e.getMessage());
         }
@@ -314,9 +351,10 @@ public class OverviewServer {
         }
         for (WsContext ctx : wsClients) {
             try {
-                ctx.send(json);
-            } catch (Exception e) {
-                wsClients.remove(ctx);
+                if (ctx.session.isOpen()) {
+                    ctx.session.getRemote().sendString(json, WriteCallback.NOOP);
+                }
+            } catch (Exception ignored) {
             }
         }
     }

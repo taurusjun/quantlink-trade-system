@@ -14,13 +14,12 @@
             min-width: 1400px;
         }
 
-        /* ---- 7 区域 CSS Grid 布局 ---- */
+        /* ---- 7 区域 Flex 布局 ---- */
         .app-container {
-            display: grid;
-            grid-template-rows: auto 1fr auto;
-            grid-template-columns: 1fr;
+            display: flex;
+            flex-direction: column;
             height: 100vh;
-            gap: 2px;
+            gap: 0;
             padding: 2px;
         }
 
@@ -88,10 +87,40 @@
 
         /* ② + ③ 中间区域 */
         .middle-area {
-            display: grid;
-            grid-template-columns: 1fr 320px;
-            gap: 2px;
+            display: flex;
+            gap: 0;
             overflow: hidden;
+            flex: 1;
+            min-height: 150px;
+        }
+        .middle-area > .panel:first-child {
+            flex: 1;
+            min-width: 200px;
+        }
+        .middle-area > .panel:last-child {
+            width: 320px;
+            min-width: 200px;
+            max-width: 800px;
+        }
+        .resizer-v {
+            width: 5px;
+            cursor: col-resize;
+            background: #ddd;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .resizer-v:hover, .resizer-v.active {
+            background: #2980b9;
+        }
+        .resizer-h {
+            height: 5px;
+            cursor: row-resize;
+            background: #ddd;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .resizer-h:hover, .resizer-h.active {
+            background: #2980b9;
         }
 
         /* ④⑤⑥⑦ 底部区域 */
@@ -100,6 +129,9 @@
             grid-template-columns: 1fr 1fr 1fr 1fr;
             gap: 2px;
             height: 250px;
+            min-height: 100px;
+            max-height: 600px;
+            flex-shrink: 0;
         }
 
         /* ---- 通用表格样式 ---- */
@@ -328,8 +360,11 @@
                 </div>
             </div>
 
+            <!-- 垂直 resizer 拖拽条 -->
+            <div class="resizer-v" @mousedown="startResize"></div>
+
             <!-- ③ Account Table -->
-            <div class="panel">
+            <div class="panel" ref="accountPanel">
                 <div class="panel-header">
                     Account Table
                     <span class="badge">{{ overview.accounts ? overview.accounts.length : 0 }}</span>
@@ -370,8 +405,11 @@
             </div>
         </div>
 
+        <!-- 水平 resizer 拖拽条 -->
+        <div class="resizer-h" @mousedown="startResizeH"></div>
+
         <!-- ④⑤⑥⑦ 底部 4 表格 -->
-        <div class="bottom-area">
+        <div class="bottom-area" ref="bottomArea">
             <!-- ④ Spread Trades -->
             <div class="panel">
                 <div class="panel-header">
@@ -759,6 +797,62 @@ createApp({
             window.open(`http://localhost:${port}/dashboard.html`, '_blank');
         }
 
+        // ---- Resizer ----
+        const accountPanel = ref(null);
+        let resizing = false;
+
+        function startResize(e) {
+            resizing = true;
+            const el = accountPanel.value;
+            if (!el) return;
+            const resizerEl = e.target;
+            resizerEl.classList.add('active');
+            const startX = e.clientX;
+            const startW = el.offsetWidth;
+
+            function onMouseMove(ev) {
+                if (!resizing) return;
+                const newW = startW - (ev.clientX - startX);
+                if (newW >= 200 && newW <= 800) {
+                    el.style.width = newW + 'px';
+                }
+            }
+            function onMouseUp() {
+                resizing = false;
+                resizerEl.classList.remove('active');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            }
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        }
+
+        // ---- Horizontal Resizer ----
+        const bottomArea = ref(null);
+
+        function startResizeH(e) {
+            const el = bottomArea.value;
+            if (!el) return;
+            const resizerEl = e.target;
+            resizerEl.classList.add('active');
+            const startY = e.clientY;
+            const startH = el.offsetHeight;
+
+            function onMouseMove(ev) {
+                const newH = startH - (ev.clientY - startY);
+                if (newH >= 100 && newH <= 600) {
+                    el.style.height = newH + 'px';
+                }
+            }
+            function onMouseUp() {
+                resizerEl.classList.remove('active');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            }
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        }
+
         // ---- 生命周期 ----
         onMounted(() => {
             connectWS();
@@ -777,7 +871,8 @@ createApp({
             posProductOptions, posSymbolOptions, filteredPositions,
             clearFilters, statusLabel, posClass, pnlClass,
             shortModelFile, formatTime, fmtMoney,
-            sendCmd, stopAll, cxlAll, openDashboard
+            sendCmd, stopAll, cxlAll, openDashboard,
+            accountPanel, startResize, bottomArea, startResizeH
         };
     }
 }).mount('#app');

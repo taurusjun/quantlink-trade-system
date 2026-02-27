@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.websocket.WsContext;
+import org.eclipse.jetty.server.AbstractConnector;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -57,6 +60,11 @@ public class ApiServer {
             config.staticFiles.add("/web");
             // CORS — 对齐 Go: Access-Control-Allow-Origin: *
             config.bundledPlugins.enableCors(cors -> cors.addRule(rule -> rule.anyHost()));
+            // WebSocket: 禁用 idle timeout，由应用层 30s ping 保活
+            config.jetty.modifyWebSocketServletFactory(factory -> {
+                factory.setIdleTimeout(Duration.ZERO);
+                factory.setMaxTextMessageSize(256 * 1024);  // 256KB
+            });
         });
 
         // ---- REST 端点 (对齐 Go handlers.go) ----
@@ -71,16 +79,31 @@ public class ApiServer {
         // ---- WebSocket (对齐 Go websocket.go) ----
         app.ws("/ws", ws -> {
             ws.onConnect(ctx -> {
+                // 设置 idle timeout: 0=无限，依赖应用层 30s ping 保活
+                Duration beforeTimeout = ctx.session.getIdleTimeout();
+                ctx.session.setIdleTimeout(Duration.ofSeconds(0));
+                Duration afterTimeout = ctx.session.getIdleTimeout();
                 wsClients.add(ctx);
-                logger.info("[WebSocket] Client connected, total: " + wsClients.size());
+                logger.info("[WebSocket] Client connected from " + ctx.session.getRemoteAddress()
+                        + ", total: " + wsClients.size()
+                        + ", idleTimeout: " + beforeTimeout.toMillis() + "ms → " + afterTimeout.toMillis() + "ms");
             });
             ws.onClose(ctx -> {
                 wsClients.remove(ctx);
-                logger.info("[WebSocket] Client disconnected, total: " + wsClients.size());
+                logger.info("[WebSocket] Client disconnected from " + ctx.session.getRemoteAddress()
+                        + " code=" + ctx.status() + " reason=" + ctx.reason()
+                        + ", total: " + wsClients.size()
+                        + " [thread=" + Thread.currentThread().getName() + "]");
             });
             ws.onError(ctx -> {
                 wsClients.remove(ctx);
-                logger.warning("[WebSocket] Client error: " + ctx.error());
+                Throwable err = ctx.error();
+                String errInfo = err != null
+                        ? err.getClass().getName() + ": " + err.getMessage()
+                          + (err.getCause() != null ? " caused by " + err.getCause().getClass().getName() + ": " + err.getCause().getMessage() : "")
+                        : "null";
+                logger.warning("[WebSocket] Client error from " + ctx.session.getRemoteAddress()
+                        + ": " + errInfo);
             });
             ws.onMessage(ctx -> {
                 // 对齐 Go: pong 或其他客户端消息，忽略
@@ -96,6 +119,20 @@ public class ApiServer {
         heartbeatExecutor.scheduleAtFixedRate(this::sendPing, 30, 30, TimeUnit.SECONDS);
 
         app.start(port);
+
+        // Jetty ServerConnector 默认 idle timeout = 30s，会断开 WebSocket 底层 TCP 连接（code=1001）。
+        // 必须在 app.start() 之后设置（start 前 connectors 尚未创建）。
+        try {
+            for (var connector : app.jettyServer().server().getConnectors()) {
+                if (connector instanceof AbstractConnector ac) {
+                    logger.info("[API] Connector idle timeout: " + ac.getIdleTimeout() + "ms → 0 (infinite)");
+                    ac.setIdleTimeout(0);
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("[API] 设置 connector idle timeout 失败: " + e.getMessage());
+        }
+
         logger.info("[API] Server starting on :" + port);
     }
 
@@ -220,6 +257,10 @@ public class ApiServer {
     /**
      * 向所有客户端广播快照。
      * 对齐: tbsrc-golang/pkg/api/websocket.go:Broadcast()
+     *
+     * 使用 Jetty 的 sendString(msg, WriteCallback.NOOP) 异步发送，避免阻塞 SnapshotCollector 线程。
+     * Javalin 的 ctx.send(String) 内部调用 RemoteEndpoint.sendString() 是同步阻塞的，
+     * 如果某个客户端慢会阻塞所有后续客户端的发送，导致快照数据延迟更新。
      */
     private void broadcast(DashboardSnapshot snap) {
         if (wsClients.isEmpty()) return;
@@ -238,12 +279,14 @@ public class ApiServer {
             return;
         }
 
+        // 使用 sendString(msg, WriteCallback.NOOP) 异步发送 — 不阻塞当前线程
         for (WsContext ctx : wsClients) {
             try {
-                ctx.send(json);
+                if (ctx.session.isOpen()) {
+                    ctx.session.getRemote().sendString(json, WriteCallback.NOOP);
+                }
             } catch (Exception e) {
-                logger.warning("[WebSocket] Send error: " + e.getMessage());
-                wsClients.remove(ctx);
+                logger.fine("[WebSocket] send failed: " + e.getClass().getSimpleName());
             }
         }
     }
@@ -269,9 +312,10 @@ public class ApiServer {
 
         for (WsContext ctx : wsClients) {
             try {
-                ctx.send(json);
-            } catch (Exception e) {
-                wsClients.remove(ctx);
+                if (ctx.session.isOpen()) {
+                    ctx.session.getRemote().sendString(json, WriteCallback.NOOP);
+                }
+            } catch (Exception ignored) {
             }
         }
     }

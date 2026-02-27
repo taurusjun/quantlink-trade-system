@@ -147,7 +147,17 @@ public class StrategyConnector {
         if (!running) return;
         for (int port = PORT_START; port <= PORT_END; port++) {
             ConnectionStatus status = statuses.get(port);
-            if (status != ConnectionStatus.CONNECTED && !connections.containsKey(port)) {
+            WebSocket existingWs = connections.get(port);
+
+            // 检查已有连接是否真的还存活（防止 onClose 未触发的情况）
+            if (existingWs != null && existingWs.isInputClosed()) {
+                connections.remove(port);
+                statuses.put(port, ConnectionStatus.DISCONNECTED);
+                logger.info("[StrategyConnector] 检测到 port " + port + " 连接已关闭，清理");
+                existingWs = null;
+            }
+
+            if (existingWs == null && status != ConnectionStatus.CONNECTED) {
                 connectToPort(port);
             }
         }
@@ -177,6 +187,7 @@ public class StrategyConnector {
     private class TraderWebSocketListener implements WebSocket.Listener {
         private final int port;
         private final StringBuilder buffer = new StringBuilder();
+        private long msgCount = 0;
 
         TraderWebSocketListener(int port) {
             this.port = port;
@@ -192,10 +203,14 @@ public class StrategyConnector {
 
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-            buffer.append(data);
-            if (last) {
-                processMessage(buffer.toString());
-                buffer.setLength(0);
+            try {
+                buffer.append(data);
+                if (last) {
+                    processMessage(buffer.toString());
+                    buffer.setLength(0);
+                }
+            } catch (Exception e) {
+                logger.warning("[StrategyConnector] onText 异常 port " + port + ": " + e.getMessage());
             }
             webSocket.request(1);
             return null;
@@ -224,6 +239,10 @@ public class StrategyConnector {
                 if ("dashboard_update".equals(type) && root.has("data")) {
                     DashboardSnapshot snap = mapper.treeToValue(root.get("data"), DashboardSnapshot.class);
                     snapshots.put(port, snap);
+                    msgCount++;
+                    if (msgCount % 60 == 1) {
+                        logger.info("[StrategyConnector] port " + port + " 收到 #" + msgCount + " dashboard_update");
+                    }
 
                     if (onSnapshotReceived != null) {
                         onSnapshotReceived.accept(port, snap);

@@ -196,6 +196,44 @@ public abstract class ExecutionStrategy {
     // C++: OrderMap = map<uint32_t, OrderStats*>
     // C++: PriceMap = map<double, OrderStats*>
     public final Map<Integer, OrderStats> ordMap = new LinkedHashMap<>();
+
+    // ---- 订单历史环形缓冲区（Java 新增，C++ 无对应） ----
+    // 模拟器成交极快（~150ms），订单在快照采集间隔（1s）内完成整个生命周期，
+    // 导致 ordMap 中永远捕捉不到。此缓冲区在订单事件（创建/成交/撤单）时直接记录，
+    // 供 DashboardSnapshot 采集，确保 Overview 页的 Orders/Fills/SpreadTrades 表有数据。
+    public static final int ORDER_HISTORY_CAPACITY = 100;
+    public final ArrayDeque<OrderHistoryEntry> orderHistory = new ArrayDeque<>();
+
+    /** 订单历史条目 */
+    public static class OrderHistoryEntry {
+        public int orderID;
+        public byte side;
+        public double price;
+        public int openQty;
+        public int doneQty;
+        public String status;  // NEW, TRADED, CANCEL_CONFIRM, NEW_REJECT
+        public String ordType; // QUOTE, SUPPORTING, AGGRESSIVE 等
+        public long timestampNanos;
+
+        public OrderHistoryEntry(OrderStats ord, String status) {
+            this.orderID = ord.orderID;
+            this.side = ord.side;
+            this.price = ord.price;
+            this.openQty = ord.openQty;
+            this.doneQty = ord.doneQty;
+            this.status = status;
+            this.ordType = ord.ordType != null ? ord.ordType.name() : "UNKNOWN";
+            this.timestampNanos = System.nanoTime();
+        }
+    }
+
+    /** 记录订单事件到历史缓冲区 */
+    protected void recordOrderEvent(OrderStats ord, String status) {
+        if (orderHistory.size() >= ORDER_HISTORY_CAPACITY) {
+            orderHistory.pollFirst();
+        }
+        orderHistory.addLast(new OrderHistoryEntry(ord, status));
+    }
     public final Map<Double, OrderStats> bidMap = new TreeMap<>();
     public final Map<Double, OrderStats> askMap = new TreeMap<>();
 
@@ -1242,6 +1280,9 @@ public abstract class ExecutionStrategy {
         priceMap.put(price, ordStats);
         configParams.orderIDStrategyMap.put(orderID, this);
 
+        // 记录新建订单事件
+        recordOrderEvent(ordStats, "NEW");
+
         orderCount++;
         return ordStats;
     }
@@ -1788,6 +1829,8 @@ public abstract class ExecutionStrategy {
                 processModifyReject(response, order);
             }
             order.status = OrderStats.Status.TRADED;
+            // 记录成交事件（在 removeOrder 之前，此时 order 数据完整）
+            recordOrderEvent(order, "TRADED");
             removeOrder(order);
         }
 
@@ -1955,6 +1998,7 @@ public abstract class ExecutionStrategy {
 
     /** 新单被拒。 Ref: ExecutionStrategy.cpp:1803-1829 */
     protected void processNewReject(MemorySegment response, OrderStats order) {
+        recordOrderEvent(order, "NEW_REJECT");
         removeOrder(order);
     }
 
@@ -1998,6 +2042,7 @@ public abstract class ExecutionStrategy {
     /** 撤单确认。 Ref: ExecutionStrategy.cpp:1912-1981 */
     protected void processCancelConfirm(MemorySegment response, OrderStats order) {
         order.status = OrderStats.Status.CANCEL_CONFIRM;
+        recordOrderEvent(order, "CANCEL_CONFIRM");
         removeOrder(order);
     }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.quantlink.trader.core.Instrument;
 import com.quantlink.trader.core.OrderStats;
 import com.quantlink.trader.shm.Constants;
+import com.quantlink.trader.strategy.ExecutionStrategy;
 import com.quantlink.trader.strategy.ExtraStrategy;
 import com.quantlink.trader.strategy.PairwiseArbStrategy;
 
@@ -178,11 +179,12 @@ public class DashboardSnapshot {
         ls.cancelCount = leg.cancelCount;
         ls.buyTotalQty = leg.buyTotalQty;
         ls.sellTotalQty = leg.sellTotalQty;
-        // 动态阈值
-        ls.tholdBidPlace = leg.tholdBidPlace;
-        ls.tholdBidRemove = leg.tholdBidRemove;
-        ls.tholdAskPlace = leg.tholdAskPlace;
-        ls.tholdAskRemove = leg.tholdAskRemove;
+        // 动态阈值 — sanitize: Infinity/-Infinity/NaN 不是合法 JSON，
+        // 浏览器 JSON.parse() 会抛 SyntaxError 导致 WebSocket 连接断开
+        ls.tholdBidPlace = sanitizeDouble(leg.tholdBidPlace);
+        ls.tholdBidRemove = sanitizeDouble(leg.tholdBidRemove);
+        ls.tholdAskPlace = sanitizeDouble(leg.tholdAskPlace);
+        ls.tholdAskRemove = sanitizeDouble(leg.tholdAskRemove);
         ls.tholdMaxPos = leg.tholdMaxPos;
         ls.tholdSize = leg.tholdSize;
         // 挂单统计
@@ -201,21 +203,50 @@ public class DashboardSnapshot {
         ls.onExit = leg.onExit;
         ls.onFlat = leg.onFlat;
         ls.onStopLoss = leg.onStopLoss;
-        // 订单列表
+        // 订单列表 — 从 orderHistory 事件缓冲区读取（包含已成交/撤单的订单）
+        // ordMap 中的订单在成交后立即移除，模拟器填单极快（~150ms），
+        // 快照采集间隔 1s，大部分订单会被 ordMap 错过。
+        // orderHistory 在订单事件（创建/成交/撤单）时直接记录，确保完整性。
+        Set<Integer> historyIds = new HashSet<>();
+        for (ExecutionStrategy.OrderHistoryEntry entry : leg.orderHistory) {
+            if (!historyIds.add(entry.orderID)) {
+                // 同一 orderID 可能有多条记录（NEW → TRADED），保留最后一条
+                // 先移除旧的，再添加新的
+                ls.orders.removeIf(o -> o.orderID == entry.orderID);
+            }
+            OrderSnapshot os = new OrderSnapshot();
+            os.orderID = entry.orderID;
+            os.side = entry.side == Constants.SIDE_BUY ? "BUY" : "SELL";
+            os.price = entry.price;
+            os.openQty = entry.openQty;
+            os.doneQty = entry.doneQty;
+            os.status = entry.status;
+            os.ordType = entry.ordType;
+            os.time = "";
+            ls.orders.add(os);
+        }
+        // 补充 ordMap 中尚未进入 history 的活跃订单（防漏）
         if (ordMap != null) {
             for (OrderStats ord : ordMap.values()) {
-                OrderSnapshot os = new OrderSnapshot();
-                os.orderID = ord.orderID;
-                os.side = ord.side == Constants.SIDE_BUY ? "BUY" : "SELL";
-                os.price = ord.price;
-                os.openQty = ord.openQty;
-                os.doneQty = ord.doneQty;
-                os.status = ord.status != null ? ord.status.name() : "UNKNOWN";
-                os.ordType = ord.ordType != null ? ord.ordType.name() : "UNKNOWN";
-                os.time = "";
-                ls.orders.add(os);
+                if (!historyIds.contains(ord.orderID)) {
+                    OrderSnapshot os = new OrderSnapshot();
+                    os.orderID = ord.orderID;
+                    os.side = ord.side == Constants.SIDE_BUY ? "BUY" : "SELL";
+                    os.price = ord.price;
+                    os.openQty = ord.openQty;
+                    os.doneQty = ord.doneQty;
+                    os.status = ord.status != null ? ord.status.name() : "UNKNOWN";
+                    os.ordType = ord.ordType != null ? ord.ordType.name() : "UNKNOWN";
+                    os.time = "";
+                    ls.orders.add(os);
+                }
             }
         }
         return ls;
+    }
+
+    /** 将 Infinity/-Infinity/NaN 替换为 0.0（这些不是合法 JSON 值）。 */
+    private static double sanitizeDouble(double v) {
+        return Double.isFinite(v) ? v : 0.0;
     }
 }
