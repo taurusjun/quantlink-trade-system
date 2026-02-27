@@ -617,6 +617,56 @@ void OrderRequestProcessor(ReqQueue* req_queue) {
                 continue;
             }
 
+            // --------------------------------------------------------
+            // Handle CANCELORDER: find broker_order_id and cancel
+            // C++ source: hftbase/Connector/include/connector.h:318-322
+            // --------------------------------------------------------
+            if (req.Request_Type == CANCELORDER) {
+                // Find broker_order_id from hftbase OrderID
+                std::string broker_order_id;
+                CachedOrderInfo cached_info;
+                {
+                    std::lock_guard<std::mutex> lock(g_orders_mutex);
+                    for (auto& [bid, info] : g_order_map) {
+                        if (info.order_id == req.OrderID) {
+                            broker_order_id = bid;
+                            cached_info = info;
+                            break;
+                        }
+                    }
+                }
+
+                if (broker_order_id.empty()) {
+                    std::cerr << "[Processor] Cancel: order not found OID=" << req.OrderID << std::endl;
+                    // Send CANCEL_ORDER_CONFIRM anyway (order may already be done)
+                    ResponseMsg resp;
+                    std::memset(&resp, 0, sizeof(resp));
+                    resp.Response_Type = CANCEL_ORDER_CONFIRM;
+                    resp.OrderID = req.OrderID;
+                    resp.StrategyID = req.StrategyID;
+                    std::strncpy(resp.Symbol, symbol.c_str(), sizeof(resp.Symbol) - 1);
+                    g_response_queue->enqueue(resp);
+                    continue;
+                }
+
+                std::cout << "[Processor] CANCEL " << broker->GetPluginName() << ": "
+                          << symbol << " OID=" << req.OrderID
+                          << " broker_id=" << broker_order_id << std::endl;
+
+                try {
+                    broker->CancelOrder(broker_order_id);
+                    // CTP cancel is async — response comes via OnRtnOrder callback
+                    // No need to send immediate response here
+                } catch (const std::exception& e) {
+                    std::cerr << "[Processor] Cancel exception: " << e.what() << std::endl;
+                }
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // Handle NEWORDER: send new order to broker
+            // --------------------------------------------------------
+
             // Auto-determine open/close flag
             // C++ source: ors/China/src/ORSServer.cpp:488-605
             int openCloseFlag = OPEN_ORDER;
