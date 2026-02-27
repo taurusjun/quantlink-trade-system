@@ -243,8 +243,6 @@ if [ "$MODE" = "ctp" ]; then
         echo "  需要: $CTP_TD_CONFIG"
         exit 1
     fi
-    read -p "确认启动 CTP 实盘? (y/N): " confirm
-    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && exit 0
 fi
 
 # 清理共享内存
@@ -401,6 +399,13 @@ case "$GATEWAY_MODE" in
 esac
 
 LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
+
+# 根据网关模式复制对应的模型文件
+MODEL_SRC_DIR="models/${GATEWAY_MODE}"
+if [ -d "$MODEL_SRC_DIR" ] && ls "$MODEL_SRC_DIR"/*.par.txt.* >/dev/null 2>&1; then
+    cp "$MODEL_SRC_DIR"/*.par.txt.* models/
+    echo -e "${GREEN}[INFO]${NC} 模型参数:   models/${GATEWAY_MODE}/"
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -606,8 +611,10 @@ for proc in md_shm_feeder counter_bridge; do
     fi
 done
 
-# 清理 SHM
+# 清理 SysV IPC（共享内存 + 信号量 + 消息队列，防止残留订单）
 ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
+ipcs -s 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -s {} 2>/dev/null || true
+ipcs -q 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -q {} 2>/dev/null || true
 
 rm -f .gateway_mode
 
@@ -616,11 +623,160 @@ echo -e "${GREEN}[INFO]${NC} 所有组件已停止"
 echo ""
 SCRIPT_EOF
 
+# restart_live.sh — 实盘重启（停止→清理SHM→重启）
+cat > "${DEPLOY_DIR}/scripts/restart_live.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 实盘重启脚本: 停止所有 → 清理 SHM → 重启网关+策略
+# Usage: ./scripts/restart_live.sh <strategy_id> [day|night]
+# ============================================
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$DEPLOY_ROOT"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <strategy_id> [day|night]"
+    echo ""
+    echo "此脚本执行完整的实盘重启流程:"
+    echo "  1. 停止所有进程 (Java Trader + OverviewServer + C++ 网关)"
+    echo "  2. 彻底清理 SysV 共享内存和信号量"
+    echo "  3. 启动 CTP 网关 (md_shm_feeder + counter_bridge + OverviewServer)"
+    echo "  4. 启动 Java 策略"
+    exit 1
+fi
+
+STRATEGY_ID=$1
+SESSION=${2:-""}
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo -e "  ${RED}QuantLink 实盘重启${NC}"
+echo "  策略: ${STRATEGY_ID}"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+
+# Step 1: 停止所有进程
+echo -e "${YELLOW}[Step 1/4]${NC} 停止所有进程..."
+
+for pid_file in trader.*.pid; do
+    [ -f "$pid_file" ] || continue
+    PID=$(cat "$pid_file")
+    SID=$(basename "$pid_file" .pid | sed 's/trader\.//')
+    if kill -0 "$PID" 2>/dev/null; then
+        echo -e "  ${YELLOW}→${NC} 发送 SIGTERM 到 Trader ${SID} (PID=${PID})"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+done
+
+for i in $(seq 1 15); do
+    if ! pgrep -f "TraderMain" > /dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+if pgrep -f "TraderMain" > /dev/null 2>&1; then
+    echo -e "  ${YELLOW}[WARN]${NC} Trader 未在 15 秒内退出，强制终止..."
+    pkill -9 -f "TraderMain" 2>/dev/null || true
+    sleep 1
+fi
+echo -e "  ${GREEN}✓${NC} Java Trader 已停止"
+
+if [ -f overview.pid ]; then
+    OV_PID=$(cat overview.pid)
+    if kill -0 "$OV_PID" 2>/dev/null; then
+        kill -TERM "$OV_PID" 2>/dev/null || true
+    fi
+    rm -f overview.pid
+fi
+pkill -f "OverviewServer" 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} OverviewServer 已停止"
+
+for proc in counter_bridge md_shm_feeder; do
+    if pgrep -f "$proc" > /dev/null 2>&1; then
+        pkill -f "$proc" 2>/dev/null || true
+    fi
+done
+sleep 1
+for proc in counter_bridge md_shm_feeder; do
+    if pgrep -f "$proc" > /dev/null 2>&1; then
+        pkill -9 -f "$proc" 2>/dev/null || true
+    fi
+done
+echo -e "  ${GREEN}✓${NC} C++ 网关已停止"
+
+# Step 2: 彻底清理 SysV IPC
+echo ""
+echo -e "${YELLOW}[Step 2/4]${NC} 清理 SysV 共享内存和信号量..."
+
+SHM_COUNT=$(ipcs -m 2>/dev/null | grep "$(whoami)" | wc -l | tr -d ' ')
+if [ "$SHM_COUNT" -gt 0 ]; then
+    ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} 已清理 ${SHM_COUNT} 个共享内存段"
+else
+    echo -e "  ${GREEN}✓${NC} 无共享内存段需要清理"
+fi
+
+SEM_COUNT=$(ipcs -s 2>/dev/null | grep "$(whoami)" | wc -l | tr -d ' ')
+if [ "$SEM_COUNT" -gt 0 ]; then
+    ipcs -s 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -s {} 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} 已清理 ${SEM_COUNT} 个信号量"
+else
+    echo -e "  ${GREEN}✓${NC} 无信号量需要清理"
+fi
+
+MQ_COUNT=$(ipcs -q 2>/dev/null | grep "$(whoami)" | wc -l | tr -d ' ')
+if [ "$MQ_COUNT" -gt 0 ]; then
+    ipcs -q 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -q {} 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} 已清理 ${MQ_COUNT} 个消息队列"
+else
+    echo -e "  ${GREEN}✓${NC} 无消息队列需要清理"
+fi
+
+rm -f .gateway_mode
+
+REMAINING=$(ipcs -m 2>/dev/null | grep "$(whoami)" | wc -l | tr -d ' ')
+if [ "$REMAINING" -gt 0 ]; then
+    echo -e "  ${RED}[WARN]${NC} 仍有 ${REMAINING} 个共享内存段未清理！"
+    ipcs -m 2>/dev/null | grep "$(whoami)"
+fi
+
+# Step 3: 启动 CTP 网关
+echo ""
+echo -e "${YELLOW}[Step 3/4]${NC} 启动 CTP 网关..."
+"$SCRIPT_DIR/start_gateway.sh" ctp
+
+# Step 4: 启动策略
+echo ""
+echo -e "${YELLOW}[Step 4/4]${NC} 启动策略 ${STRATEGY_ID}..."
+STRAT_ARGS="$STRATEGY_ID"
+[ -n "$SESSION" ] && STRAT_ARGS="$STRAT_ARGS $SESSION"
+"$SCRIPT_DIR/start_strategy.sh" $STRAT_ARGS
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo -e "  ${GREEN}实盘重启完成${NC}"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo -e "${GREEN}[INFO]${NC} 查看策略日志:  tail -f nohup.out.${STRATEGY_ID}"
+echo -e "${GREEN}[INFO]${NC} Overview:      http://localhost:8080/"
+echo -e "${GREEN}[INFO]${NC} Dashboard:     http://localhost:9201/dashboard.html"
+echo -e "${GREEN}[INFO]${NC} 停止所有:      ./scripts/stop_all.sh"
+echo ""
+SCRIPT_EOF
+
 chmod +x "${DEPLOY_DIR}/scripts/"*.sh
 log_info "  start_gateway.sh   (C++ 网关: sim/ctp)"
 log_info "  start_strategy.sh  (Java 策略引擎)"
 log_info "  start_all.sh       (一键启动)"
 log_info "  stop_all.sh        (停止所有)"
+log_info "  restart_live.sh    (实盘重启: 停止→清理SHM→重启)"
 
 # ==================== 合并 data_new → deploy_java ====================
 log_section "合并 data_new → deploy_java (模式: ${DEPLOY_MODE})"
@@ -651,6 +807,21 @@ if [ -d "${MODE_DIR}" ] && [ -d "${MODE_DIR}/config" ]; then
     cp -R "${MODE_DIR}/config/"* "${DEPLOY_DIR}/config/" 2>/dev/null || true
     log_info "  ${DEPLOY_MODE}/config/"
 fi
+
+# 2.5 复制环境专属模型文件 (live → models/ctp/, sim → models/sim/)
+for env_name in live sim; do
+    src_models="${DATA_DIR}/${env_name}/models"
+    if [ "$env_name" = "live" ]; then
+        dst_models="${DEPLOY_DIR}/models/ctp"
+    else
+        dst_models="${DEPLOY_DIR}/models/sim"
+    fi
+    if [ -d "${src_models}" ]; then
+        mkdir -p "${dst_models}"
+        cp "${src_models}"/*.par.txt.* "${dst_models}/" 2>/dev/null || true
+        log_info "  ${env_name}/models/ → models/$(basename ${dst_models})/"
+    fi
+done
 
 # 3. 复制数据文件（保留运行时数据）
 for data_mode in sim live; do
