@@ -4,6 +4,7 @@ import com.quantlink.trader.shm.Types;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * 20 档订单簿行情数据模型。
@@ -117,6 +118,33 @@ public class Instrument {
     public boolean updateIndicators;      // C++: m_updateIndicators — 是否更新指标
     public boolean smartTrade;            // C++: m_smartTrade — SmartMD 交易标志
 
+    // ---- 指标列表 ----
+    // 迁移自: Instrument.h — IndList* m_indList
+    // 每个合约持有自己的指标列表引用，由 CommonClient::Update() 遍历
+    public List<IndElem> indList;
+
+    // ---- 价格缓存与按需计算标志 ----
+    // 迁移自: Instrument.h:63-77 — 价格缓存变量和 is_needed_ 标志
+    // C++: bool is_needed_MSWMIDPrice_, is_needed_MSWPrice_, is_needed_MOWPrice_,
+    //      is_needed_MIDPrice_, is_needed_SINPrice_, is_needed_WGTPrice_, is_needed_LTPPrice_
+    private boolean isNeededMSWMIDPrice;
+    private boolean isNeededMSWPrice;
+    private boolean isNeededMOWPrice;
+    private boolean isNeededMIDPrice;
+    private boolean isNeededSINPrice;
+    private boolean isNeededWGTPrice;
+    private boolean isNeededLTPPrice;
+
+    // C++: double MSWMIDPrice_, MSWPrice_, MOWPrice_, MIDPrice_, SINPrice_, WGTPrice_, LTPPrice_, mkt_tilt
+    private double cachedMSWMIDPrice;
+    private double cachedMSWPrice;
+    private double cachedMOWPrice;
+    private double cachedMIDPrice;
+    private double cachedSINPrice;
+    private double cachedWGTPrice;
+    private double cachedLTPPrice;
+    private double mktTilt;
+
     /**
      * 从 MarketUpdateNew MemorySegment 填充 20 档订单簿。
      * 迁移自: Instrument::FillOrderBook(MarketUpdateNew*)
@@ -155,6 +183,98 @@ public class Instrument {
     public static int readSymbolID(MemorySegment mdUpdate) {
         // MDH_SYMBOL_ID_VH is JAVA_SHORT (uint16_t m_symbolID)
         return Short.toUnsignedInt((short) Types.MDH_SYMBOL_ID_VH.get(mdUpdate, 0L));
+    }
+
+    // =======================================================================
+    //  价格类型订阅 / 获取 — 按需计算架构
+    // =======================================================================
+    // 迁移自: Instrument.h:169-232 — SubscribeTBPriceType, GetTBPriceType, GetTBStratPriceType
+
+    /**
+     * 订阅价格类型 — 标记该价格需要在每次行情更新时计算。
+     * 迁移自: Instrument::SubscribeTBPriceType(TBPriceType) — Instrument.h:169-196
+     *
+     * @param priceType 价格类型常量（使用 Dependant.MKTW_PX2 等）
+     */
+    public void subscribeTBPriceType(int priceType) {
+        // C++: switch (t_price) { case MKTMID_PX2: is_needed_MSWMIDPrice_ = true; break; ... }
+        switch (priceType) {
+            case 2 -> isNeededMSWMIDPrice = true;  // MKTMID_PX2
+            case 0 -> isNeededMSWPrice = true;     // MKTW_PX2
+            case 1 -> isNeededMIDPrice = true;     // MID_PX2
+            case 3 -> isNeededWGTPrice = true;     // WGT_PX
+            case 4 -> isNeededLTPPrice = true;     // LTP_PX
+        }
+    }
+
+    /**
+     * 计算所有已订阅的价格。
+     * 迁移自: Instrument::CalculatePrices() — Instrument.h:143-159
+     */
+    public void calculatePrices() {
+        // C++: if (is_needed_MSWMIDPrice_) calculate_MSWMIDPrice();
+        if (isNeededMSWMIDPrice) cachedMSWMIDPrice = calculateMSWMIDPrice();
+        // C++: if (is_needed_MSWPrice_) calculate_MSWPrice();
+        if (isNeededMSWPrice) cachedMSWPrice = calculateMSWPrice();
+        // C++: if (is_needed_MOWPrice_) calculate_MOWPrice();
+        if (isNeededMOWPrice) cachedMOWPrice = calculateMOWPrice();
+        // C++: if (is_needed_MIDPrice_ || is_needed_SINPrice_) calculate_MIDPrice();
+        if (isNeededMIDPrice || isNeededSINPrice) cachedMIDPrice = calculateMIDPrice();
+        // C++: if (is_needed_SINPrice_) calculate_SINPrice();
+        if (isNeededSINPrice) cachedSINPrice = calculateSINPrice();
+        // C++: if (is_needed_WGTPrice_) calculate_WGTPrice();
+        if (isNeededWGTPrice) cachedWGTPrice = calculateWGTPrice();
+        // C++: if (is_needed_LTPPrice_) calculate_LTPPrice();
+        if (isNeededLTPPrice) cachedLTPPrice = calculateLTPPrice();
+    }
+
+    /**
+     * 计算策略订单簿的价格。
+     * 迁移自: Instrument::CalculateStratPrices() — Instrument.h:161-167
+     */
+    public void calculateStratPrices() {
+        // C++: if (is_needed_MSWPrice_) calculate_StratMSWPrice();
+        if (isNeededMSWPrice) cachedMSWPrice = calculateStratMSWPrice();
+        // C++: if (is_needed_MIDPrice_ || is_needed_SINPrice_) calculate_StratMIDPrice();
+        if (isNeededMIDPrice || isNeededSINPrice) cachedMIDPrice = calculateStratMIDPrice();
+    }
+
+    /**
+     * 获取指定价格类型的值（从普通 book 计算）。
+     * 迁移自: Instrument::GetTBPriceType(TBPriceType) — Instrument.h:204-232
+     *
+     * @param priceType 价格类型常量
+     * @return 计算后的价格
+     */
+    public double getTBPriceType(int priceType) {
+        // C++: CalculatePrices(); — 已在 FillOrderBook 后由 CommonClient 调用
+        // 此处读取缓存值
+        calculatePrices();
+        return switch (priceType) {
+            case 2 -> cachedMSWMIDPrice;    // MKTMID_PX2
+            case 0 -> cachedMSWPrice;       // MKTW_PX2
+            case 1 -> cachedMIDPrice;       // MID_PX2
+            case 3 -> cachedWGTPrice;       // WGT_PX
+            case 4 -> cachedLTPPrice;       // LTP_PX
+            default -> 0.0;
+        };
+    }
+
+    /**
+     * 获取指定价格类型的值（从策略 book 计算）。
+     * 迁移自: Instrument::GetTBStratPriceType(TBPriceType) — Instrument.h:198-202
+     * C++: CalculateStratPrices(); return GetTBPriceType(t_price);
+     */
+    public double getTBStratPriceType(int priceType) {
+        calculateStratPrices();
+        return switch (priceType) {
+            case 2 -> cachedMSWMIDPrice;    // MKTMID_PX2
+            case 0 -> cachedMSWPrice;       // MKTW_PX2
+            case 1 -> cachedMIDPrice;       // MID_PX2
+            case 3 -> cachedWGTPrice;       // WGT_PX
+            case 4 -> cachedLTPPrice;       // LTP_PX
+            default -> 0.0;
+        };
     }
 
     // ---- 价格计算方法 ----
@@ -199,6 +319,66 @@ public class Instrument {
             return calculateMIDPrice();
         }
         return msw;
+    }
+
+    /**
+     * 量加权中间价（从策略订单簿）。
+     * 迁移自: Instrument::calculate_StratMSWPrice() — Instrument.h:104-107
+     * C++: MSWPrice_ = (askQtyStrat[0]*bidPxStrat[0] + askPxStrat[0]*bidQtyStrat[0]) / (askQtyStrat[0]+bidQtyStrat[0])
+     */
+    public double calculateStratMSWPrice() {
+        double totalQty = askQtyStrat[0] + bidQtyStrat[0];
+        if (totalQty <= 0) return calculateStratMIDPrice();
+        return (askQtyStrat[0] * bidPxStrat[0] + askPxStrat[0] * bidQtyStrat[0]) / totalQty;
+    }
+
+    /**
+     * 中间价（从策略订单簿）。
+     * 迁移自: Instrument::calculate_StratMIDPrice() — Instrument.h:109-112
+     * C++: MIDPrice_ = (bidPxStrat[0] + askPxStrat[0]) / 2.0
+     */
+    public double calculateStratMIDPrice() {
+        return (bidPxStrat[0] + askPxStrat[0]) / 2.0;
+    }
+
+    /**
+     * MOW 价格（订单数量加权）。
+     * 迁移自: Instrument::calculate_MOWPrice() — Instrument.h:114-117
+     * C++: MOWPrice_ = (askOrderCount[0]*bidPx[0] + askPx[0]*bidOrderCount[0]) / (askOrderCount[0]+bidOrderCount[0])
+     */
+    public double calculateMOWPrice() {
+        double totalCount = askOrderCount[0] + bidOrderCount[0];
+        if (totalCount <= 0) return calculateMIDPrice();
+        return (askOrderCount[0] * bidPx[0] + askPx[0] * bidOrderCount[0]) / totalCount;
+    }
+
+    /**
+     * SIN 价格（正弦倾斜模型）。
+     * 迁移自: Instrument::calculate_SINPrice() — Instrument.h:119-123
+     * C++: mkt_tilt = (bidQty[0]-askQty[0])/(bidQty[0]+askQty[0]);
+     *      SINPrice_ = MIDPrice_ + ((askPx[0]-bidPx[0])*(mkt_tilt^3))/2.0
+     */
+    public double calculateSINPrice() {
+        double totalQty = bidQty[0] + askQty[0];
+        if (totalQty <= 0) return cachedMIDPrice;
+        mktTilt = (bidQty[0] - askQty[0]) / totalQty;
+        return cachedMIDPrice + ((askPx[0] - bidPx[0]) * (mktTilt * mktTilt * mktTilt)) / 2.0;
+    }
+
+    /**
+     * WGT 价格（3 档加权）。
+     * 迁移自: Instrument::calculate_WGTPrice() — Instrument.h:125-140
+     */
+    public double calculateWGTPrice() {
+        double bidSum = 0, bidQuant = 0, askSum = 0, askQuant = 0;
+        for (int i = 0; i < 3; i++) {
+            bidSum += bidPx[i] * bidQty[i];
+            bidQuant += bidQty[i];
+            askSum += askPx[i] * askQty[i];
+            askQuant += askQty[i];
+        }
+        if (bidQuant <= 0 || askQuant <= 0) return calculateMIDPrice();
+        return (((bidSum / bidQuant) * askQuant) + ((askSum / askQuant) * bidQuant)) / (bidQuant + askQuant);
     }
 
     /**

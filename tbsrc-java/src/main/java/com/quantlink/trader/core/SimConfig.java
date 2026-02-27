@@ -1,6 +1,7 @@
 package com.quantlink.trader.core;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -89,6 +90,16 @@ public class SimConfig {
     // 迁移自: SimConfig::m_lastInstruMapIter — 用于 CrossBook endPkt 判定
     // C++: 在 SendINDUpdate 循环中更新此迭代器
     public Instrument lastInstruMapInstrument;
+
+    // ---- 指标列表 ----
+    // 迁移自: SimConfig::m_indicatorList — IndicatorList (vector<IndElem*>)
+    // Ref: TradeBotUtils.h:737 — IndicatorList m_indicatorList
+    public List<IndElem> indicatorList;
+
+    // ---- PNL 计算引擎 ----
+    // 迁移自: SimConfig::m_calculatePNL — CalculatePNL*
+    // Ref: TradeBotUtils.h:736 — CalculatePNL *m_calculatePNL
+    public CalculateTargetPNL calculatePNL;
 
     /**
      * 获取最后遍历合约的 crossUpdate 标志。

@@ -294,26 +294,40 @@ public class TraderMain {
         client.setORSCallback(resp -> strategy.orsCallBack(resp));
 
         // C++: IndicatorCallBack() — main.cpp:313-369
-        // 对齐 C++ 中 useArbStrategy==1 路径 (main.cpp:364-366):
-        //   configParams->m_simConfig->m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
-        // C++ 中 currPrice/targetPrice/targetBidPNL/targetAskPNL 是全局变量 (main.cpp:75):
+        // 迁移自: main.cpp:75 — 全局变量
         //   double currPrice=0, targetPrice=0, targetBidPNL[5]={1,1,1,1,1}, targetAskPNL[5]={1,1,1,1,1}
-        // Java 中对应字段已在 PairwiseArbStrategy 构造函数中初始化为相同值。
+        final double[] indCbCurrPrice = {0.0};
+        final double[] indCbTargetPrice = {0.0};
         final double[] indCbTargetBidPNL = {1.0, 1.0, 1.0, 1.0, 1.0}; // main.cpp:489-490
         final double[] indCbTargetAskPNL = {1.0, 1.0, 1.0, 1.0, 1.0}; // main.cpp:489-490
-        client.setINDCallback(() -> {
+        client.setINDCallback(simCfg -> {
             // 迁移自: main.cpp:313-369 — IndicatorCallBack()
             // C++: if (indicatorlist != NULL && configParams->m_simConfig->m_dateConfig.m_simActive)
             // Ref: main.cpp:315
-            // [C++差异] Java 中没有 IndicatorList 和 m_simActive，
-            // 但 indCallback 仅在 sendINDUpdate 中 significantUpdate==true 时调用，语义等价。
+            if (!simCfg.simActive) return;
+            if (simCfg.executionStrategy == null) return;
 
             // C++: if (strategyType == 1 && m_execStrategy != NULL && useArbStrategy == 1)
             // Ref: main.cpp:364
-            // useArbStrategy==1 路径: 直接调用 SetTargetValue，不经过 CalculateTargetPNL
-            // C++: m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
-            // Ref: main.cpp:366
-            strategy.setTargetValue(0.0, 0.0, indCbTargetBidPNL, indCbTargetAskPNL);
+            if (simCfg.useArbStrat) {
+                // useArbStrategy==1 路径: 直接调用 SetTargetValue，不经过 CalculateTargetPNL
+                // C++: m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
+                // Ref: main.cpp:366
+                strategy.setTargetValue(0.0, 0.0, indCbTargetBidPNL, indCbTargetAskPNL);
+            } else {
+                // 非 arb 路径: 通过 CalculateTargetPNL 计算后调用 SetTargetValue
+                // C++: if (m_calculatePNL->CalculateTargetPNL())
+                //          m_execStrategy->SetTargetValue(currPrice, targetPrice, targetBidPNL, targetAskPNL);
+                // Ref: main.cpp:323-361
+                if (simCfg.calculatePNL != null) {
+                    boolean hasPNL = simCfg.calculatePNL.calculateTargetPNL(
+                            indCbCurrPrice, indCbTargetPrice, indCbTargetBidPNL, indCbTargetAskPNL);
+                    if (hasPNL) {
+                        strategy.setTargetValue(indCbCurrPrice[0], indCbTargetPrice[0],
+                                indCbTargetBidPNL, indCbTargetAskPNL);
+                    }
+                }
+            }
         });
 
         client.setSimConfigs(new SimConfig[]{simConfig1, simConfig2});

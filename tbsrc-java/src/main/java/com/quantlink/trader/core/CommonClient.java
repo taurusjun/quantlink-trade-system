@@ -29,7 +29,7 @@ public class CommonClient {
     // 迁移自: CommonClient.h:108-111
     // C++: MDcb m_MDCallBack; INDcb m_INDCallBack; ORScb m_ORSCallBack; AUCcb m_AuctionCallBack;
     private Consumer<MemorySegment> mdCallback;
-    private Runnable indCallback;
+    private Consumer<SimConfig> indCallback;
     private Consumer<MemorySegment> orsCallback;
     private Consumer<MemorySegment> auctionCallback;
 
@@ -89,12 +89,11 @@ public class CommonClient {
      * 迁移自: CommonClient::Initialize() 中的 INDcb 参数
      * Ref: CommonClient.cpp:147 — m_INDCallBack = indcb
      *
-     * [C++差异] C++ 使用 typedef void (*INDcb)(IndicatorList*) 函数指针,
-     * 接收 IndicatorList 参数。Java 中 Indicator 系统未迁移,
-     * 使用 Runnable 替代 — 调用时机与 C++ 完全一致。
-     * 参考: CommonClient.h:72,109
+     * C++: typedef void (*INDcb)(IndicatorList*) — 接收 IndicatorList 参数
+     * Java: Consumer<SimConfig> — 传入当前 simConfig 上下文
+     * Ref: CommonClient.h:72,109
      */
-    public void setINDCallback(Runnable callback) {
+    public void setINDCallback(Consumer<SimConfig> callback) {
         this.indCallback = callback;
     }
 
@@ -447,8 +446,7 @@ public class CommonClient {
                 if (significantUpdate) {
                     // C++: Update(iter, tick)
                     // Ref: CommonClient.cpp:731
-                    // [C++差异] Update() 更新 IndicatorList 中的 tick 引用。
-                    // Java 中 Indicator 系统未迁移。FillOrderBook 已更新订单簿数据。
+                    update(instru, updateType);
 
                     // C++: 当 optionStrategy && underlying 时:
                     //      ConfigParams::GetInstance()->m_simConfig->m_lastInstruMapIter = iter
@@ -478,7 +476,7 @@ public class CommonClient {
                     // C++: m_INDCallBack(&m_configParams->m_simConfig->m_indicatorList)
                     // Ref: CommonClient.cpp:752
                     if (indCallback != null) {
-                        indCallback.run();
+                        indCallback.accept(simCfg);
                     }
                     bMDUpdate = true;
                 }
@@ -493,6 +491,47 @@ public class CommonClient {
                 }
             }
         } // end for simConfigList
+    }
+
+    // =======================================================================
+    //  Indicator 更新
+    // =======================================================================
+
+    /**
+     * 遍历合约的指标列表，根据行情类型调用 quoteUpdate 或 tickUpdate。
+     * 迁移自: CommonClient::Update(InstruMapIter iter, Tick *tick)
+     * Ref: CommonClient.cpp:830-846
+     *
+     * C++: if (tick->tickType == BIDQUOTE || tick->tickType == ASKQUOTE)
+     *          for (elem : iter->second->m_indList) elem->m_indicator->QuoteUpdate(tick);
+     *      else if (tick->tickType == BIDTRADE || tick->tickType == ASKTRADE)
+     *          for (elem : iter->second->m_indList) elem->m_indicator->TickUpdate(tick);
+     *
+     * @param instru    当前合约
+     * @param updateType MDDataPart.updateType — 区分报价/成交
+     */
+    private void update(Instrument instru, byte updateType) {
+        if (instru.indList == null) return;
+
+        // C++: tickType 由 Tick::FillTick 从 updateType 推导
+        // Ref: Tick.cpp — TRADE/TRADE_INFO/TRADE_IMPLIED → BIDTRADE/ASKTRADE
+        //                  其余 (ADD/MODIFY/DELETE/OVERLAY 等) → BIDQUOTE/ASKQUOTE
+        // Ref: CommonClient.cpp:833-844
+        boolean isTrade = (updateType == Constants.MDUPDTYPE_TRADE
+                || updateType == Constants.MDUPDTYPE_TRADE_INFO
+                || updateType == Constants.MDUPDTYPE_TRADE_IMPLIED);
+
+        if (isTrade) {
+            // C++: for (elem : indList) elem->m_indicator->TickUpdate(tick);
+            for (IndElem elem : instru.indList) {
+                elem.indicator.tickUpdate();
+            }
+        } else {
+            // C++: for (elem : indList) elem->m_indicator->QuoteUpdate(tick);
+            for (IndElem elem : instru.indList) {
+                elem.indicator.quoteUpdate();
+            }
+        }
     }
 
     // =======================================================================
