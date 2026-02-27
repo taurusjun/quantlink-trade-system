@@ -152,8 +152,10 @@ public class OverviewSnapshot {
                 row.modelFile = snap.modelFile;
                 row.strategyType = snap.strategyType;
                 row.val = snap.spread.isValid;
-                row.l1 = snap.leg1.netpos;
-                row.l2 = snap.leg2.netpos;
+                // C++: l1 = m_netpos_pass (昨仓+今仓), l2 = m_netpos_agg (第二腿汇总)
+                // netpos 仅当天交易净仓(buyTotalQty-sellTotalQty)，不含昨仓
+                row.l1 = snap.leg1.netposPass;
+                row.l2 = snap.leg2.netposAgg;
                 row.pnl = snap.leg1.netPNL + snap.leg2.netPNL;
                 row.time = snap.timestamp;
 
@@ -212,10 +214,13 @@ public class OverviewSnapshot {
     private static void aggregatePosition(List<PositionRow> target,
                                             DashboardSnapshot.LegSnapshot leg,
                                             String pro) {
-        if (leg.netpos == 0 && leg.netposPass == 0) return;
+        // C++: 使用 netposPass (第一腿) 或 netposAgg (第二腿) 显示含昨仓的持仓
+        // netposPass 包含昨仓+今仓, netposAgg 是第二腿汇总（含昨仓）
+        int totalPos = leg.netposPass != 0 ? leg.netposPass : leg.netposAgg;
+        if (totalPos == 0) return;
         PositionRow row = new PositionRow();
         row.symbol = leg.symbol;
-        row.pos = leg.netpos;
+        row.pos = totalPos;
         row.pro = pro;
         // 撤单比: cancelCount / orderCount
         if (leg.orderCount > 0) {

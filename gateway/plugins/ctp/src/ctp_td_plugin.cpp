@@ -532,8 +532,10 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
     std::string order_id = oss.str();
 
     // 保存订单到本地缓存（状态为提交中）（使用修改后的request）
+    // 对齐 C++: ordinfo.exchID = ORDER_REF (ors/China/src/ORSServer.cpp:893)
     OrderInfo order_info;
     strncpy(order_info.order_id, order_id.c_str(), sizeof(order_info.order_id) - 1);
+    strncpy(order_info.order_ref, order_ref.c_str(), sizeof(order_info.order_ref) - 1);
     if (modified_request.client_order_id[0] != '\0') {
         strncpy(order_info.client_order_id, modified_request.client_order_id, sizeof(order_info.client_order_id) - 1);
     }
@@ -574,16 +576,13 @@ bool CTPTDPlugin::CancelOrder(const std::string& order_id) {
 
     std::cout << "[CTPTDPlugin] Canceling order: " << order_id << std::endl;
 
-    // 解析order_id (FrontID-SessionID-OrderRef)
-    std::istringstream iss(order_id);
-    std::string token;
-    std::vector<std::string> parts;
-    while (std::getline(iss, token, '-')) {
-        parts.push_back(token);
-    }
-
-    if (parts.size() != 3) {
-        std::cerr << "[CTPTDPlugin] ❌ Invalid order ID format: " << order_id << std::endl;
+    // 对齐 C++: 直接使用成员变量 FRONT_ID / SESSION_ID + 缓存中的 OrderRef，不解析字符串
+    // Ref: ors/China/src/ORSServer.cpp:SendCancelOrder() (L1011-1038)
+    //   strcpy(req.OrderRef, ordinfo.exchID);     // OrderRef 从缓存取
+    //   req.FrontID = FRONT_ID;                    // 成员变量
+    //   req.SessionID = SESSION_ID;                // 成员变量
+    if (order_info.order_ref[0] == '\0') {
+        std::cerr << "[CTPTDPlugin] ❌ Order has no order_ref: " << order_id << std::endl;
         return false;
     }
 
@@ -591,9 +590,9 @@ bool CTPTDPlugin::CancelOrder(const std::string& order_id) {
     CThostFtdcInputOrderActionField req = {};
     strncpy(req.BrokerID, m_config.broker_id.c_str(), sizeof(req.BrokerID) - 1);
     strncpy(req.InvestorID, m_config.investor_id.c_str(), sizeof(req.InvestorID) - 1);
-    strncpy(req.OrderRef, parts[2].c_str(), sizeof(req.OrderRef) - 1);
-    req.FrontID = std::stoi(parts[0]);
-    req.SessionID = std::stoi(parts[1]);
+    strncpy(req.OrderRef, order_info.order_ref, sizeof(req.OrderRef) - 1);
+    req.FrontID = m_front_id;
+    req.SessionID = m_session_id;
     req.ActionFlag = THOST_FTDC_AF_Delete;
 
     strncpy(req.InstrumentID, order_info.symbol, sizeof(req.InstrumentID) - 1);
@@ -986,6 +985,9 @@ void CTPTDPlugin::ConvertOrder(CThostFtdcOrderField* ctp_order, OrderInfo& order
     // 构建订单ID: FrontID-SessionID-OrderRef
     snprintf(order_info.order_id, sizeof(order_info.order_id),
              "%d-%d-%s", ctp_order->FrontID, ctp_order->SessionID, ctp_order->OrderRef);
+
+    // 对齐 C++: 保存 OrderRef (对应 ordinfo.exchID)
+    strncpy(order_info.order_ref, ctp_order->OrderRef, sizeof(order_info.order_ref) - 1);
 
     // 客户端订单ID（如果有）
     if (ctp_order->OrderSysID[0] != '\0') {

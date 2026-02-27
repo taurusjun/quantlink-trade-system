@@ -217,6 +217,7 @@ public class TraderMain {
         simConfig1.instrumentSec = instru2;
         simConfig1.useArbStrat = true;
         simConfig1.strategyID = strategyID;
+        simConfig1.startTime = controlCfg.startTime != null ? controlCfg.startTime : "";
         simConfig1.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
 
         List<SimConfig> simList1 = new ArrayList<>();
@@ -228,6 +229,7 @@ public class TraderMain {
         simConfig2.instrumentSec = instru1;
         simConfig2.useArbStrat = true;
         simConfig2.strategyID = strategyID;
+        simConfig2.startTime = controlCfg.startTime != null ? controlCfg.startTime : "";
         simConfig2.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
 
         List<SimConfig> simList2 = new ArrayList<>();

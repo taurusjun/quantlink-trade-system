@@ -84,6 +84,7 @@ struct OrderRequest {
 struct OrderInfo {
     char order_id[64];          // 系统订单ID
     char client_order_id[64];   // 客户端订单ID
+    char order_ref[16];         // 交易所报单引用 (CTP OrderRef, 对应 C++ ordinfo.exchID)
     char symbol[32];            // 合约代码
     char exchange[16];          // 交易所代码
     OrderDirection direction;   // 买卖方向
@@ -100,6 +101,7 @@ struct OrderInfo {
     OrderInfo() {
         order_id[0] = '\0';
         client_order_id[0] = '\0';
+        order_ref[0] = '\0';
         symbol[0] = '\0';
         exchange[0] = '\0';
         direction = OrderDirection::BUY;

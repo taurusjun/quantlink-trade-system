@@ -290,7 +290,7 @@ public abstract class ExecutionStrategy {
         // C++: m_endTimeAgg = simConfig->m_dateConfig.m_endTime - 60000; (1 分钟前)
         // C++: m_endTimeAggEpoch = GetNanoSecsFromEpoch(currDate, 0) + m_endTimeAgg * 1000000;
         // Ref: ExecutionStrategy.cpp:43-46
-        initEndTimeEpochs(simConfig.endTime);
+        initEndTimeEpochs(simConfig.startTime, simConfig.endTime);
 
         reset();
     }
@@ -308,9 +308,10 @@ public abstract class ExecutionStrategy {
      *   5. m_endTimeAgg = dateConfig.m_endTime - 60000  (结束前 1 分钟)
      *   6. m_endTimeAggEpoch = GetNanoSecsFromEpoch(date, 0) + m_endTimeAgg * 1000000
      *
-     * @param endTimeStr HHMM 格式字符串，如 "1500"
+     * @param startTimeStr HHMM 格式字符串，如 "2100"（用于判断跨日）
+     * @param endTimeStr HHMM 格式字符串，如 "1500" 或 "0230"
      */
-    private void initEndTimeEpochs(String endTimeStr) {
+    private void initEndTimeEpochs(String startTimeStr, String endTimeStr) {
         if (endTimeStr == null || endTimeStr.isEmpty()) {
             // 未配置 endTime — 设为 Long.MAX_VALUE 表示不触发时间限制
             endTimeEpoch = Long.MAX_VALUE;
@@ -320,9 +321,9 @@ public abstract class ExecutionStrategy {
         }
         try {
             // C++: dateConfig.m_endTime = atoi(controlConfig.m_endTime)  → HHMM int
-            int hhmm = Integer.parseInt(endTimeStr.trim());
-            int h = hhmm / 100;
-            int m = hhmm % 100;
+            int endHHMM = Integer.parseInt(endTimeStr.trim());
+            int h = endHHMM / 100;
+            int m = endHHMM % 100;
 
             // C++: dateConfig.m_endTime = ((h*3600) + (m*60)) * 1000  → 毫秒自午夜
             long endTimeMs = ((long) h * 3600 + (long) m * 60) * 1000;
@@ -334,9 +335,24 @@ public abstract class ExecutionStrategy {
 
             // C++: GetNanoSecsFromEpoch(currDate, 0) → 当天 00:00:00 UTC 的纳秒
             // Java 等价: 当天午夜的 epoch 纳秒
-            // [C++差异] C++ 使用 mktime-timezone 转换为 UTC epoch，
-            // Java 使用 ZoneId.of("Asia/Shanghai") 因为 SHFE 交易时间为北京时间
-            long midnightNanos = LocalDate.now()
+            // [C++差异] C++ 使用 simConfig.m_dateConfig.m_currDate（夜盘时设为下一交易日），
+            // Java 使用 LocalDate.now() + 跨日检测：当 endTime < startTime 时（夜盘跨日），
+            // 使用明天午夜作为基准，确保 endTimeEpoch 在未来
+            LocalDate baseDate = LocalDate.now();
+
+            // 跨日判断：endTime < startTime 说明夜盘跨日（如 start=2100 end=0230）
+            int startHHMM = 0;
+            if (startTimeStr != null && !startTimeStr.isEmpty()) {
+                startHHMM = Integer.parseInt(startTimeStr.trim());
+            }
+            if (startHHMM > 0 && endHHMM < startHHMM) {
+                // 夜盘跨日：endTime 在明天
+                baseDate = baseDate.plusDays(1);
+                log.info(String.format("[时间限制] 检测到跨日夜盘 (start=%04d > end=%04d)，endTime 基准日期+1: %s",
+                    startHHMM, endHHMM, baseDate));
+            }
+
+            long midnightNanos = baseDate
                 .atStartOfDay(ZoneId.of("Asia/Shanghai"))
                 .toInstant()
                 .toEpochMilli() * 1_000_000L;

@@ -939,6 +939,51 @@ int main(int argc, char** argv) {
     std::cout << "\n[Main] Waiting for broker systems ready (3 seconds)..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
+    // 3.5 Initialize g_mapContractPos from broker positions (if no position file)
+    //     This ensures SetCombOffsetFlag() has correct data for open/close determination
+    if (g_mapContractPos.empty()) {
+        std::cout << "\n[Main] Querying broker positions to initialize g_mapContractPos..." << std::endl;
+        for (auto& [name, broker] : g_brokers) {
+            if (!broker || !broker->IsLoggedIn()) continue;
+            std::vector<hft::plugin::PositionInfo> positions;
+            if (broker->QueryPositions(positions)) {
+                std::lock_guard<std::mutex> lock(g_posLock);
+                for (const auto& pos_info : positions) {
+                    if (pos_info.volume == 0) continue;  // Skip empty position records
+                    std::string sym(pos_info.symbol);
+                    auto& pos = g_mapContractPos[sym];
+                    if (pos_info.direction == hft::plugin::OrderDirection::BUY) {
+                        // 多头
+                        pos.ONLongPos += static_cast<int>(pos_info.yesterday_volume);
+                        pos.todayLongPos += static_cast<int>(pos_info.today_volume);
+                    } else {
+                        // 空头
+                        pos.ONShortPos += static_cast<int>(pos_info.yesterday_volume);
+                        pos.todayShortPos += static_cast<int>(pos_info.today_volume);
+                    }
+                }
+                std::cout << "[Main] Loaded " << g_mapContractPos.size()
+                          << " positions from " << name << ":" << std::endl;
+                for (const auto& [sym, pos] : g_mapContractPos) {
+                    std::cout << "[Main]   " << sym
+                              << " Long=" << (pos.ONLongPos + pos.todayLongPos)
+                              << "(Y:" << pos.ONLongPos << ",T:" << pos.todayLongPos << ")"
+                              << " Short=" << (pos.ONShortPos + pos.todayShortPos)
+                              << "(Y:" << pos.ONShortPos << ",T:" << pos.todayShortPos << ")"
+                              << std::endl;
+                }
+            } else {
+                std::cerr << "[Main] Failed to query positions from " << name << std::endl;
+            }
+        }
+        if (g_mapContractPos.empty()) {
+            std::cout << "[Main] No positions loaded — all orders will default to OPEN" << std::endl;
+        }
+    } else {
+        std::cout << "[Main] g_mapContractPos already loaded from position file ("
+                  << g_mapContractPos.size() << " symbols)" << std::endl;
+    }
+
     // 4. Start HTTP server (account query + health check + simulator stats)
     std::cout << "\n[Main] Starting HTTP server..." << std::endl;
     StartHTTPServer(8082);
