@@ -430,23 +430,10 @@ std::string CTPTDPlugin::SendOrder(const OrderRequest& request) {
         return "";
     }
 
-    // 自动设置Offset（开平标志）
+    // 开平标志由 counter_bridge SetCombOffsetFlag() 统一管理，
+    // CTP 插件直接使用传入的 offset，不再二次推断。
+    // counter_bridge 跟踪策略级持仓做开平推断，CTP 插件跟踪全账户持仓会导致冲突。
     OrderRequest modified_request = request;
-    OffsetFlag original_offset = modified_request.offset;
-    SetOpenClose(modified_request);
-
-    // 记录Offset自动设置
-    if (original_offset != modified_request.offset) {
-        std::cout << "[CTPTDPlugin] Auto-set offset: "
-                  << modified_request.symbol << " "
-                  << (modified_request.direction == OrderDirection::BUY ? "BUY" : "SELL")
-                  << " → "
-                  << (modified_request.offset == OffsetFlag::OPEN ? "OPEN" :
-                      modified_request.offset == OffsetFlag::CLOSE ? "CLOSE" :
-                      modified_request.offset == OffsetFlag::CLOSE_TODAY ? "CLOSE_TODAY" :
-                      "CLOSE_YESTERDAY")
-                  << std::endl;
-    }
 
     // 生成订单引用
     std::string order_ref = GenerateOrderRef();
