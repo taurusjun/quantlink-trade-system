@@ -1,0 +1,40 @@
+# Model file for strategy 92201 - ag2603/ag2605 pair trading
+# CTP 实盘参数 — 小仓位+保守风控
+
+# Symbol definitions
+ag_F_3_SFE FUTCOM Dependant 0 MID_PX
+ag_F_5_SFE FUTCOM Dependant 0 MID_PX
+
+# Order size parameters — 最小仓位
+MAX_QUOTE_LEVEL 1
+SIZE 1
+MAX_SIZE 2
+BID_SIZE 1
+BID_MAX_SIZE 2
+ASK_SIZE 1
+ASK_MAX_SIZE 2
+
+# Entry/Exit thresholds — 低阈值容易触发
+BEGIN_PLACE 0.3
+LONG_PLACE 1.5
+SHORT_PLACE -0.9
+BEGIN_REMOVE 0.1
+
+# Supporting orders
+SUPPORTING_ORDERS 1
+
+# Mean reversion parameters
+ALPHA 0.0000240672
+AVG_SPREAD_AWAY 40
+
+# Risk control parameters — 保守风控
+STOP_LOSS 5000
+MAX_LOSS 5000
+UPNL_LOSS 3000
+
+# Additional parameters
+PIL_FACTOR 1.0
+OPP_QTY 0
+PRICE_RATIO 1.0
+HEDGE_THRES 0.0
+HEDGE_SIZE_RATIO 1.0
