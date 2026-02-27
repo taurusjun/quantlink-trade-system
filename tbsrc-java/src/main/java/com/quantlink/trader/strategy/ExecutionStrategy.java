@@ -1985,15 +1985,33 @@ public abstract class ExecutionStrategy {
             }
 
             // C++: m_instru->CalculateStratPrices();
-            // [C++差异] CalculateStratPrices 和 Indicator 回调未迁移（依赖指标系统）
-            // C++: m_simConfig->m_indicatorList.begin()->m_indicator->OrderBookStratUpdate(...)
-            // C++: m_simConfig->m_calculatePNL->CalculateTargetPNL(...)
+            // Ref: ExecutionStrategy.cpp:1221
+            instru.calculateStratPrices();
+
+            // C++: m_simConfig->m_indicatorList.begin()->m_indicator->OrderBookStratUpdate(tick);
+            // Ref: ExecutionStrategy.cpp:1222
+            if (simConfig.indicatorList != null && !simConfig.indicatorList.isEmpty()) {
+                simConfig.indicatorList.get(0).indicator.orderBookStratUpdate();
+            }
+
+            // C++: bool retVal = m_simConfig->m_calculatePNL->CalculateTargetPNL();
             // C++: SetTargetValue(m_currPrice, m_targetPrice, m_targetBidPNL, m_targetAskPNL);
+            // Ref: ExecutionStrategy.cpp:1224-1225
+            boolean retVal = true;
+            if (simConfig.calculatePNL != null) {
+                double[] dpOut = {0}, tpOut = {0};
+                double[] bidPNL = new double[5], askPNL = new double[5];
+                retVal = simConfig.calculatePNL.calculateTargetPNL(dpOut, tpOut, bidPNL, askPNL);
+                if (retVal) {
+                    setTargetValue(dpOut[0], tpOut[0], bidPNL, askPNL);
+                }
+            }
 
             onTradeUpdate();
 
             // C++: if (retVal && !m_onFlat && m_Active) SendOrder();
-            if (!onFlat && active) {
+            // Ref: ExecutionStrategy.cpp:1229
+            if (retVal && !onFlat && active) {
                 sendOrder();
             }
         }
@@ -2526,20 +2544,22 @@ public abstract class ExecutionStrategy {
      * 迁移自: ExecutionStrategy::DumpIndicators()
      * Ref: ExecutionStrategy.cpp:1626-1634
      *
-     * [C++差异] C++ 遍历 m_simConfig->m_indicatorList 打印每个指标的
-     * coefficient * indicator->Value(status) * tickSize。
-     * Java 版本打印 targetPrice 和 currPrice。指标列表遍历依赖 Indicator 模块（独立迁移范围）。
+     * C++: TBLOG << m_targetPrice << "\t" << m_currPrice << "\t";
+     * C++: for (iter : m_indicatorList) TBLOG << (*iter)->m_coefficient * (*iter)->m_indicator->Value(status) * m_instru->m_tickSize;
+     * Ref: ExecutionStrategy.cpp:1626-1634
      */
     public void dumpIndicators() {
-        // C++: TBLOG << m_targetPrice << "\t" << m_currPrice << "\t";
-        // C++: for (iter : m_indicatorList) TBLOG << (*iter)->m_coefficient * (*iter)->m_indicator->Value(status) * m_instru->m_tickSize;
         StringBuilder sb = new StringBuilder();
         sb.append("DumpIndicators: targetPrice=").append(targetPrice)
           .append(" currPrice=").append(currPrice);
-        // [C++差异-用户确认] 指标列表遍历省略 — Java Indicator 系统为独立模块，
-        // 不在当前 ExecutionStrategy 迁移范围内。当 Indicator 模块迁移后，
-        // 在此处遍历 indicatorList 打印 coefficient * Value(status) * tickSize。
-        // 参见 ExecutionStrategy.cpp:1626-1634
+
+        // C++: for (iter : m_indicatorList) TBLOG << coefficient * Value(status) * tickSize
+        if (simConfig.indicatorList != null) {
+            for (com.quantlink.trader.core.IndElem elem : simConfig.indicatorList) {
+                double val = elem.coefficient * elem.indicator.getValue() * instru.tickSize;
+                sb.append("\t").append(val);
+            }
+        }
         log.info(sb.toString());
     }
 

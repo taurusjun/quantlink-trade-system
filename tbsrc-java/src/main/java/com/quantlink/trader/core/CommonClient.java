@@ -167,7 +167,6 @@ public class CommonClient {
      *    b. m_INDCallBack(&indicatorList)                    [CommonClient.cpp:752]
      *    c. m_MDCallBack(update) — 仅当 isStratSymbol       [CommonClient.cpp:761]
      *
-     * [C++差异] Indicator 系统 (Update/IndicatorList) 未迁移。
      * [C++差异] OptionManager/DeltaStrategy/VOLTHREAD/Profiler 块未迁移，
      *           因 Java 系统仅用于中国期货，不涉及期权定价。
      *           相关代码用 optionStrategy 条件跳过，如未来需要迁移，
