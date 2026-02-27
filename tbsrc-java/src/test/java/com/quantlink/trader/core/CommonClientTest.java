@@ -22,10 +22,13 @@ class CommonClientTest {
     @BeforeEach
     void setup() {
         ConfigParams.resetInstance();
+        Watch.resetInstance();
+        Watch.createInstance(0);
     }
 
     @AfterEach
     void cleanup() {
+        Watch.resetInstance();
         ConfigParams.resetInstance();
     }
 

@@ -79,6 +79,9 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
     public int agg_repeat = 1;  // C++: m_agg_repeat{1}
     public double second_ordIDstart;
 
+    // daily_init 文件路径（由构造函数保存，handleSquareoff 关闭时回写）
+    private String dailyInitPath;
+
     // ---- Overview 页面所需的元数据（由 TraderMain 初始化后赋值） ----
     public String modelFile = "";       // 模型文件名（从 ControlConfig.modelFile 获取）
     public String strategyType = "";    // 策略类型（从 ControlConfig.execStrat 获取，如 TB_PAIR_STRAT）
@@ -137,6 +140,7 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         // ---- LoadMatrix2 + 昨仓初始化 ----
         // C++: PairwiseArbStrategy.cpp:18-62 — 构造函数中直接调用 LoadMatrix2
+        this.dailyInitPath = dailyInitPath;
         if (dailyInitPath != null && !dailyInitPath.isEmpty()) {
             loadDailyInitData(dailyInitPath);
         }
@@ -592,6 +596,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         // C++: m_onFlat = m_firstStrat->m_onFlat && m_secondStrat->m_onFlat
         onFlat = firstStrat.onFlat && secondStrat.onFlat;
 
+        // C++: curr_time = Watch::GetUniqueInstance()->GetCurrentTime();
+        // Ref: PairwiseArbStrategy.cpp:527
+        // Watch 在 CommonClient.sendINDUpdate() 中已统一更新，此处同步 exchTS 字段以兼容遗留引用。
+        exchTS = Watch.getInstance().getCurrentTime();
+
         // C++: 双腿合计PNL 检查 max_loss
         if (firstStrat.netPNL + secondStrat.netPNL < -1 * maxloss_limit) {
             firstStrat.callSquareOff = true;
@@ -616,7 +625,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         }
 
         // C++: AVG_SPREAD_AWAY 检查
-        if (Math.abs(currSpreadRatio - avgSpreadRatio)
+        // [C++差异] currSpreadRatio 初始化为 0，行情未到齐时保持为 0，
+        // 与 avgSpreadRatio(~360) 的差会远超阈值，导致启动即触发 deactivate。
+        // C++ 中不存在此问题因为启动后立即 activate 且行情瞬间到齐。
+        // 加入 currSpreadRatio != 0 守卫，确保至少收到过一次完整行情后再做检查。
+        if (currSpreadRatio != 0 && Math.abs(currSpreadRatio - avgSpreadRatio)
                 > firstStrat.instru.tickSize * firstStrat.thold.AVG_SPREAD_AWAY) {
             is_valid_mkdata = false;
             log.warning("Error avgSpreadRatio, Exit Strategy. currSpread:" + currSpreadRatio
@@ -646,25 +659,30 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         // C++: 时间限制检查 — endTimeAggEpoch / endTimeEpoch
         // C++: Watch::GetUniqueInstance()->GetCurrentTime() 返回交易所时间戳（纳秒 epoch）
-        // [C++差异] C++ 使用全局 Watch 单例的 GetCurrentTime()，
-        // Java 使用 exchTS（从行情数据 MDHeader.m_exchTS 读取），语义等价
         // Ref: PairwiseArbStrategy.cpp:547, ExecutionStrategy.cpp:2152
-        long currentTime = exchTS;
-        if (currentTime >= endTimeAggEpoch && !aggFlat) {
-            aggFlat = true;
-            onExit = true;
-            onCancel = true;
-            onFlat = true;
-            log.warning("Exchange Time Limit reached. Aggressive flat!");
-            handleSquareoff();
-        }
+        // [C++差异] Java 策略在 CTP 模式下需等待手动激活（active=false）。
+        // 如果策略在 endTime 之后才启动，C++ 的 endTime 检查会立即触发 HandleSquareoff，
+        // 导致对昨仓发出平仓订单（SELL 82 / BUY 83 flag=OPEN）。
+        // C++ 不存在此问题因为策略启动时 endTime 尚未到达。
+        // 守卫：active=false 时跳过 endTime 检查，等待用户激活后正常运行。
+        long currentTime = Watch.getInstance().getCurrentTime();
+        if (active) {
+            if (currentTime >= endTimeAggEpoch && !aggFlat) {
+                aggFlat = true;
+                onExit = true;
+                onCancel = true;
+                onFlat = true;
+                log.warning("Exchange Time Limit reached. Aggressive flat!");
+                handleSquareoff();
+            }
 
-        if (currentTime >= endTimeEpoch && !onExit) {
-            onExit = true;
-            onCancel = true;
-            onFlat = true;
-            log.warning("END TIME limit reached. Square off called.");
-            handleSquareoff();
+            if (currentTime >= endTimeEpoch && !onExit) {
+                onExit = true;
+                onCancel = true;
+                onFlat = true;
+                log.warning("END TIME limit reached. Square off called.");
+                handleSquareoff();
+            }
         }
     }
 
@@ -751,7 +769,11 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         active = false;
 
         // C++: SaveMatrix2("../data/daily_init." + strategyID)
-        saveMatrix2("../data/daily_init." + strategyID);
+        // [C++差异] C++ 硬编码 "../data/daily_init."，Java 使用构造时传入的 dailyInitPath，
+        // 确保保存路径与加载路径一致（sim → ./data/sim/, ctp → ./data/live/）。
+        if (dailyInitPath != null && !dailyInitPath.isEmpty()) {
+            saveMatrix2(dailyInitPath);
+        }
     }
 
     // =======================================================================

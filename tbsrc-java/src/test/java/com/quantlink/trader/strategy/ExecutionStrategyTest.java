@@ -1,6 +1,7 @@
 package com.quantlink.trader.strategy;
 
 import com.quantlink.trader.core.*;
+import com.quantlink.trader.core.Watch;
 import com.quantlink.trader.shm.Constants;
 import com.quantlink.trader.shm.Types;
 import org.junit.jupiter.api.AfterEach;
@@ -40,6 +41,8 @@ class ExecutionStrategyTest {
     @BeforeEach
     void setup() {
         ConfigParams.resetInstance();
+        Watch.resetInstance();
+        Watch.createInstance(0);
         arena = Arena.ofConfined();
 
         instru = new Instrument();
@@ -78,6 +81,7 @@ class ExecutionStrategyTest {
     @AfterEach
     void cleanup() {
         arena.close();
+        Watch.resetInstance();
         ConfigParams.resetInstance();
     }
 
@@ -383,5 +387,167 @@ class ExecutionStrategyTest {
         assertEquals(3.0, strategy.tholdAskPlace, 0.001);
         // tholdBidPlace = 2.0 - (2.0-0.5)*5/10 = 1.25
         assertEquals(1.25, strategy.tholdBidPlace, 0.001);
+    }
+
+    // =======================================================================
+    //  Bug fix tests: handleSquareoff endTime 误发单
+    //  事故: 策略在 endTime 后启动，checkSquareoff 触发 onFlat，
+    //  基类 handleSquareoff() 发送了 SELL 82 / BUY 83 (flag=OPEN)
+    // =======================================================================
+
+    /**
+     * Fix 1: useArbStrat=true 时 checkSquareoff 不调用基类 handleSquareoff()。
+     * 子 strat 的平仓由父级 PairwiseArbStrategy 统一管理。
+     */
+    @Test
+    void test_checkSquareoff_useArbStrat_skipsHandleSquareoff() {
+        // 模拟子 strat: useArbStrat=true, 有持仓, END TIME 触发
+        simConfig.useArbStrat = true;
+        ConfigParams.getInstance().modeType = 1; // sim, active=true
+        TestStrategy subStrat = new TestStrategy(client, simConfig);
+        subStrat.netpos = 82;
+        subStrat.active = true;
+        subStrat.instru = instru;
+
+        // 设置 endTimeEpoch 为过去时间，触发 END TIME
+        subStrat.endTimeEpoch = 1000L;
+        // 通过 Watch 设置当前时间（替代原先直接设置 exchTS）
+        Watch.getInstance().updateTime(2000L, "test");
+
+        int ordersBefore = client.newOrderCount;
+
+        subStrat.checkSquareoff();
+
+        // 验证 onExit/onFlat 被设置
+        assertTrue(subStrat.onExit, "onExit should be set");
+        assertTrue(subStrat.onFlat, "onFlat should be set");
+
+        // 验证：useArbStrat=true 时不调用基类 handleSquareoff → 不发单
+        assertEquals(ordersBefore, client.newOrderCount,
+                "useArbStrat=true 时 checkSquareoff 不应发送订单");
+    }
+
+    /**
+     * 对比: useArbStrat=false 时 checkSquareoff 正常调用 handleSquareoff()。
+     */
+    @Test
+    void test_checkSquareoff_nonArbStrat_callsHandleSquareoff() {
+        simConfig.useArbStrat = false;
+        ConfigParams.getInstance().modeType = 1; // sim, active=true
+        TestStrategy standalone = new TestStrategy(client, simConfig);
+        standalone.netpos = 10;
+        standalone.active = true;
+        standalone.instru = instru;
+        standalone.endTimeEpoch = 1000L;
+        // 通过 Watch 设置当前时间（替代原先直接设置 exchTS）
+        Watch.getInstance().updateTime(2000L, "test");
+
+        int ordersBefore = client.newOrderCount;
+
+        standalone.checkSquareoff();
+
+        assertTrue(standalone.onExit);
+        assertTrue(standalone.onFlat);
+
+        // 验证：useArbStrat=false 时正常调用 handleSquareoff → 发单平仓
+        assertTrue(client.newOrderCount > ordersBefore,
+                "useArbStrat=false 时 checkSquareoff 应发送平仓订单");
+    }
+
+    /**
+     * Fix 2: handleSquareoff active=false 时不发送平仓订单。
+     */
+    @Test
+    void test_handleSquareoff_activeFlase_noOrders() {
+        strategy.netpos = 82;
+        strategy.active = false;
+        strategy.onFlat = true;
+        strategy.onExit = true;
+        instru.bidPx[0] = 5000;
+        instru.askPx[0] = 5001;
+
+        int ordersBefore = client.newOrderCount;
+
+        strategy.handleSquareoff();
+
+        assertEquals(ordersBefore, client.newOrderCount,
+                "active=false 时 handleSquareoff 不应发送任何订单");
+    }
+
+    /**
+     * Fix 2 (负持仓): handleSquareoff active=false 时不发送买入平仓订单。
+     */
+    @Test
+    void test_handleSquareoff_activeFalse_shortPos_noOrders() {
+        strategy.netpos = -83;
+        strategy.active = false;
+        strategy.onFlat = true;
+        strategy.onExit = true;
+        instru.bidPx[0] = 5000;
+        instru.askPx[0] = 5001;
+
+        int ordersBefore = client.newOrderCount;
+
+        strategy.handleSquareoff();
+
+        assertEquals(ordersBefore, client.newOrderCount,
+                "active=false 时 handleSquareoff 不应发送买入订单");
+    }
+
+    /**
+     * 对比: handleSquareoff active=true 时正常发送平仓订单。
+     */
+    @Test
+    void test_handleSquareoff_activeTrue_sendsOrders() {
+        strategy.netpos = 82;
+        strategy.active = true;
+        strategy.onFlat = true;
+        strategy.onExit = false;
+        instru.bidPx[0] = 5000;
+        instru.askPx[0] = 5001;
+
+        int ordersBefore = client.newOrderCount;
+
+        strategy.handleSquareoff();
+
+        assertEquals(ordersBefore + 1, client.newOrderCount,
+                "active=true 时 handleSquareoff 应发送平仓订单");
+        // 验证是卖单（平多仓）
+        MockCommonClient.OrderRecord rec = client.orderRecords.get(client.orderRecords.size() - 1);
+        assertEquals(Constants.SIDE_SELL, rec.side);
+        assertEquals(82, rec.qty);
+    }
+
+    /**
+     * Fix 2 综合: 模拟事故场景 — CTP模式 active=false，有昨仓 82/-83。
+     * checkSquareoff 触发 END TIME → onFlat=true → handleSquareoff() → 不应发单。
+     */
+    @Test
+    void test_checkSquareoff_ctpMode_activeFalse_noOrders() {
+        // CTP 模式: modeType != 1
+        ConfigParams.getInstance().modeType = 2;
+        simConfig.useArbStrat = false; // 独立策略（测试基类行为）
+        TestStrategy ctpStrat = new TestStrategy(client, simConfig);
+        ctpStrat.netpos = 82;
+        ctpStrat.instru = instru;
+
+        // CTP mode: active=false (由 reset() 设置)
+        assertFalse(ctpStrat.active, "CTP mode 应初始化为 active=false");
+
+        // 设置 END TIME 已过
+        ctpStrat.endTimeEpoch = 1000L;
+        // 通过 Watch 设置当前时间（替代原先直接设置 exchTS）
+        Watch.getInstance().updateTime(2000L, "test");
+
+        int ordersBefore = client.newOrderCount;
+
+        ctpStrat.checkSquareoff();
+
+        assertTrue(ctpStrat.onExit, "onExit 应被设置");
+        assertTrue(ctpStrat.onFlat, "onFlat 应被设置");
+
+        // 关键验证: active=false 时 handleSquareoff 不发单
+        assertEquals(ordersBefore, client.newOrderCount,
+                "CTP mode active=false 时 handleSquareoff 不应发送任何订单");
     }
 }

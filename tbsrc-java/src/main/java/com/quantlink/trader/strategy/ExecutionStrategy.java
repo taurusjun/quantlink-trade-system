@@ -549,8 +549,9 @@ public abstract class ExecutionStrategy {
         this.targetAskPNL = targetAskPNLArr;
 
         // C++: if (m_configParams->m_modeType == ModeType_Sim) m_localTS = Watch::GetUniqueInstance()->GetCurrentTime();
+        // Ref: ExecutionStrategy.cpp:432
         if (configParams.modeType == 1) { // ModeType_Sim = 1
-            localTS = System.nanoTime();
+            localTS = Watch.getInstance().getCurrentTime();
         }
 
         // C++: if ((m_rejectCount > REJECT_LIMIT - 100) && m_onFlat == false && m_Active)
@@ -562,7 +563,7 @@ public abstract class ExecutionStrategy {
         // C++: 监控状态上报 — 每 120 秒
         // C++: auto curr_time = Watch::GetUniqueInstance()->GetCurrentTime();
         // Ref: ExecutionStrategy.cpp:438-450
-        long currTime = exchTS != 0 ? exchTS : System.nanoTime();
+        long currTime = Watch.getInstance().getCurrentTime();
         // C++: uint64_t gap = 1000000000; if (mlog && curr_time - m_lastStsTS > gap * 120)
         long gap = 1_000_000_000L;
         if (currTime - lastStsTS > gap * 120) {
@@ -860,20 +861,28 @@ public abstract class ExecutionStrategy {
 
         // C++: m_exchTS = up->m_timestamp;
         // Ref: ExecutionStrategy.cpp:779
-        exchTS = (long) Types.MDH_EXCH_TS_VH.get(update, 0L);
+        // [C++差异] C++ 在此处赋值 m_exchTS，Java 已迁移为全局 Watch 时钟。
+        // Watch 在 CommonClient.sendINDUpdate() 中统一更新，此处不再单独读取。
+        // 保留 exchTS 字段赋值以兼容可能的遗留引用:
+        exchTS = Watch.getInstance().getCurrentTime();
 
         // C++: if ((m_bestbid_lastpnl != m_instru->bidPx[0]) || (m_bestask_lastpnl != m_instru->askPx[0]))
         //          { CalculatePNL(); m_bestbid_lastpnl = m_instru->bidPx[0]; m_bestask_lastpnl = m_instru->askPx[0]; }
         // Ref: ExecutionStrategy.cpp:790-795
-        if (bestbidLastpnl != instru.bidPx[0] || bestaskLastpnl != instru.askPx[0]) {
-            calculatePNL();
-            bestbidLastpnl = instru.bidPx[0];
-            bestaskLastpnl = instru.askPx[0];
-        }
+        // [C++差异] C++ 启动后立即 activate 且行情很快到齐，不会在 bidPx=0 时算 PNL。
+        // Java 需要等手动激活，期间行情已到但可能只有一腿有价格，bidPx=0 会导致
+        // unrealisedPNL 巨大 → MAX LOSS 立即触发。加入 bidPx>0 守卫。
+        if (instru.bidPx[0] > 0 && instru.askPx[0] > 0) {
+            if (bestbidLastpnl != instru.bidPx[0] || bestaskLastpnl != instru.askPx[0]) {
+                calculatePNL();
+                bestbidLastpnl = instru.bidPx[0];
+                bestaskLastpnl = instru.askPx[0];
+            }
 
-        // C++: CheckSquareoff(up);
-        // Ref: ExecutionStrategy.cpp:797
-        checkSquareoff();
+            // C++: CheckSquareoff(up);
+            // Ref: ExecutionStrategy.cpp:797
+            checkSquareoff();
+        }
 
         // C++: if (m_thold->USE_AHEAD_PERCENT) SetQuantAhead(up);
         // Ref: ExecutionStrategy.cpp:799-800
@@ -901,13 +910,14 @@ public abstract class ExecutionStrategy {
         // === 1. 激进平仓时间 ===
         // C++: if (Watch::GetUniqueInstance()->GetCurrentTime() >= m_endTimeAggEpoch && !m_aggFlat)
         // Ref: ExecutionStrategy.cpp:2152-2161
-        if (exchTS >= endTimeAggEpoch && !aggFlat) {
+        long watchTime = Watch.getInstance().getCurrentTime();
+        if (watchTime >= endTimeAggEpoch && !aggFlat) {
             aggFlat = true;
             onExit = true;
             onCancel = true;
             onFlat = true;
             log.warning(instru.currDate + " Exchange Time Limit reached. Aggressive flat got hit!! "
-                    + exchTS + " " + endTimeAggEpoch + " Symbol: " + instru.origBaseName);
+                    + watchTime + " " + endTimeAggEpoch + " Symbol: " + instru.origBaseName);
         }
 
         // === 2. 退出条件 ===
@@ -917,7 +927,7 @@ public abstract class ExecutionStrategy {
         // Ref: ExecutionStrategy.cpp:2163-2199
         if (!onExit) {
             String limitReason = null;
-            if (exchTS >= endTimeEpoch) {
+            if (watchTime >= endTimeEpoch) {
                 limitReason = "END TIME limit got hit!!";
             }
             if (netPNL < thold.MAX_LOSS * -1) {
@@ -934,13 +944,13 @@ public abstract class ExecutionStrategy {
                 onExit = true;
                 onCancel = true;
                 onFlat = true;
-                log.warning(exchTS + "  " + endTimeEpoch);
+                log.warning(watchTime + "  " + endTimeEpoch);
                 log.warning(instru.currDate + " Limit reached. Square off is Called. Strategy Exiting.."
                         + " Order Count:" + orderCount + " Buy Qty: " + buyTotalQty
                         + " Sell Qty: " + sellTotalQty + " NetPNL: " + netPNL / 100
                         + " Limit Reason: " + limitReason + " Symbol: " + instru.origBaseName);
 
-                if (exchTS < endTimeEpoch) {
+                if (watchTime < endTimeEpoch) {
                     sendAlert("Strategy squared off due to limit hit", limitReason);
                 }
             }
@@ -960,9 +970,9 @@ public abstract class ExecutionStrategy {
 
             if (delta != 0 && !Double.isNaN(delta)) {
                 // C++: if (m_exchTS - m_lastDeltaTS > 50000000000) // 50 secs (注释写 20 secs，实际 50s)
-                if (exchTS - lastDeltaTS > 50_000_000_000L) {
+                if (watchTime - lastDeltaTS > 50_000_000_000L) {
                     currAvgDelta = tmpAvgDelta;
-                    lastDeltaTS = exchTS;
+                    lastDeltaTS = watchTime;
                     deltaCount = 1;
                     tmpAvgDelta = delta;
                 } else {
@@ -995,9 +1005,9 @@ public abstract class ExecutionStrategy {
         if (thold.USE_PRICE_LIMIT) {
             if (targetPrice > 0) {
                 // C++: if (m_exchTS - m_lastPxTS > 50000000000 && !m_onExit) // 50 secs
-                if (exchTS - lastPxTS > 50_000_000_000L && !onExit) {
+                if (watchTime - lastPxTS > 50_000_000_000L && !onExit) {
                     currAvgPrice = tmpAvgTargetPrice;
-                    lastPxTS = exchTS;
+                    lastPxTS = watchTime;
                     priceCount = 1;
                     tmpAvgTargetPrice = targetPrice;
                 } else {
@@ -1053,7 +1063,7 @@ public abstract class ExecutionStrategy {
             onStopLoss = true;
             onCancel = true;
             onFlat = true;
-            lastFlatTS = exchTS;
+            lastFlatTS = watchTime;
 
             // C++: m_thold->UPNL_LOSS += m_thold->UPNL_LOSS; — 阈值翻倍
             if (unrealisedPNL < thold.UPNL_LOSS * -1) {
@@ -1092,7 +1102,7 @@ public abstract class ExecutionStrategy {
 
         if (onFlat) {
             // C++: if (m_exchTS - m_lastFlatTS > 900000000000 && !m_onExit && m_onStopLoss) // 15 mins
-            if (exchTS - lastFlatTS > 900_000_000_000L && !onExit && onStopLoss) {
+            if (watchTime - lastFlatTS > 900_000_000_000L && !onExit && onStopLoss) {
                 onFlat = false;
                 onStopLoss = false;
                 log.warning(instru.currDate + " STOPLOSS time limit reached. Strategy Restarted..");
@@ -1101,7 +1111,7 @@ public abstract class ExecutionStrategy {
             // C++: if (!m_optionStrategy && m_thold->USE_PRICE_LIMIT) { ... m_exchTS - m_lastFlatTS > 60000000000 ... } // 1 min
             if (!optionStrategy && thold.USE_PRICE_LIMIT) {
                 if (currAvgPrice > thold.MIN_PRICE && currAvgPrice < thold.MAX_PRICE
-                        && (currAvgPrice != 0) && !onExit && exchTS - lastFlatTS > 60_000_000_000L) {
+                        && (currAvgPrice != 0) && !onExit && watchTime - lastFlatTS > 60_000_000_000L) {
                     onFlat = false;
                     log.warning(instru.currDate + " Back in Price Ranges Strategy Restarted..");
                 }
@@ -1121,7 +1131,16 @@ public abstract class ExecutionStrategy {
             // === 8. 执行平仓 ===
             // C++: HandleSquareoff();
             // Ref: ExecutionStrategy.cpp:2341
-            handleSquareoff();
+            // [C++差异] 当 useArbStrat=true 时，本 strat 是 PairwiseArbStrategy 的子 strat
+            // (firstStrat/secondStrat)。平仓由父级 PairwiseArbStrategy.handleSquareoff() 统一管理
+            // （只撤单+设标志，不发新单）。如果在子 strat 级别调用基类 handleSquareoff()，
+            // 会绕过父级控制直接发送 SendNewOrder 平仓单，导致：
+            // 1. active=false 时仍然发单
+            // 2. flag=POS_OPEN 而非 POS_CLOSE（对冲持仓应平仓）
+            // 因此子 strat 只设标志不发单，平仓操作由父级处理。
+            if (!simConfig.useArbStrat) {
+                handleSquareoff();
+            }
         }
     }
 
@@ -2057,16 +2076,30 @@ public abstract class ExecutionStrategy {
      */
     public void calculatePNL() {
         // C++: m_unrealisedPNL = netpos>0 ? netpos*((bidPx[0]-buyPrice-bidPx[0]*sellExchTx)*priceMultiplier - sellExchContractTx) : ...
+        // [C++差异] C++ 中 netpos 来自昨仓时 buyPrice/sellPrice=0，PNL 公式会产生巨大虚假值。
+        // C++ 生产中未触发是因为 MAX_LOSS 阈值较大或行情快速到齐。
+        // Java 需要防护：当 netpos!=0 但无今日交易(buyQty==0 && sellQty==0)时，
+        // 使用当前市价作为成本基准，使 unrealisedPNL 接近 0。
+        double effectiveBuyPrice = buyPrice;
+        double effectiveSellPrice = sellPrice;
+        if (netpos != 0 && buyQty == 0 && sellQty == 0) {
+            // 昨仓 netpos，今日无交易，用当前价作为基准避免虚假 PNL
+            if (netpos > 0 && buyPrice == 0) {
+                effectiveBuyPrice = instru.bidPx[0];
+            } else if (netpos < 0 && sellPrice == 0) {
+                effectiveSellPrice = instru.askPx[0];
+            }
+        }
         if (netpos > 0) {
-            unrealisedPNL = netpos * ((instru.bidPx[0] - buyPrice - instru.bidPx[0] * sellExchTx) * instru.priceMultiplier - sellExchContractTx);
+            unrealisedPNL = netpos * ((instru.bidPx[0] - effectiveBuyPrice - instru.bidPx[0] * sellExchTx) * instru.priceMultiplier - sellExchContractTx);
         } else if (netpos < 0) {
-            unrealisedPNL = -1 * netpos * ((sellPrice - instru.askPx[0] - instru.askPx[0] * buyExchTx) * instru.priceMultiplier - buyExchContractTx);
+            unrealisedPNL = -1 * netpos * ((effectiveSellPrice - instru.askPx[0] - instru.askPx[0] * buyExchTx) * instru.priceMultiplier - buyExchContractTx);
         } else {
             unrealisedPNL = 0;
         }
 
         double qty = netpos > 0 ? sellQty : buyQty;
-        unrealisedPNL += (qty * (sellPrice - buyPrice) * instru.priceMultiplier);
+        unrealisedPNL += (qty * (effectiveSellPrice - effectiveBuyPrice) * instru.priceMultiplier);
         unrealisedPNL -= transValue;
 
         grossPNL = realisedPNL + unrealisedPNL;
@@ -2200,7 +2233,11 @@ public abstract class ExecutionStrategy {
 
         // C++: if (m_askMap.size() == 0 && m_bidMap.size() == 0)
         // Ref: ExecutionStrategy.cpp:2420-2436
-        if (askMap.isEmpty() && bidMap.isEmpty()) {
+        // [C++差异] 防御性守卫：active=false 时禁止发送平仓订单。
+        // C++ 中此路径在 PairwiseArb 场景下也会执行（通过 CheckSquareoff → HandleSquareoff 链），
+        // 但 C++ 不会在 endTime 之后启动策略，所以此 bug 不会在 C++ 中触发。
+        // Java 中策略可能在 endTime 之后启动（等待手动激活），必须阻止未激活时发单。
+        if (askMap.isEmpty() && bidMap.isEmpty() && active) {
             if (netpos > 0) {
                 // C++: if (m_aggFlat) SendNewOrder(SELL, sellprice, qty, 0, QUOTE, CROSS);
                 //      else SendNewOrder(SELL, sellprice, qty, 0);
@@ -2218,6 +2255,9 @@ public abstract class ExecutionStrategy {
                     sendNewOrder(Constants.SIDE_BUY, buyprice, qty, 0);
                 }
             }
+        } else if (askMap.isEmpty() && bidMap.isEmpty() && !active && netpos != 0) {
+            log.warning("[GUARD] handleSquareoff: active=false, 跳过发送平仓订单."
+                    + " netpos=" + netpos + " symbol=" + (instru != null ? instru.origBaseName : "null"));
         }
     }
 
@@ -2391,7 +2431,7 @@ public abstract class ExecutionStrategy {
      */
     public void getInstrumentStats() {
         // C++: StatTrTimeQ.push_back(Watch::GetUniqueInstance()->GetCurrentTime());
-        long currTime = exchTS;
+        long currTime = Watch.getInstance().getCurrentTime();
         statTrTimeQ.addLast(currTime);
 
         // C++: double trade_diff = (m_instru->totalTradedQty - prev_tradeQty) / m_instru->m_lotSize;

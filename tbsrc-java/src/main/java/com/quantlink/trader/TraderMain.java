@@ -5,6 +5,7 @@ import com.quantlink.trader.api.SnapshotCollector;
 import com.quantlink.trader.config.*;
 import com.quantlink.trader.connector.Connector;
 import com.quantlink.trader.core.*;
+import com.quantlink.trader.core.Watch;
 import com.quantlink.trader.shm.Types;
 import com.quantlink.trader.strategy.PairwiseArbStrategy;
 
@@ -101,6 +102,11 @@ public class TraderMain {
         }
 
         logger.info("*****TradeBot started in Live Mode*****");
+
+        // ---- Step 0: 创建 Watch 全局时钟单例 ----
+        // C++: Watch::CreateUniqueInstance(0);
+        // Ref: main.cpp:650
+        Watch.createInstance(0);
 
         // ---- Step 1: 加载 controlFile ----
         // C++: LoadControlFile(simConfig[0].m_controlConfig, controlFile)

@@ -1,6 +1,7 @@
 package com.quantlink.trader.strategy;
 
 import com.quantlink.trader.core.*;
+import com.quantlink.trader.core.Watch;
 import com.quantlink.trader.shm.Constants;
 import com.quantlink.trader.shm.Types;
 import org.junit.jupiter.api.AfterEach;
@@ -26,6 +27,8 @@ class ExtraStrategyTest {
     @BeforeEach
     void setup() {
         ConfigParams.resetInstance();
+        Watch.resetInstance();
+        Watch.createInstance(0);
 
         instru = new Instrument();
         instru.origBaseName = "ag2603";
@@ -66,6 +69,7 @@ class ExtraStrategyTest {
 
     @AfterEach
     void cleanup() {
+        Watch.resetInstance();
         ConfigParams.resetInstance();
     }
 

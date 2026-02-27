@@ -1,6 +1,7 @@
 package com.quantlink.trader.strategy;
 
 import com.quantlink.trader.core.*;
+import com.quantlink.trader.core.Watch;
 import com.quantlink.trader.shm.Constants;
 import com.quantlink.trader.shm.Types;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +32,8 @@ class PairwiseArbStrategyTest {
     @BeforeEach
     void setup() {
         ConfigParams.resetInstance();
+        Watch.resetInstance();
+        Watch.createInstance(0);
 
         instru1 = new Instrument();
         instru1.origBaseName = "ag2603";
@@ -91,6 +94,7 @@ class PairwiseArbStrategyTest {
 
     @AfterEach
     void cleanup() {
+        Watch.resetInstance();
         ConfigParams.resetInstance();
     }
 
@@ -359,5 +363,227 @@ class PairwiseArbStrategyTest {
     void test_toString() {
         String s = strategy.toString();
         assertTrue(s.contains("PairwiseArbStrategy"));
+    }
+
+    // =======================================================================
+    //  Bug fix tests: handleSquareoff endTime 误发单
+    //  事故重现: 策略在 endTime 后启动 (active=false)，
+    //  END TIME 立即触发，发出 SELL 82 ag2603 / BUY 83 ag2605 (flag=OPEN)
+    // =======================================================================
+
+    /** 构造包含 exchTS 和 symbol 的 MarketUpdateNew MemorySegment */
+    private MemorySegment buildMarketUpdate(Arena arena, long exchTS, String symbol) {
+        MemorySegment update = arena.allocate(Types.MARKET_UPDATE_NEW_SIZE);
+        // header.exchTS
+        Types.MDH_EXCH_TS_VH.set(update, 0L, exchTS);
+        // header.symbol (offset 40, 48 bytes)
+        if (symbol != null) {
+            byte[] symBytes = symbol.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            MemorySegment symSlice = update.asSlice(Types.MDH_SYMBOL_OFFSET, 48);
+            for (int i = 0; i < Math.min(symBytes.length, 48); i++) {
+                symSlice.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, symBytes[i]);
+            }
+        }
+        return update;
+    }
+
+    /**
+     * Fix 3: active=false 时 mdCallBack 不触发 endTime 检查。
+     * 模拟事故场景: 昨仓 82/-83, endTime 已过, active=false.
+     */
+    @Test
+    void test_mdCallBack_activeFalse_endTimePassed_noOrders() {
+        Arena arena = Arena.ofConfined();
+        try {
+            // 设置昨仓
+            strategy.firstStrat.netpos = 82;
+            strategy.firstStrat.netposPass = 82;
+            strategy.secondStrat.netpos = -83;
+            strategy.secondStrat.netposAgg = -83;
+
+            // CTP 模式: active=false
+            strategy.active = false;
+
+            // 设置 endTime 为过去 (exchTS > endTimeEpoch)
+            long pastEndTime = 1_000_000_000_000L;
+            strategy.endTimeEpoch = pastEndTime;
+            strategy.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            strategy.firstStrat.endTimeEpoch = pastEndTime;
+            strategy.firstStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            strategy.secondStrat.endTimeEpoch = pastEndTime;
+            strategy.secondStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+
+            // 设置行情价格有效
+            instru1.bidPx[0] = 5000;
+            instru1.askPx[0] = 5001;
+            instru2.bidPx[0] = 4990;
+            instru2.askPx[0] = 4991;
+
+            int ordersBefore = client.newOrderCount;
+
+            // 发送行情 (exchTS 晚于 endTime)
+            long nowTS = pastEndTime + 60_000_000_000L; // endTime 过后 60 秒
+            // 设置 Watch 全局时钟
+            Watch.getInstance().updateTime(nowTS, "test");
+            MemorySegment update = buildMarketUpdate(arena, nowTS, "ag2603");
+            strategy.mdCallBack(update);
+
+            // 关键验证: active=false 时不触发 endTime → 不调用 handleSquareoff → 不发单
+            assertFalse(strategy.onExit, "active=false 时不应触发 endTime → onExit 应保持 false");
+            assertFalse(strategy.onFlat, "active=false 时不应触发 endTime → onFlat 应保持 false");
+            assertEquals(ordersBefore, client.newOrderCount,
+                    "active=false + endTime 过后，不应发送任何订单（事故重现验证）");
+        } finally {
+            arena.close();
+        }
+    }
+
+    /**
+     * 回归测试: active=true 时 mdCallBack 正常触发 endTime squareoff。
+     * Java 现在与 C++ 一致，使用全局 Watch::GetCurrentTime()。
+     * 测试中需通过 Watch.getInstance().updateTime() 设置时钟。
+     */
+    @Test
+    void test_mdCallBack_activeTrue_endTimePassed_triggersSquareoff() {
+        Arena arena = Arena.ofConfined();
+        try {
+            strategy.firstStrat.netpos = 0;
+            strategy.firstStrat.netposPass = 0;
+            strategy.secondStrat.netpos = 0;
+            strategy.secondStrat.netposAgg = 0;
+
+            // active=true (sim mode)
+            strategy.active = true;
+
+            long pastEndTime = 1_000_000_000_000L;
+            long nowTS = pastEndTime + 60_000_000_000L;
+            strategy.endTimeEpoch = pastEndTime;
+            strategy.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            strategy.firstStrat.endTimeEpoch = pastEndTime;
+            strategy.firstStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            strategy.secondStrat.endTimeEpoch = pastEndTime;
+            strategy.secondStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+
+            instru1.bidPx[0] = 5000;
+            instru1.askPx[0] = 5001;
+            instru2.bidPx[0] = 4990;
+            instru2.askPx[0] = 4991;
+
+            // 设置 Watch 全局时钟（替代原先由 MemorySegment 中的 exchTS 字段驱动）
+            Watch.getInstance().updateTime(nowTS, "test");
+
+            MemorySegment update = buildMarketUpdate(arena, nowTS, "ag2603");
+            strategy.mdCallBack(update);
+
+            // 验证: active=true 时 endTime 正常触发
+            assertTrue(strategy.onExit, "active=true 时 endTime 应触发 onExit");
+            assertTrue(strategy.onFlat, "active=true 时 endTime 应触发 onFlat");
+            assertFalse(strategy.active, "handleSquareoff 应设置 active=false");
+        } finally {
+            arena.close();
+        }
+    }
+
+    /**
+     * 综合事故重现: 昨仓 82/-83 + endTime 过后 + active=false + 子 strat 也不发单。
+     * 验证三层守卫全部生效。
+     */
+    @Test
+    void test_fullAccidentScenario_noOrdersSent(@TempDir Path tempDir) throws Exception {
+        Arena arena = Arena.ofConfined();
+        try {
+            // 使用 CTP 模式创建策略
+            ConfigParams.resetInstance();
+            Watch.resetInstance();
+            Watch.createInstance(0);
+            ConfigParams.getInstance().modeType = 2; // CTP mode
+            ConfigParams.getInstance().strategyID = 92201;
+
+            Path file = tempDir.resolve("daily_init.92201");
+            try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file))) {
+                pw.println("StrategyID 2day avgPx m_origbaseName1 m_origbaseName2 ytd1 ytd2");
+                pw.println("92201 0 360.0 ag_F_3_SFE ag_F_5_SFE 82 -83");
+            }
+            instru1.origBaseName = "ag_F_3_SFE";
+            instru2.origBaseName = "ag_F_5_SFE";
+
+            MockCommonClient testClient = new MockCommonClient();
+            PairwiseArbStrategy testStrat = new PairwiseArbStrategy(testClient, simConfig, file.toString());
+            testStrat.strategyID = 92201;
+
+            // 验证初始状态: CTP mode → active=false, 昨仓已加载
+            assertFalse(testStrat.active, "CTP mode 策略应初始化为 active=false");
+            assertEquals(82, testStrat.firstStrat.netpos);
+            assertEquals(82, testStrat.firstStrat.netposPass);
+            assertEquals(-83, testStrat.secondStrat.netpos);
+            assertEquals(-83, testStrat.secondStrat.netposAgg);
+
+            // 设置 endTime 为过去
+            long pastEndTime = 1_000_000_000_000L;
+            testStrat.endTimeEpoch = pastEndTime;
+            testStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            testStrat.firstStrat.endTimeEpoch = pastEndTime;
+            testStrat.firstStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+            testStrat.secondStrat.endTimeEpoch = pastEndTime;
+            testStrat.secondStrat.endTimeAggEpoch = pastEndTime + 120_000_000_000L;
+
+            // 设置行情
+            instru1.bidPx[0] = 23288;
+            instru1.askPx[0] = 23290;
+            instru2.bidPx[0] = 22828;
+            instru2.askPx[0] = 22830;
+
+            int ordersBefore = testClient.newOrderCount;
+
+            // 模拟第一次行情到达 (endTime 过后 60 秒)
+            long nowTS = pastEndTime + 60_000_000_000L;
+            // 设置 Watch 全局时钟
+            Watch.getInstance().updateTime(nowTS, "test");
+            MemorySegment update = buildMarketUpdate(arena, nowTS, "ag_F_3_SFE");
+            testStrat.mdCallBack(update);
+
+            // ===== 核心验证 =====
+            // 事故中: 此处发出了 SELL 82 ag2603 + BUY 83 ag2605
+            // 修复后: 三层守卫阻止所有订单
+            assertEquals(ordersBefore, testClient.newOrderCount,
+                    "事故重现: 昨仓82/-83 + endTime过后 + active=false，不应发送任何订单！"
+                    + " (实际发送了 " + (testClient.newOrderCount - ordersBefore) + " 笔)");
+            assertTrue(testClient.orderRecords.isEmpty(),
+                    "不应有任何订单记录");
+
+            // 验证策略状态: active=false 时 endTime 检查被跳过
+            assertFalse(testStrat.onExit,
+                    "active=false 时 PairwiseArb 层 endTime 不应触发 onExit");
+        } finally {
+            arena.close();
+            ConfigParams.resetInstance();
+        }
+    }
+
+    /**
+     * 验证 handleSquareoff 中 sendNewOrder 使用 POS_OPEN flag 的问题。
+     * 当 active=true 时基类 handleSquareoff 发送的订单 flag 应该是什么？
+     * 记录当前行为以便后续修复 flag 问题。
+     */
+    @Test
+    void test_handleSquareoff_orderFlag_isPosOpen() {
+        // 当 active=true 且有持仓时，handleSquareoff 发送平仓订单
+        // 当前 C++ 原代码和 Java 都使用 POS_OPEN (sendNewOrder 硬编码)
+        // counter_bridge 的 SetCombOffsetFlag 会自动推断开平方向
+        // 此测试记录当前行为
+        strategy.firstStrat.netpos = 10;
+        strategy.firstStrat.active = true;
+        strategy.firstStrat.onFlat = true;
+        strategy.firstStrat.onExit = false;
+        strategy.firstStrat.instru = instru1;
+        instru1.bidPx[0] = 5000;
+        instru1.askPx[0] = 5001;
+
+        strategy.firstStrat.handleSquareoff();
+
+        assertFalse(client.orderRecords.isEmpty(), "应发送平仓订单");
+        MockCommonClient.OrderRecord rec = client.orderRecords.get(client.orderRecords.size() - 1);
+        assertEquals(Constants.POS_OPEN, rec.posDirection,
+                "当前 sendNewOrder 硬编码使用 POS_OPEN（与 C++ 一致，由 counter_bridge 自动推断开平）");
     }
 }

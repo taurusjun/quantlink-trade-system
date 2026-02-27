@@ -195,6 +195,22 @@ public class CommonClient {
         // Ref: CommonClient.cpp:410
         configParams.underlying = false;
 
+        // ---- Watch 时钟更新 ----
+        // 迁移自: CommonClient.cpp:412-415
+        // C++: if (!m_bUseExchTS)
+        //          Watch::GetUniqueInstance()->UpdateTime(update->m_timestamp, symbol);
+        //      else
+        //          Watch::GetUniqueInstance()->UpdateTime(update->m_exchTS * 1000000, symbol);
+        if (Watch.getInstance() != null) {
+            long mdTimestamp = (long) Types.MDH_TIMESTAMP_VH.get(mdUpdate, 0L);
+            long mdExchTS = (long) Types.MDH_EXCH_TS_VH.get(mdUpdate, 0L);
+            if (!configParams.useExchTS) {
+                Watch.getInstance().updateTime(mdTimestamp, symbol);
+            } else {
+                Watch.getInstance().updateTime(mdExchTS * 1_000_000, symbol);
+            }
+        }
+
         // 读取 MDDataPart 关键字段
         long mdDataBase = Types.MU_DATA_OFFSET; // 96
         byte feedType = (byte) Types.MDD_FEED_TYPE_VH.get(mdUpdate, mdDataBase);
