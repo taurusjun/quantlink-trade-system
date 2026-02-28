@@ -101,7 +101,7 @@ log_info "编译 Java:  ${BUILD_JAVA}"
 # ==================== 清理 ====================
 if [ "$CLEAN_BUILD" = true ]; then
     log_info "清理 deploy_java 目录（保留 data/）..."
-    for d in bin lib scripts config controls models log; do
+    for d in bin lib scripts config live sim log; do
         rm -rf "${DEPLOY_DIR}/${d}"
     done
 fi
@@ -253,7 +253,7 @@ mkdir -p log ctp_flow
 # 1. MD SHM Feeder
 if [ "$MODE" = "sim" ]; then
     SYMBOLS=""
-    for ctrl in controls/day/control.*.par.txt.*; do
+    for ctrl in sim/controls/day/control.*.par.txt.*; do
         [ -f "$ctrl" ] || continue
         fname=$(basename "$ctrl")
         syms="${fname#control.}"
@@ -338,10 +338,11 @@ if [ $# -lt 1 ]; then
     echo "Usage: $0 <strategy_id> [day|night] [--fg]"
     echo ""
     echo "可用策略:"
-    for f in controls/day/control.*.par.txt.*; do
+    for f in live/controls/day/control.*.par.txt.* sim/controls/day/control.*.par.txt.*; do
         [ -f "$f" ] || continue
         sid="${f##*.}"
-        echo "  ${sid}  ($(basename "$f"))"
+        env="${f%%/*}"
+        echo "  ${sid}  [${env}] ($(basename "$f"))"
     done
     exit 1
 fi
@@ -370,13 +371,26 @@ fi
 DATE=$(date +%Y%m%d)
 YEAR_PREFIX=$(date +%y)
 
-# 查找 controlFile
+# 读取网关模式
+if [ ! -f .gateway_mode ]; then
+    echo -e "${RED}[ERROR]${NC} 请先启动网关: ./scripts/start_gateway.sh [sim|ctp]"
+    exit 1
+fi
+GATEWAY_MODE=$(cat .gateway_mode)
+case "$GATEWAY_MODE" in
+    sim) ENV_DIR="sim" ;;
+    ctp) ENV_DIR="live" ;;
+    *)   echo -e "${RED}[ERROR]${NC} .gateway_mode 无效: ${GATEWAY_MODE}"; exit 1 ;;
+esac
+DATA_DIR="./${ENV_DIR}/data"
+
+# 查找 controlFile（从环境目录）
 CONTROL_FILE=""
-for f in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+for f in ${ENV_DIR}/controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
     [ -f "$f" ] && CONTROL_FILE="$f" && break
 done
 if [ -z "$CONTROL_FILE" ]; then
-    echo -e "${RED}[ERROR]${NC} 找不到 controlFile: controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}"
+    echo -e "${RED}[ERROR]${NC} 找不到 controlFile: ${ENV_DIR}/controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}"
     exit 1
 fi
 
@@ -386,26 +400,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# 读取网关模式
-if [ ! -f .gateway_mode ]; then
-    echo -e "${RED}[ERROR]${NC} 请先启动网关: ./scripts/start_gateway.sh [sim|ctp]"
-    exit 1
-fi
-GATEWAY_MODE=$(cat .gateway_mode)
-case "$GATEWAY_MODE" in
-    sim) DATA_DIR="./data/sim" ;;
-    ctp) DATA_DIR="./data/live" ;;
-    *)   echo -e "${RED}[ERROR]${NC} .gateway_mode 无效: ${GATEWAY_MODE}"; exit 1 ;;
-esac
-
 LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
-
-# 根据网关模式复制对应的模型文件
-MODEL_SRC_DIR="models/${GATEWAY_MODE}"
-if [ -d "$MODEL_SRC_DIR" ] && ls "$MODEL_SRC_DIR"/*.par.txt.* >/dev/null 2>&1; then
-    cp "$MODEL_SRC_DIR"/*.par.txt.* models/
-    echo -e "${GREEN}[INFO]${NC} 模型参数:   models/${GATEWAY_MODE}/"
-fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -522,8 +517,10 @@ for cfg_file in config/config_CHINA.*.cfg; do
     STRATEGY_ID="${STRATEGY_ID%.cfg}"
     [ -z "$STRATEGY_ID" ] && continue
 
+    ENV_DIR="sim"
+    [ "$MODE" = "ctp" ] && ENV_DIR="live"
     CTRL_FOUND=false
-    for ctrl in controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
+    for ctrl in ${ENV_DIR}/controls/${SESSION}/control.*.par.txt.${STRATEGY_ID}; do
         [ -f "$ctrl" ] && CTRL_FOUND=true && break
     done
     if [ "$CTRL_FOUND" = false ]; then
@@ -794,56 +791,53 @@ if [ ! -d "${COMMON_DIR}" ]; then
     exit 1
 fi
 
-# 1. 复制 common（config/controls/models 总是覆盖）
-for dir in config controls models; do
-    if [ -d "${COMMON_DIR}/${dir}" ]; then
-        cp -R "${COMMON_DIR}/${dir}" "${DEPLOY_DIR}/"
-        log_info "  common/${dir}/"
-    fi
-done
-
-# 2. 复制模式配置
-if [ -d "${MODE_DIR}" ] && [ -d "${MODE_DIR}/config" ]; then
-    cp -R "${MODE_DIR}/config/"* "${DEPLOY_DIR}/config/" 2>/dev/null || true
-    log_info "  ${DEPLOY_MODE}/config/"
+# 1. 复制 common/config
+if [ -d "${COMMON_DIR}/config" ]; then
+    cp -R "${COMMON_DIR}/config" "${DEPLOY_DIR}/"
+    log_info "  common/config/"
 fi
 
-# 2.5 复制环境专属模型文件 (live → models/ctp/, sim → models/sim/)
+# 2. 复制 live 和 sim 环境（controls/models/data 各自独立）
 for env_name in live sim; do
-    src_models="${DATA_DIR}/${env_name}/models"
-    if [ "$env_name" = "live" ]; then
-        dst_models="${DEPLOY_DIR}/models/ctp"
-    else
-        dst_models="${DEPLOY_DIR}/models/sim"
-    fi
-    if [ -d "${src_models}" ]; then
-        mkdir -p "${dst_models}"
-        cp "${src_models}"/*.par.txt.* "${dst_models}/" 2>/dev/null || true
-        log_info "  ${env_name}/models/ → models/$(basename ${dst_models})/"
-    fi
-done
+    env_src="${DATA_DIR}/${env_name}"
+    env_dst="${DEPLOY_DIR}/${env_name}"
+    [ -d "${env_src}" ] || continue
 
-# 3. 复制数据文件（保留运行时数据）
-for data_mode in sim live; do
-    src_data="${DATA_DIR}/${data_mode}/data"
-    dst_data="${DEPLOY_DIR}/data/${data_mode}"
-    if [ -d "${src_data}" ]; then
-        mkdir -p "${dst_data}"
-        find "${src_data}" -type f | while read file; do
+    # controls
+    if [ -d "${env_src}/controls" ]; then
+        mkdir -p "${env_dst}/controls"
+        cp -R "${env_src}/controls/"* "${env_dst}/controls/"
+        log_info "  ${env_name}/controls/"
+    fi
+
+    # models
+    if [ -d "${env_src}/models" ]; then
+        mkdir -p "${env_dst}/models"
+        cp "${env_src}/models/"*.par.txt.* "${env_dst}/models/" 2>/dev/null || true
+        log_info "  ${env_name}/models/"
+    fi
+
+    # data（保留运行时数据，不覆盖已有文件）
+    if [ -d "${env_src}/data" ]; then
+        mkdir -p "${env_dst}/data"
+        find "${env_src}/data" -type f | while read file; do
             filename=$(basename "$file")
-            target="${dst_data}/${filename}"
+            target="${env_dst}/data/${filename}"
             [ ! -f "$target" ] && cp "$file" "$target"
         done || true
-        log_info "  data/${data_mode}/"
+        log_info "  ${env_name}/data/"
+    fi
+
+    # config（环境专属配置，合并到 deploy_java/config/）
+    if [ -d "${env_src}/config" ]; then
+        cp -R "${env_src}/config/"* "${DEPLOY_DIR}/config/" 2>/dev/null || true
+        log_info "  ${env_name}/config/ → config/"
     fi
 done
 
-# 4. live: ctp_flow
-if [ "$DEPLOY_MODE" = "live" ]; then
-    mkdir -p "${DEPLOY_DIR}/ctp_flow"
-    [ -d "${DATA_DIR}/live/ctp_flow" ] && cp -R "${DATA_DIR}/live/ctp_flow/"* "${DEPLOY_DIR}/ctp_flow/" 2>/dev/null || true
-    log_info "  ctp_flow/"
-fi
+# 3. live: ctp_flow
+mkdir -p "${DEPLOY_DIR}/ctp_flow"
+[ -d "${DATA_DIR}/live/ctp_flow" ] && cp -R "${DATA_DIR}/live/ctp_flow/"* "${DEPLOY_DIR}/ctp_flow/" 2>/dev/null || true
 
 log_info "data_new 合并完成 (模式: ${DEPLOY_MODE})"
 
@@ -860,9 +854,8 @@ echo "  ├── lib/          (Java JARs)"
 echo "  │   ├── trader-1.0-SNAPSHOT.jar"
 echo "  │   └── ... $(ls "${DEPLOY_DIR}/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个 JAR"
 echo "  ├── config/"
-echo "  ├── controls/"
-echo "  ├── models/"
-echo "  ├── data/"
+echo "  ├── live/          (controls, models, data)"
+echo "  ├── sim/           (controls, models, data)"
 echo "  ├── scripts/"
 ls "${DEPLOY_DIR}/scripts/" 2>/dev/null | while read f; do echo "  │   ├── $f"; done
 echo "  └── log/"
