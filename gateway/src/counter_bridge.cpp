@@ -984,7 +984,17 @@ int main(int argc, char** argv) {
         for (auto& [name, broker] : g_brokers) {
             if (!broker || !broker->IsLoggedIn()) continue;
             std::vector<hft::plugin::PositionInfo> positions;
-            if (broker->QueryPositions(positions)) {
+            bool queryOk = broker->QueryPositions(positions);
+
+            // Fallback: QueryPositions 可能因 CTP 限频返回空，尝试 GetCachedPositions
+            if (!queryOk || positions.empty()) {
+                std::cout << "[Main] QueryPositions " << (queryOk ? "returned empty" : "failed")
+                          << " for " << name << ", trying GetCachedPositions fallback..." << std::endl;
+                positions.clear();
+                broker->GetCachedPositions(positions);
+            }
+
+            if (!positions.empty()) {
                 std::lock_guard<std::mutex> lock(g_posLock);
                 for (const auto& pos_info : positions) {
                     if (pos_info.volume == 0) continue;  // Skip empty position records
@@ -1011,7 +1021,8 @@ int main(int argc, char** argv) {
                               << std::endl;
                 }
             } else {
-                std::cerr << "[Main] Failed to query positions from " << name << std::endl;
+                std::cerr << "[Main] No positions available from " << name
+                          << " (both QueryPositions and GetCachedPositions empty)" << std::endl;
             }
         }
         if (g_mapContractPos.empty()) {

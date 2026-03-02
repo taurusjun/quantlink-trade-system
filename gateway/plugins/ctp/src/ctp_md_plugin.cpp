@@ -6,10 +6,29 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <iconv.h>
 
 namespace hft {
 namespace plugin {
 namespace ctp {
+
+// GBK → UTF-8 转码工具函数（CTP API 错误消息为 GBK 编码）
+static std::string GbkToUtf8(const char* gbk_str) {
+    if (!gbk_str || gbk_str[0] == '\0') return "";
+    iconv_t cd = iconv_open("UTF-8", "GBK");
+    if (cd == (iconv_t)-1) return gbk_str;
+    size_t in_len = std::strlen(gbk_str);
+    size_t out_len = in_len * 3 + 1;
+    std::string result(out_len, '\0');
+    char* in_ptr = const_cast<char*>(gbk_str);
+    char* out_ptr = result.data();
+    size_t out_left = out_len;
+    size_t ret = iconv(cd, &in_ptr, &in_len, &out_ptr, &out_left);
+    iconv_close(cd);
+    if (ret == (size_t)-1) return gbk_str;
+    result.resize(out_len - out_left);
+    return result;
+}
 
 // ==================== CTPMDPlugin ====================
 
@@ -259,7 +278,7 @@ void CTPMDPlugin::OnRspUserLogin(CThostFtdcRspUserLoginField* pRspUserLogin,
                                   CThostFtdcRspInfoField* pRspInfo,
                                   int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPMDPlugin] ❌ Login failed: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPMDPlugin] ❌ Login failed: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
         return;
     }
@@ -291,7 +310,7 @@ void CTPMDPlugin::OnRspSubMarketData(CThostFtdcSpecificInstrumentField* pSpecifi
                                       CThostFtdcRspInfoField* pRspInfo,
                                       int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPMDPlugin] ❌ Subscribe failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPMDPlugin] ❌ Subscribe failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         if (pSpecificInstrument) {
             std::cerr << "  Instrument: " << pSpecificInstrument->InstrumentID << std::endl;
         }
@@ -410,7 +429,7 @@ void CTPMDPlugin::ConvertMarketData(CThostFtdcDepthMarketDataField* ctp_md,
 void CTPMDPlugin::OnRspError(CThostFtdcRspInfoField* pRspInfo,
                               int nRequestID, bool bIsLast) {
     if (pRspInfo && pRspInfo->ErrorID != 0) {
-        std::cerr << "[CTPMDPlugin] Error Response: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPMDPlugin] Error Response: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
     }
 }

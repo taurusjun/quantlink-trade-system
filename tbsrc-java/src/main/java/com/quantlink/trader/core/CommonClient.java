@@ -60,6 +60,11 @@ public class CommonClient {
     // 迁移自: CommonClient.h:113 — bool m_bMDUpdate
     private boolean bMDUpdate = false;
 
+    // ---- Exchange Type ----
+    // 迁移自: CommonClient.h:122 — char m_exchangeType
+    // C++: CommonClient.cpp:850-901 — 从 simConfig.m_controlConfig.m_exchange 映射
+    private byte exchangeType = 0;
+
     // ---- 请求消息缓冲 ----
     // 迁移自: CommonClient.h:123 — RequestMsg m_reqMsg
     private final MemorySegment reqMsg;
@@ -130,6 +135,18 @@ public class CommonClient {
      */
     public void setSimConfigs(SimConfig[] configs) {
         this.simConfigs = configs;
+    }
+
+    /**
+     * 设置交易所类型。
+     * 迁移自: CommonClient.cpp:850-901 — m_exchangeType 赋值
+     * C++: m_exchangeType 用于 FillReqInfo() 中设置 m_reqMsg.Exchange_Type
+     *
+     * @param exchangeType 交易所类型字节值（如 Constants.CHINA_SHFE=57）
+     */
+    public void setExchangeType(byte exchangeType) {
+        this.exchangeType = exchangeType;
+        log.info("[CommonClient] exchangeType set to " + (exchangeType & 0xFF));
     }
 
     // =======================================================================
@@ -592,6 +609,9 @@ public class CommonClient {
         // C++: Transaction_Type (offset 163)
         Types.REQ_TRANSACTION_TYPE_VH.set(reqMsg, 0L, (byte) side);
 
+        // C++: m_reqMsg.Exchange_Type = m_exchangeType (FillReqInfo, CommonClient.cpp:1117)
+        Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, exchangeType);
+
         // 写入 symbol
         byte[] symBytes = symbol.getBytes(StandardCharsets.US_ASCII);
         reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_SYMBOL_OFFSET, symBytes.length)
@@ -625,6 +645,9 @@ public class CommonClient {
         Types.REQ_POS_DIRECTION_VH.set(reqMsg, 0L, posDirection);
         Types.REQ_TRANSACTION_TYPE_VH.set(reqMsg, 0L, (byte) side);
 
+        // C++: m_reqMsg.Exchange_Type = m_exchangeType (FillReqInfo, CommonClient.cpp:1117)
+        Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, exchangeType);
+
         byte[] symBytes = symbol.getBytes(StandardCharsets.US_ASCII);
         reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_SYMBOL_OFFSET, symBytes.length)
               .copyFrom(MemorySegment.ofArray(symBytes));
@@ -645,6 +668,9 @@ public class CommonClient {
         Types.REQ_STRATEGY_ID_VH.set(reqMsg, 0L, strategyID);
         Types.REQ_ORDER_ID_VH.set(reqMsg, 0L, orderID);
         Types.REQ_TRANSACTION_TYPE_VH.set(reqMsg, 0L, (byte) side);
+
+        // C++: m_reqMsg.Exchange_Type = m_exchangeType (FillReqInfo, CommonClient.cpp:1117)
+        Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, exchangeType);
 
         byte[] symBytes = symbol.getBytes(StandardCharsets.US_ASCII);
         reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_SYMBOL_OFFSET, symBytes.length)

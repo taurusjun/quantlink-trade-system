@@ -169,6 +169,10 @@ public class TraderMain {
         client = new CommonClient();
         client.setConnector(connector);
 
+        // C++: CommonClient.cpp:850-901 — m_exchangeType 从 exchange 字符串映射
+        // C++: FillReqInfo() 中 m_reqMsg.Exchange_Type = m_exchangeType
+        client.setExchangeType(CfgConfig.parseExchangeType(cfgConfig.exchanges));
+
         ConfigParams params = ConfigParams.getInstance();
         params.strategyID = strategyID;
         params.modeType = 2; // Live mode

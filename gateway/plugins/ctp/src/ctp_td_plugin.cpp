@@ -8,10 +8,40 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <iconv.h>
 
 namespace hft {
 namespace plugin {
 namespace ctp {
+
+// GBK → UTF-8 转码工具函数
+// CTP API 的 ErrorMsg 字段固定为 GBK 编码，在 UTF-8 终端显示乱码
+static std::string GbkToUtf8(const char* gbk_str) {
+    if (!gbk_str || gbk_str[0] == '\0') return "";
+
+    iconv_t cd = iconv_open("UTF-8", "GBK");
+    if (cd == (iconv_t)-1) {
+        return gbk_str;  // iconv 不可用，返回原始字符串
+    }
+
+    size_t in_len = std::strlen(gbk_str);
+    size_t out_len = in_len * 3 + 1;  // UTF-8 最多 3 倍于 GBK
+    std::string result(out_len, '\0');
+
+    char* in_ptr = const_cast<char*>(gbk_str);
+    char* out_ptr = result.data();
+    size_t out_left = out_len;
+
+    size_t ret = iconv(cd, &in_ptr, &in_len, &out_ptr, &out_left);
+    iconv_close(cd);
+
+    if (ret == (size_t)-1) {
+        return gbk_str;  // 转码失败，返回原始字符串
+    }
+
+    result.resize(out_len - out_left);
+    return result;
+}
 
 // ==================== 构造和析构 ====================
 
@@ -221,7 +251,7 @@ void CTPTDPlugin::OnRspAuthenticate(CThostFtdcRspAuthenticateField* pRspAuthenti
                                     CThostFtdcRspInfoField* pRspInfo,
                                     int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Authentication failed: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPTDPlugin] ❌ Authentication failed: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
         return;
     }
@@ -253,7 +283,7 @@ void CTPTDPlugin::OnRspUserLogin(CThostFtdcRspUserLoginField* pRspUserLogin,
                                  CThostFtdcRspInfoField* pRspInfo,
                                  int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Login failed: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPTDPlugin] ❌ Login failed: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
         return;
     }
@@ -290,7 +320,7 @@ void CTPTDPlugin::OnRspUserLogout(CThostFtdcUserLogoutField* pUserLogout,
                                   CThostFtdcRspInfoField* pRspInfo,
                                   int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Logout failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Logout failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         return;
     }
 
@@ -319,7 +349,7 @@ void CTPTDPlugin::OnRspSettlementInfoConfirm(CThostFtdcSettlementInfoConfirmFiel
                                              CThostFtdcRspInfoField* pRspInfo,
                                              int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Settlement confirmation failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Settlement confirmation failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         return;
     }
 
@@ -382,13 +412,13 @@ bool CTPTDPlugin::IsErrorResponse(CThostFtdcRspInfoField* pRspInfo) {
 void CTPTDPlugin::OnRspError(CThostFtdcRspInfoField* pRspInfo,
                              int nRequestID, bool bIsLast) {
     if (pRspInfo && pRspInfo->ErrorID != 0) {
-        std::cerr << "[CTPTDPlugin] Error Response: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPTDPlugin] Error Response: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
 
         // 触发错误回调
         std::lock_guard<std::mutex> lock(m_callback_mutex);
         if (m_error_callback) {
-            m_error_callback(pRspInfo->ErrorID, pRspInfo->ErrorMsg);
+            m_error_callback(pRspInfo->ErrorID, GbkToUtf8(pRspInfo->ErrorMsg).c_str());
         }
     }
 }
@@ -613,7 +643,7 @@ void CTPTDPlugin::OnRspOrderInsert(CThostFtdcInputOrderField* pInputOrder,
                                    CThostFtdcRspInfoField* pRspInfo,
                                    int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Order insert failed: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPTDPlugin] ❌ Order insert failed: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
 
         if (pInputOrder) {
@@ -626,7 +656,10 @@ void CTPTDPlugin::OnRspOrderInsert(CThostFtdcInputOrderField* pInputOrder,
             OrderInfo order_info;
             if (GetOrderFromCache(order_id, order_info)) {
                 order_info.status = OrderStatus::REJECTED;
-                strncpy(order_info.status_msg, pRspInfo->ErrorMsg, sizeof(order_info.status_msg) - 1);
+                {
+                    std::string utf8_msg = GbkToUtf8(pRspInfo->ErrorMsg);
+                    strncpy(order_info.status_msg, utf8_msg.c_str(), sizeof(order_info.status_msg) - 1);
+                }
                 SaveOrder(order_id, order_info);
 
                 // 触发订单回调
@@ -643,7 +676,7 @@ void CTPTDPlugin::OnRspOrderAction(CThostFtdcInputOrderActionField* pInputOrderA
                                    CThostFtdcRspInfoField* pRspInfo,
                                    int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Order cancel failed: " << pRspInfo->ErrorMsg
+        std::cerr << "[CTPTDPlugin] ❌ Order cancel failed: " << GbkToUtf8(pRspInfo->ErrorMsg)
                   << " (ErrorID: " << pRspInfo->ErrorID << ")" << std::endl;
     }
 }
@@ -737,7 +770,7 @@ void CTPTDPlugin::OnRspQryTradingAccount(CThostFtdcTradingAccountField* pTrading
                                          CThostFtdcRspInfoField* pRspInfo,
                                          int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Query account failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Query account failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         std::lock_guard<std::mutex> lock(m_query_mutex);
         m_query_finished = true;
         m_query_cv.notify_one();
@@ -857,7 +890,7 @@ void CTPTDPlugin::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField* pInv
                                            CThostFtdcRspInfoField* pRspInfo,
                                            int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Query positions failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Query positions failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         std::lock_guard<std::mutex> lock(m_query_mutex);
         m_query_finished = true;
         m_query_cv.notify_one();
@@ -913,7 +946,7 @@ void CTPTDPlugin::OnRspQryOrder(CThostFtdcOrderField* pOrder,
                                 CThostFtdcRspInfoField* pRspInfo,
                                 int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Query orders failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Query orders failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         std::lock_guard<std::mutex> lock(m_query_mutex);
         m_query_finished = true;
         m_query_cv.notify_one();
@@ -969,7 +1002,7 @@ void CTPTDPlugin::OnRspQryTrade(CThostFtdcTradeField* pTrade,
                                 CThostFtdcRspInfoField* pRspInfo,
                                 int nRequestID, bool bIsLast) {
     if (IsErrorResponse(pRspInfo)) {
-        std::cerr << "[CTPTDPlugin] ❌ Query trades failed: " << pRspInfo->ErrorMsg << std::endl;
+        std::cerr << "[CTPTDPlugin] ❌ Query trades failed: " << GbkToUtf8(pRspInfo->ErrorMsg) << std::endl;
         std::lock_guard<std::mutex> lock(m_query_mutex);
         m_query_finished = true;
         m_query_cv.notify_one();
