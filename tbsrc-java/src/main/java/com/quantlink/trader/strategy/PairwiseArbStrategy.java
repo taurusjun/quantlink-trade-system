@@ -443,6 +443,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                 secondStrat.sellAggOrder++;
                 secondStrat.lastAggTime = now_ts / 1000;
                 secondStrat.lastAggSide = Constants.SIDE_SELL;
+                log.info(String.format("[AGG-ORDER] leg=secondStrat side=SELL price=%.1f qty=%d aggRepeat=%d exposure=%d",
+                        secondinstru.bidPx[0], netExposure, agg_repeat, netExposure));
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
@@ -471,6 +473,8 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                 secondStrat.buyAggOrder++;
                 secondStrat.lastAggTime = now_ts / 1000;
                 secondStrat.lastAggSide = Constants.SIDE_BUY;
+                log.info(String.format("[AGG-ORDER] leg=secondStrat side=BUY price=%.1f qty=%d aggRepeat=%d exposure=%d",
+                        secondinstru.askPx[0], -netExposure, agg_repeat, netExposure));
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
@@ -561,12 +565,14 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         if (ordMap1.containsKey(orderID)) {
             // 第一腿回报
+            log.info(String.format("[PAIR-ORS] orderID=%d routed=firstStrat type=%d", orderID, responseType));
             firstStrat.orsCallBack(response);
             if (responseType == Constants.RESP_TRADE_CONFIRM) {
                 agg_repeat = 1;
             }
         } else if (ordMap2.containsKey(orderID)) {
             // 第二腿回报 — 先处理 aggOrder 计数再调用基类
+            log.info(String.format("[PAIR-ORS] orderID=%d routed=secondStrat type=%d", orderID, responseType));
             handleAggOrder(response, ordMap2.get(orderID), secondStrat);
             secondStrat.orsCallBack(response);
             if (responseType == Constants.RESP_TRADE_CONFIRM) {
@@ -631,13 +637,20 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         // 加入 currSpreadRatio != 0 守卫，确保至少收到过一次完整行情后再做检查。
         if (currSpreadRatio != 0 && Math.abs(currSpreadRatio - avgSpreadRatio)
                 > firstStrat.instru.tickSize * firstStrat.thold.AVG_SPREAD_AWAY) {
-            is_valid_mkdata = false;
-            log.warning("Error avgSpreadRatio, Exit Strategy. currSpread:" + currSpreadRatio
-                    + " avgSpread:" + avgSpreadRatio + " AVG_SPREAD_AWAY:" + firstStrat.thold.AVG_SPREAD_AWAY);
             if (active) {
+                // active 状态下触发退出（保持 C++ 原行为）
+                is_valid_mkdata = false;
+                log.warning("Error avgSpreadRatio, Exit Strategy. currSpread:" + currSpreadRatio
+                        + " avgSpread:" + avgSpreadRatio + " AVG_SPREAD_AWAY:" + firstStrat.thold.AVG_SPREAD_AWAY);
                 handleSquareoff();
+                return;
+            } else {
+                // inactive 状态下仅 warning，不退出 — 等待激活时 handleSquareON() 自动重置 avgSpread
+                log.warning(String.format("[AVG-SPREAD-DRIFT] inactive, 跳过exit. currSpread=%.2f avgSpread=%.2f drift=%.2f threshold=%.0f",
+                        currSpreadRatio, avgSpreadRatio,
+                        Math.abs(currSpreadRatio - avgSpreadRatio),
+                        firstStrat.instru.tickSize * firstStrat.thold.AVG_SPREAD_AWAY));
             }
-            return;
         }
 
         // C++: 收到第一腿行情时更新 avgSpreadRatio_ori (EWA)
@@ -732,8 +745,16 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             double oldAvg = avgSpreadRatio_ori;
             avgSpreadRatio_ori = liveSpread;
             avgSpreadRatio = avgSpreadRatio_ori + tValue;
-            log.info(String.format("[HandleSquareON] avgSpreadRatio 重置: %.4f → %.4f (liveSpread=%.4f tValue=%.4f)",
-                oldAvg, avgSpreadRatio, liveSpread, tValue));
+
+            double drift = Math.abs(oldAvg - liveSpread);
+            double threshold = firstStrat.instru.tickSize * firstStrat.thold.AVG_SPREAD_AWAY;
+            if (drift > threshold) {
+                log.warning(String.format("[AVG-SPREAD-DRIFT] 检测到跨天漂移，自动修复: oldAvg=%.4f -> newAvg=%.4f (drift=%.2f, threshold=%.0f)",
+                        oldAvg, avgSpreadRatio, drift, threshold));
+            } else {
+                log.info(String.format("[HandleSquareON] avgSpreadRatio 重置: %.4f -> %.4f (liveSpread=%.4f tValue=%.4f)",
+                        oldAvg, avgSpreadRatio, liveSpread, tValue));
+            }
         }
 
         log.info("[HandleSquareON] 策略已激活, onExit=false aggFlat=false");
@@ -767,6 +788,10 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         }
 
         active = false;
+
+        log.warning(String.format("[PAIR-EXIT] active=false avgSpread=%.4f ytd1=%d ytd2=%d netpos1=%d netpos2=%d",
+                avgSpreadRatio_ori, firstStrat.netposPassYtd, secondStrat.netposPassYtd,
+                firstStrat.netpos, secondStrat.netpos));
 
         // C++: SaveMatrix2("../data/daily_init." + strategyID)
         // [C++差异] C++ 硬编码 "../data/daily_init."，Java 使用构造时传入的 dailyInitPath，

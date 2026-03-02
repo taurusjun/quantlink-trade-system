@@ -71,6 +71,12 @@ public:
     // 非阻塞获取缓存的持仓信息（用于HTTP查询，避免阻塞HTTP线程）
     bool GetCachedPositions(std::vector<PositionInfo>& positions);
 
+    // 非阻塞获取缓存的账户信息（用于HTTP查询，避免阻塞HTTP线程）
+    bool GetCachedAccount(AccountInfo& account_info);
+
+    // 缓存账户数据是否可用（至少成功查询过一次）
+    bool IsAccountCacheReady() const { return m_account_cache_ready.load(); }
+
     // 检查持仓数据是否就绪（首次查询完成且数据有效）
     bool IsPositionReady() const { return m_position_ready.load(); }
     bool GetOrder(const std::string& order_id, OrderInfo& order_info) override;
@@ -261,6 +267,12 @@ private:
 
     // 持仓数据就绪标记（首次查询完成且avg_price有效）
     std::atomic<bool> m_position_ready{false};
+
+    // 账户缓存就绪标记（至少成功查询过一次）
+    std::atomic<bool> m_account_cache_ready{false};
+
+    // 账户缓存访问保护（独立于 m_query_mutex，GetCachedAccount 不阻塞查询）
+    mutable std::mutex m_account_cache_mutex;
 };
 
 } // namespace ctp

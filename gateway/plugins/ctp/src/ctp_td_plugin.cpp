@@ -747,6 +747,13 @@ void CTPTDPlugin::OnRspQryTradingAccount(CThostFtdcTradingAccountField* pTrading
     if (pTradingAccount) {
         ConvertAccount(pTradingAccount, m_cached_account);
         m_available_fund.store(m_cached_account.available);
+
+        // 更新非阻塞缓存（供 GetCachedAccount 使用）
+        {
+            std::lock_guard<std::mutex> cache_lock(m_account_cache_mutex);
+            // m_cached_account 已在上面更新，标记缓存就绪
+            m_account_cache_ready.store(true);
+        }
     }
 
     if (bIsLast) {
@@ -833,6 +840,16 @@ bool CTPTDPlugin::GetCachedPositions(std::vector<PositionInfo>& positions) {
         }
     }
 
+    return true;
+}
+
+// 非阻塞获取缓存的账户信息（用于HTTP查询，避免阻塞HTTP线程）
+bool CTPTDPlugin::GetCachedAccount(AccountInfo& account_info) {
+    if (!m_account_cache_ready.load()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_account_cache_mutex);
+    account_info = m_cached_account;
     return true;
 }
 

@@ -109,6 +109,13 @@ static std::mutex g_orders_mutex;
 static std::map<std::string, std::unique_ptr<ITDPlugin>> g_brokers;
 static std::map<std::string, std::string> g_symbol_to_broker;
 
+// Background account query cache
+static AccountInfo g_cached_account;
+static std::mutex g_account_cache_mutex;
+static std::atomic<bool> g_account_cache_ready{false};
+static std::chrono::steady_clock::time_point g_account_last_updated;
+static std::thread g_account_refresh_thread;
+
 // Statistics
 struct Statistics {
     std::atomic<uint64_t> total_orders{0};
@@ -399,34 +406,30 @@ void HandleSimulatorAccount(const httplib::Request& /*req*/, httplib::Response& 
     res.set_content(json.str(), "application/json");
 }
 
-// Generic /account endpoint — works with any broker plugin (CTP or Simulator)
+// Generic /account endpoint — reads from cache (non-blocking)
+// Background thread refreshes cache every 10s via QueryAccount()
 void HandleAccount(const httplib::Request& /*req*/, httplib::Response& res) {
-    // Find first available (logged-in) broker plugin
-    ITDPlugin* plugin = nullptr;
-    std::string broker_name;
-    for (auto& [name, broker] : g_brokers) {
-        if (broker && broker->IsLoggedIn()) {
-            plugin = broker.get();
-            broker_name = name;
-            break;
-        }
-    }
-
-    if (!plugin) {
-        res.set_content("{\"success\":false,\"error\":\"No broker plugin available\"}", "application/json");
+    if (!g_account_cache_ready.load()) {
+        res.status = 503;
+        res.set_content("{\"error\":\"Account data not yet available\",\"retry_after\":10}", "application/json");
         return;
     }
 
-    hft::plugin::AccountInfo account;
-    if (!plugin->QueryAccount(account)) {
-        res.set_content("{\"success\":false,\"error\":\"Failed to query account from " + broker_name + "\"}", "application/json");
-        return;
+    AccountInfo account;
+    std::chrono::steady_clock::time_point last_updated;
+    {
+        std::lock_guard<std::mutex> lock(g_account_cache_mutex);
+        account = g_cached_account;
+        last_updated = g_account_last_updated;
     }
+
+    auto age_secs = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - last_updated).count();
+    bool stale = age_secs > 30;
 
     std::ostringstream json;
     json << "{\n";
     json << "  \"success\": true,\n";
-    json << "  \"broker\": \"" << JsonEscape(broker_name) << "\",\n";
     json << "  \"account_id\": \"" << JsonEscape(account.account_id) << "\",\n";
     json << "  \"balance\": " << account.balance << ",\n";
     json << "  \"available\": " << account.available << ",\n";
@@ -434,10 +437,45 @@ void HandleAccount(const httplib::Request& /*req*/, httplib::Response& res) {
     json << "  \"frozen_margin\": " << account.frozen_margin << ",\n";
     json << "  \"commission\": " << account.commission << ",\n";
     json << "  \"close_profit\": " << account.close_profit << ",\n";
-    json << "  \"position_profit\": " << account.position_profit << "\n";
+    json << "  \"position_profit\": " << account.position_profit << ",\n";
+    json << "  \"last_updated_secs_ago\": " << age_secs << ",\n";
+    json << "  \"stale\": " << (stale ? "true" : "false") << "\n";
     json << "}\n";
 
     res.set_content(json.str(), "application/json");
+}
+
+// Background thread: refreshes account cache every 10s
+void AccountRefreshLoop() {
+    std::cout << "[AccountRefresh] Background account query thread started" << std::endl;
+    while (g_running.load()) {
+        // Find first logged-in broker
+        ITDPlugin* plugin = nullptr;
+        for (auto& [name, broker] : g_brokers) {
+            if (broker && broker->IsLoggedIn()) {
+                plugin = broker.get();
+                break;
+            }
+        }
+
+        if (plugin) {
+            AccountInfo account;
+            if (plugin->QueryAccount(account)) {
+                std::lock_guard<std::mutex> lock(g_account_cache_mutex);
+                g_cached_account = account;
+                g_account_last_updated = std::chrono::steady_clock::now();
+                g_account_cache_ready.store(true);
+            } else {
+                std::cerr << "[AccountRefresh] QueryAccount timeout/failed, keeping old cache" << std::endl;
+            }
+        }
+
+        // Sleep 10s in 1s intervals for responsive shutdown
+        for (int i = 0; i < 10 && g_running.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+    std::cout << "[AccountRefresh] Background account query thread stopped" << std::endl;
 }
 
 void StartHTTPServer(int port = 8082) {
@@ -988,6 +1026,9 @@ int main(int argc, char** argv) {
     std::cout << "\n[Main] Starting HTTP server..." << std::endl;
     StartHTTPServer(8082);
 
+    // 4.1 Start background account refresh thread
+    g_account_refresh_thread = std::thread(AccountRefreshLoop);
+
     // 5. Start order processor thread
     std::cout << "\n[Main] Starting order processor thread..." << std::endl;
     std::thread processor_thread(OrderRequestProcessor, req_queue);
@@ -1022,6 +1063,11 @@ int main(int argc, char** argv) {
 
     // 8. Cleanup
     std::cout << "\n[Main] Cleaning up..." << std::endl;
+
+    // Stop background account refresh thread
+    if (g_account_refresh_thread.joinable()) {
+        g_account_refresh_thread.join();
+    }
 
     StopHTTPServer();
 

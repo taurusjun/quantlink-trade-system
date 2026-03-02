@@ -934,6 +934,7 @@ public abstract class ExecutionStrategy {
             onFlat = true;
             log.warning(instru.currDate + " Exchange Time Limit reached. Aggressive flat got hit!! "
                     + watchTime + " " + endTimeAggEpoch + " Symbol: " + instru.origBaseName);
+            log.info("[STATE] aggFlat=true onExit=true onFlat=true, reason=endTimeAgg");
         }
 
         // === 2. 退出条件 ===
@@ -965,6 +966,7 @@ public abstract class ExecutionStrategy {
                         + " Order Count:" + orderCount + " Buy Qty: " + buyTotalQty
                         + " Sell Qty: " + sellTotalQty + " NetPNL: " + netPNL / 100
                         + " Limit Reason: " + limitReason + " Symbol: " + instru.origBaseName);
+                log.info("[STATE] onExit=true onFlat=true, reason=" + limitReason);
 
                 if (watchTime < endTimeEpoch) {
                     sendAlert("Strategy squared off due to limit hit", limitReason);
@@ -1093,6 +1095,7 @@ public abstract class ExecutionStrategy {
             sendAlert("Strategy paused due to limit hit", limitReason);
             log.warning(instru.currDate + " Limit reached. Square off is Called. Strategy Paused. Reason: "
                     + limitReason + " Symbol: " + instru.origBaseName);
+            log.info("[STATE] onStopLoss=true onFlat=true, reason=" + limitReason);
         }
 
         // === 6. NEWS_FLAT ===
@@ -1122,6 +1125,7 @@ public abstract class ExecutionStrategy {
                 onFlat = false;
                 onStopLoss = false;
                 log.warning(instru.currDate + " STOPLOSS time limit reached. Strategy Restarted..");
+                log.info("[STATE] onFlat=false onStopLoss=false, reason=stopLossCooldown15min");
             }
 
             // C++: if (!m_optionStrategy && m_thold->USE_PRICE_LIMIT) { ... m_exchTS - m_lastFlatTS > 60000000000 ... } // 1 min
@@ -1318,6 +1322,9 @@ public abstract class ExecutionStrategy {
         // 记录新建订单事件
         recordOrderEvent(ordStats, "NEW");
 
+        log.info(String.format("[ORDER-NEW] symbol=%s side=%s price=%.1f qty=%d orderID=%d",
+                instru.symbol, side == Constants.SIDE_BUY ? "BUY" : "SELL", price, qty, orderID));
+
         orderCount++;
         return ordStats;
     }
@@ -1380,6 +1387,8 @@ public abstract class ExecutionStrategy {
             order.cancel = true;
             cancelCount++;
             client.sendCancelOrder(strategyID, instru.symbol, order.side, orderID, this);
+            log.info(String.format("[ORDER-CANCEL] orderID=%d symbol=%s side=%s",
+                    orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL"));
             return true;
         }
         return false;
@@ -1803,6 +1812,10 @@ public abstract class ExecutionStrategy {
         order.openQty -= tradeQty;
         order.doneQty += tradeQty;
 
+        log.info(String.format("[TRADE] symbol=%s side=%s price=%.1f qty=%d orderID=%d cumQty=%d remainQty=%d",
+                instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL",
+                tradePrice, tradeQty, order.orderID, order.doneQty, order.openQty));
+
         lastTrade = true;
         lastTradePx = tradePrice;
 
@@ -2052,6 +2065,8 @@ public abstract class ExecutionStrategy {
     /** 新单被拒。 Ref: ExecutionStrategy.cpp:1803-1829 */
     protected void processNewReject(MemorySegment response, OrderStats order) {
         recordOrderEvent(order, "NEW_REJECT");
+        log.warning(String.format("[ORDER-REJECT] orderID=%d symbol=%s side=%s price=%.1f",
+                order.orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL", order.price));
         removeOrder(order);
     }
 
@@ -2071,6 +2086,8 @@ public abstract class ExecutionStrategy {
     /** 撤单被拒。 Ref: ExecutionStrategy.cpp:1855-1886 */
     protected void processCancelReject(MemorySegment response, OrderStats order) {
         order.cancel = false;
+        log.warning(String.format("[CANCEL-REJECT] orderID=%d symbol=%s side=%s",
+                order.orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL"));
     }
 
     /** 改单确认。 Ref: ExecutionStrategy.cpp:1888-1910 */
@@ -2096,6 +2113,8 @@ public abstract class ExecutionStrategy {
     protected void processCancelConfirm(MemorySegment response, OrderStats order) {
         order.status = OrderStats.Status.CANCEL_CONFIRM;
         recordOrderEvent(order, "CANCEL_CONFIRM");
+        log.info(String.format("[CANCEL-CONFIRM] orderID=%d symbol=%s side=%s",
+                order.orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL"));
         removeOrder(order);
     }
 
