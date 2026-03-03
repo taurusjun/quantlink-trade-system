@@ -112,6 +112,7 @@ mkdir -p "${DEPLOY_DIR}/bin"
 mkdir -p "${DEPLOY_DIR}/lib"
 mkdir -p "${DEPLOY_DIR}/scripts"
 mkdir -p "${DEPLOY_DIR}/log"
+mkdir -p "${DEPLOY_DIR}/sim/log"
 log_info "目录结构创建完成"
 
 # ==================== 编译 C++ 网关 ====================
@@ -248,7 +249,13 @@ fi
 # 清理共享内存
 ipcs -m 2>/dev/null | grep "$(whoami)" | awk '{print $2}' | xargs -I{} ipcrm -m {} 2>/dev/null || true
 
-mkdir -p log ctp_flow
+# 日志目录隔离: sim → sim/log/, ctp → log/
+if [ "$MODE" = "sim" ]; then
+    LOG_DIR="sim/log"
+else
+    LOG_DIR="log"
+fi
+mkdir -p "$LOG_DIR" ctp_flow
 
 # 1. MD SHM Feeder
 if [ "$MODE" = "sim" ]; then
@@ -265,24 +272,24 @@ if [ "$MODE" = "sim" ]; then
     [ -z "$SYMBOLS" ] && SYMBOLS="ag2603,ag2605"
     QUEUE_SIZE=2048
     [ "$(uname)" = "Linux" ] && QUEUE_SIZE=65536
-    ./bin/md_shm_feeder "simulator:${SYMBOLS}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
+    ./bin/md_shm_feeder "simulator:${SYMBOLS}" --queue-size "$QUEUE_SIZE" > "${LOG_DIR}/md_shm_feeder.${DATE}.log" 2>&1 &
     sleep 1
     echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (Simulator: ${SYMBOLS}, queue=${QUEUE_SIZE})"
 else
     QUEUE_SIZE=2048
     [ "$(uname)" = "Linux" ] && QUEUE_SIZE=65536
-    ./bin/md_shm_feeder "ctp:${CTP_MD_CONFIG}" --queue-size "$QUEUE_SIZE" > "log/md_shm_feeder.${DATE}.log" 2>&1 &
+    ./bin/md_shm_feeder "ctp:${CTP_MD_CONFIG}" --queue-size "$QUEUE_SIZE" > "${LOG_DIR}/md_shm_feeder.${DATE}.log" 2>&1 &
     sleep 2
     echo -e "${GREEN}[INFO]${NC} MD SHM Feeder (CTP, queue=${QUEUE_SIZE})"
 fi
 
 # 2. Counter Bridge (HTTP :8082 — /account, /health)
 if [ "$MODE" = "sim" ]; then
-    ./bin/counter_bridge simulator:config/simulator.yaml > "log/counter_bridge.${DATE}.log" 2>&1 &
+    ./bin/counter_bridge simulator:config/simulator.yaml > "${LOG_DIR}/counter_bridge.${DATE}.log" 2>&1 &
     sleep 1
     echo -e "${GREEN}[INFO]${NC} Counter Bridge (Simulator, HTTP :8082)"
 else
-    ./bin/counter_bridge ctp:"$CTP_TD_CONFIG" > "log/counter_bridge.${DATE}.log" 2>&1 &
+    ./bin/counter_bridge ctp:"$CTP_TD_CONFIG" > "${LOG_DIR}/counter_bridge.${DATE}.log" 2>&1 &
     sleep 2
     echo -e "${GREEN}[INFO]${NC} Counter Bridge (CTP, HTTP :8082)"
 fi
@@ -302,13 +309,14 @@ OVERVIEW_PORT=8080
 nohup "$JAVA_HOME/bin/java" --enable-native-access=ALL-UNNAMED \
     -cp "$CLASSPATH" \
     com.quantlink.trader.api.overview.OverviewServer "$OVERVIEW_PORT" \
-    >> "log/overview.${DATE}.log" 2>&1 &
+    >> "${LOG_DIR}/overview.${DATE}.log" 2>&1 &
 echo $! > overview.pid
 sleep 1
 echo -e "${GREEN}[INFO]${NC} Java OverviewServer (port ${OVERVIEW_PORT})"
 
 echo ""
 echo -e "${GREEN}[INFO]${NC} C++ 网关 + Overview 启动完成 (${MODE})"
+echo -e "${GREEN}[INFO]${NC} 日志目录: ${LOG_DIR}/"
 echo -e "${GREEN}[INFO]${NC} Overview:  http://localhost:${OVERVIEW_PORT}/"
 echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy_id> [day|night]"
 echo ""
@@ -400,7 +408,36 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-LOG_FILE="./log/trader.${STRATEGY_ID}.${DATE}.log"
+# 安全检查: CTP 模式下禁止使用 sim 模型
+MODEL_PATH=$(awk '{print $2}' "$CONTROL_FILE")
+if [ "$GATEWAY_MODE" = "ctp" ]; then
+    if echo "$MODEL_PATH" | grep -q "sim/"; then
+        echo -e "${RED}[ERROR]${NC} CTP 实盘模式下禁止使用 sim 模型!"
+        echo -e "${RED}[ERROR]${NC} ControlFile: ${CONTROL_FILE}"
+        echo -e "${RED}[ERROR]${NC} ModelPath:   ${MODEL_PATH}"
+        echo ""
+        echo "  请使用 live/ 目录下的 control 和 model 文件。"
+        echo "  如需模拟测试，请先切换网关: ./scripts/start_gateway.sh sim"
+        exit 1
+    fi
+fi
+# 安全检查: sim 模式下警告使用 live 模型
+if [ "$GATEWAY_MODE" = "sim" ]; then
+    if echo "$MODEL_PATH" | grep -q "live/"; then
+        echo -e "${YELLOW}[WARN]${NC} 模拟模式下加载了 live 模型: ${MODEL_PATH}"
+        echo -e "${YELLOW}[WARN]${NC} 建议使用 sim/ 目录下的模型参数。"
+    fi
+fi
+
+# 日志目录隔离: sim → sim/log/, ctp → log/
+if [ "$GATEWAY_MODE" = "sim" ]; then
+    LOG_DIR="sim/log"
+else
+    LOG_DIR="log"
+fi
+# 日志文件名与 C++ 保持一致: log.<control_basename>.<date>
+CONTROL_BASENAME=$(basename "$CONTROL_FILE")
+LOG_FILE="./${LOG_DIR}/log.${CONTROL_BASENAME}.${DATE}"
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -410,12 +447,13 @@ echo -e "${GREEN}[INFO]${NC} Strategy ID:  ${STRATEGY_ID}"
 echo -e "${GREEN}[INFO]${NC} Session:      ${SESSION}"
 echo -e "${GREEN}[INFO]${NC} Gateway Mode: ${GATEWAY_MODE}"
 echo -e "${GREEN}[INFO]${NC} Data Dir:     ${DATA_DIR}"
+echo -e "${GREEN}[INFO]${NC} Log Dir:      ${LOG_DIR}/"
 echo -e "${GREEN}[INFO]${NC} ControlFile:  ${CONTROL_FILE}"
 echo -e "${GREEN}[INFO]${NC} ConfigFile:   ${CONFIG_FILE}"
 echo -e "${GREEN}[INFO]${NC} JAVA_HOME:    ${JAVA_HOME}"
 echo ""
 
-mkdir -p log "${DATA_DIR}"
+mkdir -p "$LOG_DIR" "${DATA_DIR}"
 
 # 构建 classpath
 CLASSPATH="$DEPLOY_ROOT/lib/trader-1.0-SNAPSHOT.jar"
@@ -452,13 +490,13 @@ else
         -yearPrefix "$YEAR_PREFIX" \
         -logFile "$LOG_FILE" \
         -printMod 1 \
-        >> "nohup.out.${STRATEGY_ID}.${DATE}" 2>&1 &
+        >> "${LOG_DIR}/nohup.${CONTROL_BASENAME}.${DATE}" 2>&1 &
 
     PID=$!
     echo "$PID" > "trader.${STRATEGY_ID}.pid"
     echo -e "${GREEN}[INFO]${NC} Java Trader 已启动 (PID: ${PID})"
     echo -e "${GREEN}[INFO]${NC} Dashboard: http://localhost:9201/dashboard.html"
-    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f nohup.out.${STRATEGY_ID}.${DATE}"
+    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f ${LOG_DIR}/nohup.${CONTROL_BASENAME}.${DATE}"
 
     sleep 3
     if kill -0 $PID 2>/dev/null; then
@@ -855,7 +893,7 @@ echo "  │   ├── trader-1.0-SNAPSHOT.jar"
 echo "  │   └── ... $(ls "${DEPLOY_DIR}/lib/"*.jar 2>/dev/null | wc -l | tr -d ' ') 个 JAR"
 echo "  ├── config/"
 echo "  ├── live/          (controls, models, data)"
-echo "  ├── sim/           (controls, models, data)"
+echo "  ├── sim/           (controls, models, data, log)"
 echo "  ├── scripts/"
 ls "${DEPLOY_DIR}/scripts/" 2>/dev/null | while read f; do echo "  │   ├── $f"; done
 echo "  └── log/"
