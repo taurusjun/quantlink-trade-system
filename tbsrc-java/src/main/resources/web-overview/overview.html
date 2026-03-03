@@ -123,15 +123,25 @@
             background: #2980b9;
         }
 
-        /* ④⑤⑥⑦ 底部区域 */
+        /* 底部包装区域（Alerts + 4表格） */
+        .bottom-wrapper {
+            display: flex;
+            flex-direction: column;
+            height: 300px;
+            min-height: 100px;
+            max-height: 700px;
+            flex-shrink: 0;
+            gap: 0;
+            overflow: hidden;
+        }
+
+        /* ④⑤⑥⑦ 底部 4 表格 */
         .bottom-area {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr 1fr;
             gap: 2px;
-            height: 250px;
-            min-height: 100px;
-            max-height: 600px;
-            flex-shrink: 0;
+            flex: 1;
+            min-height: 0;
         }
 
         /* ---- 通用表格样式 ---- */
@@ -412,8 +422,14 @@
             </div>
         </div>
 
+        <!-- 水平 resizer 拖拽条 -->
+        <div class="resizer-h" @mousedown="startResizeH"></div>
+
+        <!-- 底部区域（Alerts + 4 表格） -->
+        <div class="bottom-wrapper" ref="bottomArea">
+
         <!-- ⑧ Alerts Panel -->
-        <div v-if="overview.alerts && overview.alerts.length > 0" class="panel" style="max-height:120px;flex-shrink:0">
+        <div v-if="overview.alerts && overview.alerts.length > 0" class="panel" style="max-height:150px;flex-shrink:0">
             <div class="panel-header">
                 Alerts
                 <span class="badge">{{ overview.alerts.length }}</span>
@@ -444,11 +460,8 @@
             </div>
         </div>
 
-        <!-- 水平 resizer 拖拽条 -->
-        <div class="resizer-h" @mousedown="startResizeH"></div>
-
         <!-- ④⑤⑥⑦ 底部 4 表格 -->
-        <div class="bottom-area" ref="bottomArea">
+        <div class="bottom-area">
             <!-- ④ Spread Trades -->
             <div class="panel">
                 <div class="panel-header">
@@ -606,6 +619,7 @@
                 </div>
             </div>
         </div>
+        </div><!-- /bottom-wrapper -->
     </div>
     <!-- Toast 提示 -->
     <div class="toast" :class="[toast.show ? 'show' : '', toast.type]">{{ toast.msg }}</div>
@@ -896,7 +910,7 @@ createApp({
 
             function onMouseMove(ev) {
                 const newH = startH - (ev.clientY - startY);
-                if (newH >= 100 && newH <= 600) {
+                if (newH >= 100 && newH <= 700) {
                     el.style.height = newH + 'px';
                 }
             }
