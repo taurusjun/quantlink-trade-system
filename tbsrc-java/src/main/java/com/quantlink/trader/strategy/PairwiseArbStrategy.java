@@ -449,6 +449,10 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
+                    firstStrat.alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL,
+                            AlertEvent.TYPE_MAX_AGG_REPEAT,
+                            "Max agg_repeat reached (SELL side), strategy deactivated. agg_repeat=" + agg_repeat,
+                            secondinstru.origBaseName, strategyID));
                     handleSquareoff();
                 } else {
                     // C++: agg_repeat < 3 ? bidPx[0] - tickSize * agg_repeat : bidPx[0] - tickSize * SLOP
@@ -479,6 +483,10 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
             } else {
                 if (agg_repeat > 3) {
                     log.warning("Reach max agg_repeat, deactive Strategy");
+                    firstStrat.alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL,
+                            AlertEvent.TYPE_MAX_AGG_REPEAT,
+                            "Max agg_repeat reached (BUY side), strategy deactivated. agg_repeat=" + agg_repeat,
+                            secondinstru.origBaseName, strategyID));
                     handleSquareoff();
                 } else {
                     double aggPrice = agg_repeat < 3

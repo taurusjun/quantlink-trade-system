@@ -36,6 +36,7 @@ public class AlertEvent {
     public static final String TYPE_END_TIME_AGG = "END_TIME_AGG";
     public static final String TYPE_AVG_SPREAD_AWAY = "AVG_SPREAD_AWAY";
     public static final String TYPE_REJECT_LIMIT = "REJECT_LIMIT";
+    public static final String TYPE_MAX_AGG_REPEAT = "MAX_AGG_REPEAT";
 
     // 告警级别常量
     public static final String LEVEL_WARNING = "WARNING";
