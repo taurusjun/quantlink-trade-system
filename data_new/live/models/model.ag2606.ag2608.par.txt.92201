@@ -29,7 +29,7 @@ AVG_SPREAD_AWAY 110
 
 # Risk control parameters
 STOP_LOSS 80000
-MAX_LOSS 80000
+MAX_LOSS 10000000
 UPNL_LOSS 60000
 
 # Additional parameters

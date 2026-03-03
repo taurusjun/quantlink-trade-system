@@ -37,15 +37,18 @@ public class OrderHistoryTracker {
 
         // 更新已有订单状态，添加新订单
         for (DashboardSnapshot.OrderSnapshot o : liveOrders) {
-            o.time = now;
             if (!seen.contains(o.orderID)) {
+                // 首次出现：记录时间，之后不再覆盖
+                o.time = now;
                 seen.add(o.orderID);
                 history.add(copyOrder(o));
             } else {
-                // 已有订单，更新状态
+                // 已有订单，更新状态但保留原始 time
                 for (int i = 0; i < history.size(); i++) {
                     if (history.get(i).orderID == o.orderID) {
-                        history.set(i, copyOrder(o));
+                        DashboardSnapshot.OrderSnapshot updated = copyOrder(o);
+                        updated.time = history.get(i).time; // 保留首次记录的时间
+                        history.set(i, updated);
                         break;
                     }
                 }
