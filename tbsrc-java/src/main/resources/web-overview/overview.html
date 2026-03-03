@@ -220,6 +220,13 @@
             background: #f0f0f0;
         }
 
+        /* Alert 样式 */
+        .alert-warning-text { color: #f39c12; font-weight: bold; font-size: 10px; }
+        .alert-critical-text { color: #e74c3c; font-weight: bold; font-size: 10px; }
+        .alert-level-badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: bold; }
+        .alert-level-badge.WARNING { background: #fff3cd; color: #856404; }
+        .alert-level-badge.CRITICAL { background: #f8d7da; color: #721c24; }
+
         .btn-cxl-all {
             background: #e74c3c;
             color: #fff;
@@ -325,7 +332,7 @@
                         <tbody>
                             <tr v-for="s in filteredStrategies" :key="s.id + '-' + s.port">
                                 <td><span :class="'status-' + s.status">{{ statusLabel(s.status) }}</span></td>
-                                <td>{{ s.alert }}</td>
+                                <td :style="alertStyle(s.alert)">{{ s.alert }}</td>
                                 <td>{{ s.at ? 'ON' : 'OFF' }}</td>
                                 <td>{{ s.pro }}</td>
                                 <td>{{ s.id }}</td>
@@ -402,6 +409,38 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+
+        <!-- ⑧ Alerts Panel -->
+        <div v-if="overview.alerts && overview.alerts.length > 0" class="panel" style="max-height:120px;flex-shrink:0">
+            <div class="panel-header">
+                Alerts
+                <span class="badge">{{ overview.alerts.length }}</span>
+            </div>
+            <div class="panel-body">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Level</th>
+                            <th>Type</th>
+                            <th>Symbol</th>
+                            <th>ID</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(a, i) in overview.alerts" :key="'alert-'+i">
+                            <td>{{ fmtAlertTime(a.timestamp) }}</td>
+                            <td><span class="alert-level-badge" :class="a.level">{{ a.level }}</span></td>
+                            <td style="font-weight:bold">{{ a.type }}</td>
+                            <td>{{ a.symbol }}</td>
+                            <td>{{ a.strategy_id }}</td>
+                            <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis">{{ a.message }}</td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -585,7 +624,8 @@ createApp({
             orders: [],
             fills: [],
             spread_trades: [],
-            accounts: []
+            accounts: [],
+            alerts: []
         });
 
         const wsConnected = ref(false);
@@ -751,6 +791,22 @@ createApp({
             }
         }
 
+        function alertStyle(alert) {
+            if (!alert) return {};
+            if (alert.includes('CRITICAL') || alert.includes('MAX_LOSS') || alert.includes('END_TIME')) {
+                return { color: '#e74c3c', fontWeight: 'bold', fontSize: '10px' };
+            }
+            if (alert.includes('UPNL') || alert.includes('STOP') || alert.includes('SPREAD')) {
+                return { color: '#f39c12', fontWeight: 'bold', fontSize: '10px' };
+            }
+            return { color: '#f39c12', fontSize: '10px' };
+        }
+
+        function fmtAlertTime(ts) {
+            if (!ts) return '';
+            return new Date(ts).toLocaleTimeString();
+        }
+
         function fmtMoney(val) {
             if (val == null || val === 0) return '0.00';
             return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -870,7 +926,7 @@ createApp({
             orderStrategyOptions, orderSymbolOptions, filteredOrders,
             posProductOptions, posSymbolOptions, filteredPositions,
             clearFilters, statusLabel, posClass, pnlClass,
-            shortModelFile, formatTime, fmtMoney,
+            shortModelFile, formatTime, fmtMoney, alertStyle, fmtAlertTime,
             sendCmd, stopAll, cxlAll, openDashboard,
             accountPanel, startResize, bottomArea, startResizeH
         };

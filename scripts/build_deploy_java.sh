@@ -452,13 +452,13 @@ else
         -yearPrefix "$YEAR_PREFIX" \
         -logFile "$LOG_FILE" \
         -printMod 1 \
-        >> "nohup.out.${STRATEGY_ID}" 2>&1 &
+        >> "nohup.out.${STRATEGY_ID}.${DATE}" 2>&1 &
 
     PID=$!
     echo "$PID" > "trader.${STRATEGY_ID}.pid"
     echo -e "${GREEN}[INFO]${NC} Java Trader 已启动 (PID: ${PID})"
     echo -e "${GREEN}[INFO]${NC} Dashboard: http://localhost:9201/dashboard.html"
-    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f nohup.out.${STRATEGY_ID}"
+    echo -e "${GREEN}[INFO]${NC} 查看日志: tail -f nohup.out.${STRATEGY_ID}.${DATE}"
 
     sleep 3
     if kill -0 $PID 2>/dev/null; then

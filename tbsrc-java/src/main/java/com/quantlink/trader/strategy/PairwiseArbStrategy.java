@@ -1,5 +1,6 @@
 package com.quantlink.trader.strategy;
 
+import com.quantlink.trader.api.AlertEvent;
 import com.quantlink.trader.core.*;
 import com.quantlink.trader.shm.Constants;
 import com.quantlink.trader.shm.Types;
@@ -642,6 +643,16 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
                 is_valid_mkdata = false;
                 log.warning("Error avgSpreadRatio, Exit Strategy. currSpread:" + currSpreadRatio
                         + " avgSpread:" + avgSpreadRatio + " AVG_SPREAD_AWAY:" + firstStrat.thold.AVG_SPREAD_AWAY);
+
+                // 告警事件采集 — AVG_SPREAD_AWAY
+                firstStrat.alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL,
+                        AlertEvent.TYPE_AVG_SPREAD_AWAY,
+                        String.format("AVG_SPREAD_AWAY triggered. currSpread=%.2f avgSpread=%.2f drift=%.2f threshold=%.0f",
+                                currSpreadRatio, avgSpreadRatio,
+                                Math.abs(currSpreadRatio - avgSpreadRatio),
+                                firstStrat.instru.tickSize * firstStrat.thold.AVG_SPREAD_AWAY),
+                        firstStrat.instru.origBaseName, strategyID));
+
                 handleSquareoff();
                 return;
             } else {

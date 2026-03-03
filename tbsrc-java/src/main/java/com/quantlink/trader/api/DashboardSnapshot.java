@@ -31,6 +31,7 @@ public class DashboardSnapshot {
     @JsonProperty("spread")       public SpreadSnapshot spread = new SpreadSnapshot();
     @JsonProperty("leg1")         public LegSnapshot leg1 = new LegSnapshot();
     @JsonProperty("leg2")         public LegSnapshot leg2 = new LegSnapshot();
+    @JsonProperty("alerts")       public List<AlertEvent> alerts = new ArrayList<>();
 
     /** 价差分析 — 对齐 Go SpreadSnapshot */
     public static class SpreadSnapshot {
@@ -135,6 +136,11 @@ public class DashboardSnapshot {
         snap.leg1 = collectLeg(pas.firstinstru, pas.firstStrat, pas.ordMap1);
         // Leg2
         snap.leg2 = collectLeg(pas.secondinstru, pas.secondStrat, pas.ordMap2);
+
+        // 告警事件 — 从 firstStrat 的 alertCollector 读取（配对策略共享一个 alertCollector）
+        if (pas.firstStrat != null) {
+            snap.alerts = pas.firstStrat.alertCollector.getAll();
+        }
 
         // Leg2 是对冲腿，展示 secondStrat 关联的模型静态阈值（setThresholds() 仅设 firstStrat）
         // pas.thold_second 仅在 sendOrder() 中赋值，构造后可能为 null，

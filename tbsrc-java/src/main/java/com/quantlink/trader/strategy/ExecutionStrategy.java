@@ -1,5 +1,7 @@
 package com.quantlink.trader.strategy;
 
+import com.quantlink.trader.api.AlertCollector;
+import com.quantlink.trader.api.AlertEvent;
 import com.quantlink.trader.core.*;
 import com.quantlink.trader.shm.Constants;
 import com.quantlink.trader.shm.Types;
@@ -123,6 +125,9 @@ public abstract class ExecutionStrategy {
     public boolean aggFlat;
     public boolean active;
     public boolean callSquareOff;
+
+    // ---- 告警采集 ----
+    public final AlertCollector alertCollector = new AlertCollector();
 
     // ---- 时间戳 ----
     public long exchTS;
@@ -462,6 +467,28 @@ public abstract class ExecutionStrategy {
         String info = instru.currDate + " ALERT! Limit got hit. Symbol: " + instru.origBaseName + " " + msg + " Reason: " + reason;
         sendMonitorStratDetail(product, "m_netpos", String.valueOf(netpos), info, strategyID, 1, true);
         sendMonitorStratStatus(product, strategyID, onExit, onCancel, onFlat, active);
+
+        // 告警事件采集 — 从 reason 解析告警类型
+        String alertType = parseAlertType(reason);
+        String level = AlertEvent.LEVEL_CRITICAL;
+        alertCollector.add(new AlertEvent(level, alertType, msg + " Reason: " + reason,
+                instru.origBaseName, strategyID));
+    }
+
+    /**
+     * 从 sendAlert 的 reason 字符串解析告警类型常量。
+     */
+    private String parseAlertType(String reason) {
+        if (reason == null) return "UNKNOWN";
+        String r = reason.toUpperCase();
+        if (r.contains("UPNL LOSS")) return AlertEvent.TYPE_UPNL_LOSS;
+        if (r.contains("STOP LOSS")) return AlertEvent.TYPE_STOP_LOSS;
+        if (r.contains("MAX LOSS")) return AlertEvent.TYPE_MAX_LOSS;
+        if (r.contains("MAX ORDERS")) return AlertEvent.TYPE_MAX_ORDERS;
+        if (r.contains("MAX TRADED")) return AlertEvent.TYPE_MAX_TRADED;
+        if (r.contains("END TIME")) return AlertEvent.TYPE_END_TIME;
+        if (r.contains("REJECT")) return AlertEvent.TYPE_REJECT_LIMIT;
+        return "UNKNOWN";
     }
 
     /**
@@ -574,6 +601,11 @@ public abstract class ExecutionStrategy {
         if ((rejectCount > REJECT_LIMIT - 100) && !onFlat && active) {
             // C++: SendAlert("Strategy squared off due to reject limit", " MAX REJECT LIMIT got hit");
             log.warning("[" + product + "] REJECT Limit approaching (" + rejectCount + "), cancelling orders and square off...");
+
+            // 告警事件采集 — REJECT_LIMIT approaching
+            alertCollector.add(new AlertEvent(AlertEvent.LEVEL_WARNING, AlertEvent.TYPE_REJECT_LIMIT,
+                    "REJECT Limit approaching (" + rejectCount + "/" + REJECT_LIMIT + ")",
+                    instru.origBaseName, strategyID));
         }
 
         // C++: 监控状态上报 — 每 120 秒
@@ -637,6 +669,11 @@ public abstract class ExecutionStrategy {
             onCancel = true;
             onFlat = true;
             active = false;
+
+            // 告警事件采集 — REJECT_LIMIT reached
+            alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL, AlertEvent.TYPE_REJECT_LIMIT,
+                    "REJECT LIMIT REACHED (" + rejectCount + "), strategy stopped!",
+                    instru.origBaseName, strategyID));
         }
     }
 
@@ -935,6 +972,11 @@ public abstract class ExecutionStrategy {
             log.warning(instru.currDate + " Exchange Time Limit reached. Aggressive flat got hit!! "
                     + watchTime + " " + endTimeAggEpoch + " Symbol: " + instru.origBaseName);
             log.info("[STATE] aggFlat=true onExit=true onFlat=true, reason=endTimeAgg");
+
+            // 告警事件采集 — END_TIME_AGG
+            alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL, AlertEvent.TYPE_END_TIME_AGG,
+                    "[STATE] aggFlat=true onExit=true, reason=endTimeAgg",
+                    instru.origBaseName, strategyID));
         }
 
         // === 2. 退出条件 ===
@@ -967,6 +1009,15 @@ public abstract class ExecutionStrategy {
                         + " Sell Qty: " + sellTotalQty + " NetPNL: " + netPNL / 100
                         + " Limit Reason: " + limitReason + " Symbol: " + instru.origBaseName);
                 log.info("[STATE] onExit=true onFlat=true, reason=" + limitReason);
+
+                // 告警事件采集 — END_TIME / MAX_LOSS / MAX_ORDERS / MAX_TRADED
+                String exitAlertType = AlertEvent.TYPE_END_TIME;
+                if (limitReason.contains("MAX LOSS")) exitAlertType = AlertEvent.TYPE_MAX_LOSS;
+                else if (limitReason.contains("MAX ORDERS")) exitAlertType = AlertEvent.TYPE_MAX_ORDERS;
+                else if (limitReason.contains("MAX TRADED")) exitAlertType = AlertEvent.TYPE_MAX_TRADED;
+                alertCollector.add(new AlertEvent(AlertEvent.LEVEL_CRITICAL, exitAlertType,
+                        "[STATE] onExit=true, reason=" + limitReason,
+                        instru.origBaseName, strategyID));
 
                 if (watchTime < endTimeEpoch) {
                     sendAlert("Strategy squared off due to limit hit", limitReason);
@@ -1096,6 +1147,7 @@ public abstract class ExecutionStrategy {
             log.warning(instru.currDate + " Limit reached. Square off is Called. Strategy Paused. Reason: "
                     + limitReason + " Symbol: " + instru.origBaseName);
             log.info("[STATE] onStopLoss=true onFlat=true, reason=" + limitReason);
+            // 注: alertCollector.add() 已在 sendAlert() 中调用，此处不重复
         }
 
         // === 6. NEWS_FLAT ===

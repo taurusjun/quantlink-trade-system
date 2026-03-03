@@ -94,6 +94,18 @@
         @keyframes slideIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
 
         .empty { text-align: center; padding: 20px; color: var(--muted); }
+
+        /* Alert Panel */
+        .alert-panel { grid-column: 1 / -1; }
+        .alert-list { max-height: 200px; overflow-y: auto; }
+        .alert-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+        .alert-item:last-child { border-bottom: none; }
+        .alert-level { font-weight: 700; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .alert-level.WARNING { background: #fff3cd; color: #856404; }
+        .alert-level.CRITICAL { background: #f8d7da; color: #721c24; }
+        .alert-type { font-weight: 600; color: var(--text); min-width: 120px; }
+        .alert-msg { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .alert-time { color: var(--muted); font-size: 11px; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -136,6 +148,26 @@
             <div class="stat-card">
                 <div class="stat-label">Total PNL</div>
                 <div class="stat-value" :class="totalPnl >= 0 ? 'positive' : 'negative'">{{ fmtPnl(totalPnl) }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Panel -->
+    <div v-if="alerts.length > 0" style="padding:0 16px;max-width:1600px;margin:0 auto">
+        <div class="card alert-panel" style="margin-top:12px">
+            <div class="card-hdr">
+                Alerts
+                <span class="badge badge-danger">{{ alerts.length }}</span>
+            </div>
+            <div class="card-body">
+                <div class="alert-list">
+                    <div v-for="(a, i) in alerts" :key="i" class="alert-item">
+                        <span class="alert-level" :class="a.level">{{ a.level }}</span>
+                        <span class="alert-type">{{ a.type }}</span>
+                        <span class="alert-msg" :title="a.message">{{ a.message }}</span>
+                        <span class="alert-time">{{ fmtAlertTime(a.timestamp) }}</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -366,13 +398,25 @@ createApp({
         const snapshot = ref({
             timestamp: '', strategy_id: 0, active: false, account: '', exposure: 0,
             spread: { current:0, avg_spread:0, avg_ori:0, t_value:0, deviation:0, is_valid:false, alpha:0 },
-            leg1: emptyLeg(), leg2: emptyLeg()
+            leg1: emptyLeg(), leg2: emptyLeg(),
+            alerts: []
         });
 
         let ws = null;
         let reconnTimer = null;
 
         const totalPnl = computed(() => snapshot.value.leg1.net_pnl + snapshot.value.leg2.net_pnl);
+
+        // 告警列表（时间倒序）
+        const alerts = computed(() => {
+            const arr = snapshot.value.alerts || [];
+            return [...arr].sort((a, b) => b.timestamp - a.timestamp);
+        });
+
+        const fmtAlertTime = (ts) => {
+            if (!ts) return '';
+            return new Date(ts).toLocaleTimeString();
+        };
 
         const fmtPnl = (v) => { if (!v && v !== 0) return '0.00'; return (v >= 0 ? '+' : '') + v.toFixed(2); };
         const fmtPx = (v) => v ? v.toFixed(2) : '0.00';
@@ -450,8 +494,8 @@ createApp({
         onUnmounted(disconnectWs);
 
         return {
-            host, port, connected, processing, lastRefresh, toasts, snapshot, totalPnl,
-            fmtPnl, fmtPx, fmtNum, orderBadge, isCompleted, showToast, toggleWs, sendCmd, confirmCmd
+            host, port, connected, processing, lastRefresh, toasts, snapshot, totalPnl, alerts,
+            fmtPnl, fmtPx, fmtNum, fmtAlertTime, orderBadge, isCompleted, showToast, toggleWs, sendCmd, confirmCmd
         };
     }
 }).mount('#app');

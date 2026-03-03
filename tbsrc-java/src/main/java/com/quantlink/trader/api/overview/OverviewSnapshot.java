@@ -1,6 +1,7 @@
 package com.quantlink.trader.api.overview;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.quantlink.trader.api.AlertEvent;
 import com.quantlink.trader.api.DashboardSnapshot;
 
 import java.time.Instant;
@@ -20,6 +21,7 @@ public class OverviewSnapshot {
     @JsonProperty("fills")      public List<FillRow> fills = new ArrayList<>();
     @JsonProperty("spread_trades") public List<SpreadTradeRow> spreadTrades = new ArrayList<>();
     @JsonProperty("accounts")   public List<AccountRow> accounts = new ArrayList<>();
+    @JsonProperty("alerts")     public List<AlertRow> alerts = new ArrayList<>();
 
     /** ② 策略列表表格 — 每行一个策略实例 */
     public static class StrategyRow {
@@ -95,6 +97,16 @@ public class OverviewSnapshot {
         @JsonProperty("commission")      public double commission;           // 手续费
     }
 
+    /** ⑧ Alert Row — 聚合告警事件 */
+    public static class AlertRow {
+        @JsonProperty("timestamp")    public long timestamp;
+        @JsonProperty("level")        public String level = "";      // WARNING / CRITICAL
+        @JsonProperty("type")         public String type = "";       // UPNL_LOSS, MAX_LOSS, etc.
+        @JsonProperty("message")      public String message = "";
+        @JsonProperty("symbol")       public String symbol = "";
+        @JsonProperty("strategy_id")  public int strategyId;
+    }
+
     // =======================================================================
     //  聚合逻辑
     // =======================================================================
@@ -166,6 +178,13 @@ public class OverviewSnapshot {
                 row.information = String.format("spread=%.2f dev=%.2f",
                         snap.spread.current, snap.spread.deviation);
 
+                // 告警摘要: 取最新一条告警的类型 + 时间
+                if (snap.alerts != null && !snap.alerts.isEmpty()) {
+                    AlertEvent latest = snap.alerts.get(snap.alerts.size() - 1);
+                    long secAgo = (System.currentTimeMillis() - latest.timestamp) / 1000;
+                    row.alert = latest.type + " (" + secAgo + "s ago)";
+                }
+
                 // ⑤ 聚合挂单
                 aggregateOrders(overview.orders, snap.leg1, snap.modelFile, row.pro, port);
                 aggregateOrders(overview.orders, snap.leg2, snap.modelFile, row.pro, port);
@@ -180,10 +199,27 @@ public class OverviewSnapshot {
 
                 // ④ 聚合价差成交 (配对 Leg1 + Leg2 的已成交订单)
                 aggregateSpreadTrades(overview.spreadTrades, snap, row.pro);
+
+                // ⑧ 聚合告警事件
+                if (snap.alerts != null) {
+                    for (AlertEvent ae : snap.alerts) {
+                        AlertRow ar = new AlertRow();
+                        ar.timestamp = ae.timestamp;
+                        ar.level = ae.level;
+                        ar.type = ae.type;
+                        ar.message = ae.message;
+                        ar.symbol = ae.symbol;
+                        ar.strategyId = ae.strategyId;
+                        overview.alerts.add(ar);
+                    }
+                }
             }
 
             overview.strategies.add(row);
         }
+
+        // 告警按时间倒序排列
+        overview.alerts.sort((a, b) -> Long.compare(b.timestamp, a.timestamp));
 
         return overview;
     }
