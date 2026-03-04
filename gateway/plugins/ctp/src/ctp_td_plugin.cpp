@@ -900,6 +900,15 @@ void CTPTDPlugin::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField* pInv
     if (pInvestorPosition) {
         PositionInfo pos_info;
         ConvertPosition(pInvestorPosition, pos_info);
+        std::cout << "[CTPTDPlugin] RawPos: " << pInvestorPosition->InstrumentID
+                  << " Dir=" << (pInvestorPosition->PosiDirection == THOST_FTDC_PD_Long ? "Long" : "Short")
+                  << " Position=" << pInvestorPosition->Position
+                  << " TodayPosition=" << pInvestorPosition->TodayPosition
+                  << " YdPosition=" << pInvestorPosition->YdPosition
+                  << " → vol=" << pos_info.volume
+                  << " today=" << pos_info.today_volume
+                  << " yd=" << pos_info.yesterday_volume
+                  << std::endl;
         m_cached_positions.push_back(pos_info);
     }
 
@@ -1181,9 +1190,13 @@ void CTPTDPlugin::ConvertPosition(CThostFtdcInvestorPositionField* ctp_pos, Posi
         OrderDirection::BUY : OrderDirection::SELL;
 
     // 持仓数量
+    // 注意：CTP 的 YdPosition 是"昨日结算时持仓量"（固定不变），不是当前剩余昨仓。
+    // SHFE 对同一合约同方向返回今仓/昨仓两条记录，昨仓记录的 Position 才是实际剩余昨仓。
+    // 正确的昨仓 = Position - TodayPosition（对今仓和昨仓记录均适用）。
     pos_info.volume = ctp_pos->Position;
     pos_info.today_volume = ctp_pos->TodayPosition;
-    pos_info.yesterday_volume = ctp_pos->YdPosition;
+    int yd = ctp_pos->Position - ctp_pos->TodayPosition;
+    pos_info.yesterday_volume = (yd > 0) ? yd : 0;
 
     // 持仓均价
     // 注意：优先使用 OpenCost（开仓成本），回退到 PositionCost（持仓成本）

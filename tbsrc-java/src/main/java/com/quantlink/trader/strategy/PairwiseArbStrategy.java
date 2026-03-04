@@ -628,10 +628,12 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
 
         // C++: 计算当前价差
         // C++: if (firstBid <= 0 || firstAsk <= 0 || secondBid <= 0 && secondAsk <= 0)
-        // 注意: C++/Java 中 && 优先级高于 ||，所以 second leg 需要 bid AND ask 都 <= 0 才跳过。
-        // 这是 C++ 原代码行为，保持一致。Ref: PairwiseArbStrategy.cpp:496
+        // [C++差异] C++ 原代码中 && 优先级高于 ||，second leg 仅在 bid AND ask 同时 <= 0 时才跳过。
+        // 当 secondBid=0 但 secondAsk>0 时，midPx=(0+askPx)/2 导致 spread 偏差达万级，
+        // 引发 AVG_SPREAD_AWAY 误触发和 EWA 均值污染（实盘 20260303/04 多次复现）。
+        // 改进：任一腿的 bid 或 ask <= 0 时都跳过 spread 计算。Ref: PairwiseArbStrategy.cpp:496
         if (firstStrat.instru.bidPx[0] <= 0 || firstStrat.instru.askPx[0] <= 0
-                || secondStrat.instru.bidPx[0] <= 0 && secondStrat.instru.askPx[0] <= 0) {
+                || secondStrat.instru.bidPx[0] <= 0 || secondStrat.instru.askPx[0] <= 0) {
             // currSpreadRatio 不变
         } else {
             currSpreadRatio = ((firstStrat.instru.bidPx[0] + firstStrat.instru.askPx[0]) / 2)
