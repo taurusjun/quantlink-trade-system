@@ -400,7 +400,7 @@ public class Connector {
     public void startAsync() {
         running = true;
 
-        pollMDThread = new Thread(this::handleLiveMdUpdates, "connector-md-poll");
+        pollMDThread = new Thread(this::pollMdQueue, "connector-md-poll");
         pollMDThread.setDaemon(true);
         pollMDThread.start();
 
@@ -439,54 +439,67 @@ public class Connector {
     // =======================================================================
 
     /**
-     * 行情轮询循环 + symbol 过滤 + symbolID 重写。
+     * 行情轮询循环。
      * <p>
-     * 迁移自: hftbase/Connector/src/connector.cpp:HandleLiveMdUpdates() + HandleUpdates()
-     * C++ HandleLiveMdUpdates: 无限循环从 mdQueue 出队 MarketUpdateNew，调用 HandleUpdates(update)
-     * Ref: hftbase/Connector/include/connector.h:116
-     * <p>
-     * C++ HandleUpdates (connector.cpp:749-782):
-     * <pre>
-     *   if ((update->m_endPkt == 1) || m_interestedsymbols_for_md.size() == 0) {
-     *       m_mdcb(update);
-     *   } else {
-     *       auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
-     *       if (iter != NULL) {
-     *           update->m_symbolID = iter->val;
-     *           m_mdcb(update);
-     *       }
-     *   }
-     * </pre>
+     * [C++差异] C++ 中无此方法名。C++ 通过 connectWithParam 将 HandleUpdates 注册为
+     * ShmMgr 的回调，由 ShmMgr 内部线程驱动出队。
+     * Java 没有 ShmMgr，需要显式轮询线程，本方法仅负责出队 + 调用 handleUpdates()。
+     * Ref: hftbase/Connector/src/connector.cpp:113 — connectWithParam(..., HandleUpdates, ...)
      */
-    private void handleLiveMdUpdates() {
+    private void pollMdQueue() {
         // C++: MarketUpdateNew update; (栈上分配)
         // Java: 使用全局 Arena 分配（避免 GC 开销）
         MemorySegment buf = Arena.global().allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
         while (running) {
             if (mdQueue.dequeue(buf)) {
-                // C++: HandleUpdates(update)  — connector.cpp:749-782
-                // 当 interestedSymbolsForMd 为空时，所有行情直接透传（兼容无过滤场景）
-                if (interestedSymbolsForMd.isEmpty()) {
-                    // C++: if (m_interestedsymbols_for_md.size() == 0) m_mdcb(update);
-                    mdCallback.onMarketData(buf);
-                } else {
-                    // C++: auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
-                    String symbol = Instrument.readSymbol(buf);
-                    Short localID = interestedSymbolsForMd.get(symbol);
-                    if (localID != null) {
-                        // C++: update->m_symbolID = iter->val;
-                        // Ref: connector.cpp:773
-                        Types.MDH_SYMBOL_ID_VH.set(buf, 0L, localID.shortValue());
-                        // C++: m_mdcb(update);
-                        mdCallback.onMarketData(buf);
-                    }
-                    // else: 未注册合约，静默丢弃 (与 C++ HandleUpdates 一致)
-                }
+                handleUpdates(buf);
             } else {
                 // C++: 忙等待（无显式 yield/sleep）
                 Thread.onSpinWait();
             }
         }
+    }
+
+    /**
+     * symbol 过滤 + symbolID 重写 + 行情分发。
+     * <p>
+     * 迁移自: hftbase/Connector/src/connector.cpp:749-782 — Connector::HandleUpdates()
+     * C++:
+     * <pre>
+     *   void Connector::HandleUpdates(MarketUpdateNew *update) {
+     *       if ((update->m_endPkt == 1) || m_interestedsymbols_for_md.size() == 0) {
+     *           m_mdcb(update);
+     *       } else {
+     *           auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
+     *           if (iter != NULL) {
+     *               update->m_symbolID = iter->val;
+     *               m_mdcb(update);
+     *           }
+     *       }
+     *   }
+     * </pre>
+     *
+     * @param update MarketUpdateNew MemorySegment
+     */
+    private void handleUpdates(MemorySegment update) {
+        // C++: if ((update->m_endPkt == 1) || m_interestedsymbols_for_md.size() == 0)
+        //          m_mdcb(update);
+        if (interestedSymbolsForMd.isEmpty()) {
+            mdCallback.onMarketData(update);
+            return;
+        }
+
+        // C++: auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
+        String symbol = Instrument.readSymbol(update);
+        Short localID = interestedSymbolsForMd.get(symbol);
+        if (localID != null) {
+            // C++: update->m_symbolID = iter->val;
+            // Ref: connector.cpp:777
+            Types.MDH_SYMBOL_ID_VH.set(update, 0L, localID.shortValue());
+            // C++: m_mdcb(update);
+            mdCallback.onMarketData(update);
+        }
+        // else: 未注册合约，静默丢弃 (与 C++ 一致)
     }
 
     /**
