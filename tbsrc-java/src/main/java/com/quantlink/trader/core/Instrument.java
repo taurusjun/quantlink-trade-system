@@ -108,6 +108,16 @@ public class Instrument {
     public String securityGroup = "";    // C++: m_securitygroup[100] — CME 安全组
     public int productType;              // C++: m_product (ProductType enum) — 0=Future, 1=Option 等
 
+    // ---- Tick 类型枚举 ----
+    // 迁移自: tbsrc/common/include/Tick.h — enum ticktype_t
+    // C++: BIDQUOTE, ASKQUOTE, BIDTRADE, ASKTRADE, TRADEINFO, INVALID
+    public enum TickType {
+        BIDQUOTE, ASKQUOTE, BIDTRADE, ASKTRADE, TRADEINFO, INVALID
+    }
+
+    // 迁移自: Tick.h:36 — ticktype_t tickType
+    public TickType tickType = TickType.INVALID;
+
     // ---- 行情状态标志 ----
     // 迁移自: Instrument.h — m_crossUpdate, m_firstTrade, m_ignoreImpliedTrades, m_bUseTradeInfo
     public boolean crossUpdate;           // C++: m_crossUpdate — 是否为 cross book 更新
@@ -193,13 +203,34 @@ public class Instrument {
         // C++: m_validAsks = update->m_validAsks
         validAsks = vAsks;
 
-        // C++: lastTradePx = update->m_newPrice; lastTradeqty = update->m_newQuant;
+        // C++: if (update->m_updateType == MDUPDTYPE_TRADE || MDUPDTYPE_TRADE_IMPLIED
+        //          || (MDUPDTYPE_TRADE_INFO && m_bUseTradeInfo)) {
+        //          lastTradePx = update->m_newPrice; lastTradeqty = update->m_newQuant;
+        //      }
         // Ref: Instrument.cpp:2199-2202
-        // [C++差异] C++ 仅在 TRADE/TRADE_IMPLIED/TRADE_INFO 类型时更新 lastTradePx/lastTradeqty,
-        // Java 的 md_shm_feeder 使用 MDUPDTYPE_ORDER_ENTRY，lastTradedPrice 由 feeder 填充
-        lastTradePx = (double) Types.MDD_LAST_TRADED_PRICE_VH.get(mdUpdate, mdDataBase);
-        // C++: lastTradeqty = update->m_newQuant
-        lastTradeQty = (int) Types.MDD_NEW_QUANT_VH.get(mdUpdate, mdDataBase);
+        byte updateType = (byte) Types.MDD_UPDATE_TYPE_VH.get(mdUpdate, mdDataBase);
+        if (updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE
+                || updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE_IMPLIED
+                || (updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE_INFO && bUseTradeInfo)) {
+            lastTradePx = (double) Types.MDD_LAST_TRADED_PRICE_VH.get(mdUpdate, mdDataBase);
+            // C++: lastTradeqty = update->m_newQuant
+            lastTradeQty = (int) Types.MDD_NEW_QUANT_VH.get(mdUpdate, mdDataBase);
+        }
+
+        // 设置 tickType — 对齐 C++ Tick::FillTick() 中的 tickType 判断
+        // Ref: tbsrc/common/include/Tick.h — enum ticktype_t
+        if (updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE
+                || updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE_IMPLIED) {
+            // C++: BIDTRADE/ASKTRADE — 根据 side 判断
+            tickType = TickType.BIDTRADE; // 默认 BIDTRADE；精确 side 信息需从 SHM side 字段读取
+        } else if (updateType == com.quantlink.trader.shm.Constants.MDUPDTYPE_TRADE_INFO) {
+            tickType = TickType.TRADEINFO;
+        } else if (bidQty[0] == 0 || askQty[0] == 0) {
+            tickType = TickType.INVALID;
+        } else {
+            // ORDER_ENTRY/ADD/MODIFY/DELETE 等 — 报价类型
+            tickType = TickType.BIDQUOTE; // 默认 BIDQUOTE；精确区分需 side 字段
+        }
 
         // C++: CalculatePrices()  (Instrument.cpp:2232)
         calculatePrices();

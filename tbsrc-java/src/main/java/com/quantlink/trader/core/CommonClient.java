@@ -679,6 +679,27 @@ public class CommonClient {
         }
     }
 
+    /**
+     * 请求队列回调 — 将发出的订单通知给 CommonBook 进行 self-book 过滤。
+     * 迁移自: CommonClient.cpp:256-274 — SendInfraReqUpdate(RequestMsg*)
+     *
+     * C++: void SendInfraReqUpdate(RequestMsg *request) {
+     *          if (m_configParams->m_bCommonBook && m_dateConfig->m_simActive) {
+     *              if (request->Quantity < 0) { request->Quantity *= -1; request->OrderID += 1000000; }
+     *              auto iter = m_configParams->m_instruCBMap.find(request->Contract_Description.Symbol);
+     *              if (iter != end) iter->second->RequestCallBack(request);
+     *          }
+     *      }
+     *
+     * [C++差异] 此方法仅在 m_bCommonBook=true 时执行实际逻辑。
+     * CommonBook 已明确排除在中国期货场景之外 (CommonClient.java:282)，
+     * 因此当前为空壳实现。后续如迁移 CommonBook 功能，需补齐内部逻辑。
+     */
+    public void sendInfraReqUpdate(MemorySegment request) {
+        // C++: if (m_configParams->m_bCommonBook && m_dateConfig->m_simActive) { ... }
+        // 中国期货场景 bCommonBook=false，不执行
+    }
+
     // =======================================================================
     //  发单接口
     // =======================================================================

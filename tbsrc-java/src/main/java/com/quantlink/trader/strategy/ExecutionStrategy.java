@@ -272,6 +272,11 @@ public abstract class ExecutionStrategy {
     // 迁移自: ExecutionStrategy.h:98
     public boolean sendMail = false;     // C++: bool m_sendMail (初始化为 false)
 
+    // ---- 撤单数量追踪 ----
+    // 迁移自: ExecutionStrategy.h:64 — m_checkCancelQuantity
+    // C++: 在 FORTS/KRX/SFE/SGX 交易所，撤单确认包含数量信息
+    public boolean checkCancelQuantity = false;  // C++: m_checkCancelQuantity
+
     /**
      * 构造函数。
      * 迁移自: ExecutionStrategy::ExecutionStrategy(CommonClient*, SimConfig*)
@@ -304,7 +309,26 @@ public abstract class ExecutionStrategy {
         // Ref: ExecutionStrategy.cpp:43-46
         initEndTimeEpochs(simConfig.startTime, simConfig.endTime);
 
+        // C++: SetCheckCancelQuantity();  (ExecutionStrategy.cpp:80)
+        setCheckCancelQuantity();
+
         reset();
+    }
+
+    /**
+     * 设置撤单数量检查标志。
+     * 迁移自: ExecutionStrategy.cpp:266-274 — SetCheckCancelQuantity()
+     *
+     * C++: if (!strcmp(m_instru->m_exchange, "FORTS") || !strcmp(..., "KRX")
+     *          || !strcmp(..., "SFE") || !strcmp(..., "SGX"))
+     *          m_checkCancelQuantity = true;
+     *      else m_checkCancelQuantity = false;
+     */
+    private void setCheckCancelQuantity() {
+        String exch = instru != null ? instru.exchange : "";
+        // C++: FORTS/KRX/SFE/SGX 交易所的撤单确认包含数量信息
+        checkCancelQuantity = "FORTS".equals(exch) || "KRX".equals(exch)
+                || "SFE".equals(exch) || "SGX".equals(exch);
     }
 
     /**
@@ -573,6 +597,80 @@ public abstract class ExecutionStrategy {
      * 迁移自: ExecutionStrategy::SendOrder() = 0 (pure virtual)
      */
     public abstract void sendOrder();
+
+    // =======================================================================
+    //  TBRequest + FillMsg — ExtraStrategy 用消息构建
+    // =======================================================================
+
+    /**
+     * 订单请求上下文 — 供 ExtraStrategy 多合约发单使用。
+     * 迁移自: ExecutionStrategy.h:357-396 — TBRequest 内部结构
+     *
+     * C++: struct TBRequest 包含 FillMsg() 方法，将下单参数和当前行情快照打包。
+     */
+    public static class TBRequest {
+        public int orderID;
+        public double price;
+        public int qty;
+        public int netpos;
+        public int level;
+        public CommonClient.OrderHitType ordHitType;
+        public ExecutionStrategy execStrategy;
+        public long timestamp;
+        public byte side;
+        public double bidPx, askPx, bidQty, askQty;
+        public double targetBidPNL, targetAskPNL;
+        public double targetPrice, currPrice;
+    }
+
+    // 迁移自: ExecutionStrategy.h:248 — TBRequest *m_tbRequest
+    public TBRequest tbRequest;
+
+    /**
+     * 填充 TBRequest 订单上下文。
+     * 迁移自: ExecutionStrategy.h:357-377 — TBRequest::FillMsg()
+     *
+     * C++: void FillMsg(uint32_t OrderID, TransactionType s, double price, int32_t qty,
+     *                   OrderHitType ordHitType, ExecutionStrategy *eStrategy, uint64_t ts, RequestMsg *req) {
+     *          m_OrderID = OrderID; m_price = price; m_qty = qty;
+     *          m_ordHitType = ordHitType; execStrategy = eStrategy; timestamp = ts; side = s;
+     *          m_level = execStrategy->m_level;
+     *          m_bidPx = eStrategy->m_instru->bidPx[m_level]; ...
+     *      }
+     *
+     * @param orderID  订单 ID
+     * @param side     买卖方向 ('B'=BUY, 'S'=SELL)
+     * @param price    价格
+     * @param qty      数量
+     * @param hitType  订单类型
+     * @param strategy 执行策略引用
+     * @param ts       时间戳
+     */
+    public void fillMsg(int orderID, byte side, double price, int qty,
+                        CommonClient.OrderHitType hitType, ExecutionStrategy strategy, long ts) {
+        if (tbRequest == null) tbRequest = new TBRequest();
+        tbRequest.orderID = orderID;
+        tbRequest.side = side;
+        tbRequest.price = price;
+        tbRequest.qty = qty;
+        tbRequest.ordHitType = hitType;
+        tbRequest.execStrategy = strategy;
+        tbRequest.timestamp = ts;
+        tbRequest.level = strategy.level;
+        // C++: m_bidPx = eStrategy->m_instru->bidPx[m_level]
+        tbRequest.bidPx = strategy.instru.bidPx[strategy.level];
+        tbRequest.askPx = strategy.instru.askPx[strategy.level];
+        tbRequest.bidQty = strategy.instru.bidQty[strategy.level];
+        tbRequest.askQty = strategy.instru.askQty[strategy.level];
+        // C++: m_targetBidPNL = execStrategy->m_targetBidPNL[execStrategy->m_level] / 100
+        tbRequest.targetBidPNL = (strategy.targetBidPNL != null && strategy.level < strategy.targetBidPNL.length)
+                ? strategy.targetBidPNL[strategy.level] / 100.0 : 0;
+        tbRequest.targetAskPNL = (strategy.targetAskPNL != null && strategy.level < strategy.targetAskPNL.length)
+                ? strategy.targetAskPNL[strategy.level] / 100.0 : 0;
+        tbRequest.targetPrice = strategy.targetPrice;
+        tbRequest.currPrice = strategy.currPrice;
+        tbRequest.netpos = strategy.netpos;
+    }
 
     // =======================================================================
     //  SetTargetValue — 主入口

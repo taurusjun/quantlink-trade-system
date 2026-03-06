@@ -78,6 +78,12 @@ public class SimConfig {
     public long startTimeEpoch = 0;
     public long endTimeEpoch = Long.MAX_VALUE;
 
+    // 迁移自: TradeBotUtils.h:559 — char m_currDate[9]
+    // C++: Live 模式下在进程启动时设置为当天日期 (YYYYMMDD)，此后不变。
+    // 用于日志格式化和文件操作（夜盘跨日后 LocalDate.now() 会变，但 currDate 不变）。
+    // Ref: TradeBotUtils.cpp:2534 — strcpy(dateConfig.m_currDate, buf)
+    public String currDate = "";
+
     /**
      * 更新交易时段状态。
      * 迁移自: DateConfig::UpdateActive(uint64_t exchTS)
@@ -153,13 +159,19 @@ public class SimConfig {
      * 夜盘跨日场景 (startTime > endTime): endTimeEpoch 使用下一日基准。
      */
     public void initDateConfigEpoch() {
+        // C++: strcpy(dateConfig.m_currDate, buf)  — 进程启动时的日期，后续不变
+        // Ref: TradeBotUtils.cpp:2534
+        if (currDate.isEmpty()) {
+            currDate = LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+        }
+
         if (startTime == null || startTime.isEmpty()
                 || endTime == null || endTime.isEmpty()) {
             // 未配置 — 使用默认值 (0 ~ Long.MAX_VALUE)，simActive 始终为 true
             startTimeEpoch = 0;
             endTimeEpoch = Long.MAX_VALUE;
             simActive = true;
-            log.info("[DateConfig] 交易时间未配置，simActive 默认为 true");
+            log.info("[DateConfig] 交易时间未配置，simActive 默认为 true (currDate=" + currDate + ")");
             return;
         }
         try {

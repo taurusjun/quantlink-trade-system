@@ -700,9 +700,20 @@ public class Connector {
      * @return clientId * ORDERID_RANGE + seq
      */
     private int getUniqueOrderNumber(int exchCode) {
-        // C++: return m_clientId[exchCode] * ORDERID_RANGE + (m_OrderCount++);
-        // Ref: hftbase/Connector/include/connector.h:366
+        // C++: if (m_OrderCount < ORDERID_RANGE)
+        //          return m_clientId[exchCode] * ORDERID_RANGE + (m_OrderCount++);
+        //      else
+        //          return GetOrderNumberWithNewClientId(exchCode);
+        // Ref: hftbase/Connector/include/connector.h:360-371
+        int seq = orderCount.getAndIncrement();
+        if (seq >= Constants.ORDERID_RANGE) {
+            // C++: GetOrderNumberWithNewClientId(exchCode) — 请求新 clientId
+            // [C++差异] Java 不支持动态申请新 clientId，记录 SEVERE 告警
+            log.severe("[OrderID 溢出] orderCount=" + seq + " 已达 ORDERID_RANGE="
+                    + Constants.ORDERID_RANGE + "，后续订单 ID 可能冲突！exchCode=" + exchCode);
+            return -1;
+        }
         int cid = clientIdMap.getOrDefault(exchCode, defaultClientId);
-        return cid * Constants.ORDERID_RANGE + orderCount.getAndIncrement();
+        return cid * Constants.ORDERID_RANGE + seq;
     }
 }
