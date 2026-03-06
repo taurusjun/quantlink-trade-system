@@ -240,6 +240,9 @@ public class TraderMain {
         simConfig1.strategyID = strategyID;
         simConfig1.startTime = controlCfg.startTime != null ? controlCfg.startTime : "";
         simConfig1.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
+        // C++: LoadDateConfigEpoch(simConfig, argMap)
+        // Ref: TradeBotUtils.cpp:2568-2588
+        simConfig1.initDateConfigEpoch();
 
         List<SimConfig> simList1 = new ArrayList<>();
         simList1.add(simConfig1);
@@ -252,6 +255,9 @@ public class TraderMain {
         simConfig2.strategyID = strategyID;
         simConfig2.startTime = controlCfg.startTime != null ? controlCfg.startTime : "";
         simConfig2.endTime = controlCfg.endTime != null ? controlCfg.endTime : "";
+        // C++: LoadDateConfigEpoch(simConfig, argMap)
+        // Ref: TradeBotUtils.cpp:2568-2588
+        simConfig2.initDateConfigEpoch();
 
         List<SimConfig> simList2 = new ArrayList<>();
         simList2.add(simConfig2);

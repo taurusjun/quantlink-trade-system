@@ -159,14 +159,105 @@ public class CommonClient {
      * Ref: CommonClient.cpp:321-376
      *
      * 流程:
-     * 1. 调用 SendINDUpdate 进行 symbolID 路由
+     * 1. endPkt==1 处理: 若 bUseEndPkt 且有待处理更新，触发 INDCallBack 并返回
+     * 2. 定期检查行情时效性 (CheckLastUpdate)
+     * 3. 调用 SendINDUpdate 进行 symbolID 路由
      *
      * @param mdUpdate MarketUpdateNew MemorySegment
      */
     public void sendInfraMDUpdate(MemorySegment mdUpdate) {
+        long mdDataBase = Types.MU_DATA_OFFSET;
+
+        // ---- endPkt==1 处理 ----
+        // C++: if (update->m_endPkt == 1) {
+        //          if (m_bMDUpdate == true) {
+        //              m_bMDUpdate = false;
+        //              if (ConfigParams::GetInstance()->m_bUseEndPkt && client->m_dateConfig->m_simActive == true) {
+        //                  m_INDCallBack(&ConfigParams::GetInstance()->m_simConfig->m_indicatorList);
+        //              }
+        //          }
+        //          return;
+        //      }
+        // Ref: CommonClient.cpp:342-357
+        byte endPkt = (byte) Types.MDD_END_PKT_VH.get(mdUpdate, mdDataBase);
+        if (endPkt == 1) {
+            if (bMDUpdate) {
+                bMDUpdate = false;
+                if (configParams.useEndPkt && configParams.simConfig != null) {
+                    if (indCallback != null) {
+                        indCallback.accept(configParams.simConfig);
+                    }
+                }
+            }
+            return;
+        }
+
+        // ---- 行情时效性检查 ----
+        // C++: if (update->m_timestamp - m_lastUpdate > ConfigParams::GetInstance()->m_updateInterval
+        //          && m_Mode == ModeType_Live) {
+        //          m_lastUpdate = update->m_timestamp;
+        //          CheckLastUpdate();
+        //      }
+        // Ref: CommonClient.cpp:359-363
+        long mdTimestamp = (long) Types.MDH_TIMESTAMP_VH.get(mdUpdate, 0L);
+        if (mdTimestamp - lastUpdate > configParams.updateInterval
+                && configParams.modeType == 2) { // ModeType_Live = 2
+            lastUpdate = mdTimestamp;
+            checkLastUpdate();
+        }
+
         // C++: SendINDUpdate(update)
         // Ref: CommonClient.cpp:365
         sendINDUpdate(mdUpdate);
+    }
+
+    /**
+     * 检查行情是否过期（stale market data 检测）。
+     * 迁移自: CommonClient::CheckLastUpdate()
+     * Ref: CommonClient.cpp:378-399
+     *
+     * C++ 逻辑:
+     * 对所有 simConfig 的所有 instrument，检查 lastLocalTime 是否超过 updateInterval。
+     * 如果在交易时段内某合约行情超时，触发策略紧急退出 (onExit+onCancel+onFlat)。
+     *
+     * [C++差异] C++ 调用 system("mailx ...") 发送邮件告警。
+     * Java 使用日志 SEVERE 告警替代。
+     */
+    private void checkLastUpdate() {
+        // C++: for (int i = 0; i < ConfigParams::GetInstance()->m_strategyCount; i++)
+        // Ref: CommonClient.cpp:380
+        if (simConfigs == null) return;
+        for (SimConfig simCfg : simConfigs) {
+            // C++: for (InstruMapIter iter = m_simConfig[i].m_instruMap.begin(); ...)
+            // Ref: CommonClient.cpp:382
+            for (Instrument instru : simCfg.instruMap.values()) {
+                // C++: if (((int64_t)(m_lastUpdate - iter->second->m_instrument->lastLocalTime) > m_updateInterval)
+                //          && (iter->second->m_instrument->lastLocalTime > 0)
+                //          && (Watch::GetUniqueInstance()->GetCurrentTime() < m_simConfig[i].m_dateConfig.m_endTimeEpoch))
+                // Ref: CommonClient.cpp:384
+                long timeSinceUpdate = lastUpdate - instru.lastLocalTime;
+                if (timeSinceUpdate > configParams.updateInterval
+                        && instru.lastLocalTime > 0
+                        && (simCfg.executionStrategy != null)) {
+                    // C++: system(cmd)  — 发送邮件告警
+                    // [C++差异] Java 使用 SEVERE 日志替代 mailx 邮件
+                    log.severe("ALERT! Strategy exited!!! , Reason: MARKET DATA is not valid!! Symbol: "
+                            + instru.origBaseName
+                            + " Last Update:" + instru.lastLocalTime
+                            + " Current Update:" + lastUpdate);
+
+                    // C++: m_simConfig[i].m_execStrategy->m_onExit = true;
+                    //      m_simConfig[i].m_execStrategy->m_onCancel = true;
+                    //      m_simConfig[i].m_execStrategy->m_onFlat = true;
+                    // Ref: CommonClient.cpp:392-394
+                    if (simCfg.executionStrategy instanceof com.quantlink.trader.strategy.ExecutionStrategy es) {
+                        es.onExit = true;
+                        es.onCancel = true;
+                        es.onFlat = true;
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -224,6 +315,15 @@ public class CommonClient {
             } else {
                 Watch.getInstance().updateTime(mdExchTS * 1_000_000, symbol);
             }
+
+            // ---- 全局 DateConfig UpdateActive ----
+            // C++: m_dateConfig->UpdateActive(Watch::GetUniqueInstance()->GetCurrentTime())
+            // Ref: CommonClient.cpp:416
+            // [C++差异] C++ 有独立的全局 m_dateConfig (CommonClient.h:125)。
+            // Java 中全局 dateConfig 对应 simConfigs[0] (若存在)。
+            if (simConfigs != null && simConfigs.length > 0) {
+                simConfigs[0].updateActive(Watch.getInstance().getCurrentTime());
+            }
         }
 
         // 读取 MDDataPart 关键字段
@@ -260,6 +360,12 @@ public class CommonClient {
             // C++: m_configParams->m_simConfig = (*listIter)
             // Ref: CommonClient.cpp:434
             configParams.simConfig = simCfg;
+
+            // C++: m_configParams->m_simConfig->m_dateConfig.UpdateActive(Watch::GetUniqueInstance()->GetCurrentTime())
+            // Ref: CommonClient.cpp:435
+            if (Watch.getInstance() != null) {
+                simCfg.updateActive(Watch.getInstance().getCurrentTime());
+            }
 
             // C++: InstruMapIter iter = m_configParams->m_simConfig->m_instruList[update->m_symbolID]
             // Ref: CommonClient.cpp:437
@@ -411,10 +517,14 @@ public class CommonClient {
                 // C++: if (instru->lastTick.tickLevel > instru->m_level)
                 //          significantUpdate = false;
                 // Ref: CommonClient.cpp:548-552
-                // [C++差异] Tick.tickType 未迁移。使用 bid/ask 有效性代替 INVALID 检查:
-                //           如果 bid[0]=0 && ask[0]=0，视为 INVALID tick。
+                // C++ Tick::FillTick (Tick.cpp:121-122) INVALID 判定:
+                //   if (validBids == 0 || validAsks == 0 || askQty[0] == 0 || bidQty[0] == 0)
+                //       tickType = INVALID;
+                // [C++差异] Tick 对象未迁移。使用 FillOrderBook 后的 bid/ask 数据代替:
+                //           bidQty[0]==0 或 askQty[0]==0 视为 INVALID tick，
+                //           与 C++ Tick::FillTick 的 INVALID 判定对齐。
                 //           tickLevel 用 MDDataPart.updateLevel 字段。
-                if (instru.bidPx[0] == 0 && instru.askPx[0] == 0) {
+                if (instru.bidQty[0] == 0 || instru.askQty[0] == 0) {
                     return; // C++: tickType == INVALID
                 }
                 if (configParams.optionStrategy > 0 && updateLevel > 1) {
