@@ -263,7 +263,14 @@ public abstract class ExecutionStrategy {
     public double[] targetAskPNL;
 
     // ---- 产品标识 ----
-    public String product = "";
+    // 迁移自: ExecutionStrategy.h:265-266, 306
+    public String product = "";          // C++: char m_product[32]
+    public String account = "";          // C++: char m_account[11]
+    public String instruType = "";       // C++: char m_instruType[10]
+
+    // ---- 控制标志 ----
+    // 迁移自: ExecutionStrategy.h:98
+    public boolean sendMail = false;     // C++: bool m_sendMail (初始化为 false)
 
     /**
      * 构造函数。
@@ -1338,9 +1345,16 @@ public abstract class ExecutionStrategy {
 
         this.level = orderLevel;
 
-        // C++: uint32_t orderID = m_client->SendNewOrder(...)
+        // C++: uint32_t orderID = m_client->SendNewOrder(0, m_instru->m_symbol,
+        //      GetOptionType(m_instru->m_callPutFlag), m_account, side, price, qty,
+        //      m_instru->m_expiryDate, m_instru->m_strike, m_instruType, m_instru->m_token, ordtype, this)
+        // Ref: ExecutionStrategy.cpp:1551
+        CommonClient.OrderHitType hitType = (ordtype == OrderStats.HitType.CROSS)
+                ? CommonClient.OrderHitType.CROSS : CommonClient.OrderHitType.STANDARD;
         int orderID = client.sendNewOrder(strategyID, instru.symbol, side, price, qty,
-                Constants.POS_OPEN, this);
+                Constants.POS_OPEN, this,
+                instru.token, instru.expiryDate, (int) instru.strike,
+                account, instruType, product, hitType);
 
         // C++: OrderStats *ordStats = new OrderStats()
         OrderStats ordStats = new OrderStats();

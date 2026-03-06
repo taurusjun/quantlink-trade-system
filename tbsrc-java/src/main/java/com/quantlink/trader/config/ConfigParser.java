@@ -21,14 +21,19 @@ public class ConfigParser {
     private static final Logger logger = Logger.getLogger(ConfigParser.class.getName());
 
     /**
-     * baseName → symbol 转换。
-     * C++: ag_F_3_SFE → ag2603 (product + yearPrefix + month)
+     * baseName → symbol 转换（含跨年推断）。
+     * 迁移自: tbsrc/common/Instrument.cpp:FillChinaFields2() (L601-631)
+     *
+     * C++: int month = ((expiryDate / 100) % 100);   // 当前月份
+     *      int year = (expiryDate / 10000) % 100;     // 当前年份
+     *      if (m_month < month) { year = nextYear; }  // 合约月份 < 当前月份 → 下一年
+     *      sprintf(m_instrument, "%s%.2d%.2d", m_symbol, year, m_month);
      *
      * 格式: <product>_F_<month>_<exchange>
      * month: 1-12 → 01-12
      *
      * @param baseName   C++ baseName (e.g. ag_F_3_SFE)
-     * @param yearPrefix 年份后两位 (e.g. "26")
+     * @param yearPrefix 年份后两位 (e.g. "26")，若为空则自动推断
      * @return symbol (e.g. ag2603)
      */
     public static String baseNameToSymbol(String baseName, String yearPrefix) {
@@ -38,11 +43,30 @@ public class ConfigParser {
                 + "': 不是期货格式 (期望 <product>_F_<month>_<exchange>)");
         }
         String product = parts[0].toLowerCase();
-        String month = parts[2];
-        if (month.length() == 1) {
-            month = "0" + month;
+        int contractMonth = Integer.parseInt(parts[2]);
+        String exchange = parts[3];
+
+        // C++: int year = (expiryDate / 10000) % 100
+        int year = Integer.parseInt(yearPrefix);
+        // C++: int month = ((expiryDate / 100) % 100)  — 当前日历月份
+        int currentMonth = java.time.LocalDate.now().getMonthValue();
+
+        // C++: if (m_month < month) { auto next_year = GetNextMonth(m_currDate, 12); year = ... }
+        // 合约月份 < 当前月份 → 合约属于下一年
+        if (contractMonth < currentMonth) {
+            year = (year + 1) % 100;
         }
-        return product + yearPrefix + month;
+
+        // C++: if (!strcmp(m_exchange, "ZCE")) sprintf("%s%.1d%.2d", ...) — 郑商所用1位年份
+        //      else sprintf("%s%.2d%.2d", ...)
+        String month = String.format("%02d", contractMonth);
+        if ("ZCE".equals(exchange) || "CZCE".equals(exchange)) {
+            // C++: sprintf(m_instrument, "%s%.1d%.2d", m_symbol, year % 10, m_month)
+            return product + (year % 10) + month;
+        } else {
+            // C++: sprintf(m_instrument, "%s%.2d%.2d", m_symbol, year, m_month)
+            return product + String.format("%02d", year) + month;
+        }
     }
 
     /**

@@ -153,17 +153,56 @@ public class Instrument {
      */
     public void fillOrderBook(MemorySegment mdUpdate) {
         long mdDataBase = Types.MU_DATA_OFFSET; // 96
-        // C++: instru->FillOrderBook(update) — 遍历 bidUpdates[20] / askUpdates[20]
-        for (long i = 0; i < 20; i++) {
-            bidPx[Math.toIntExact(i)] = (double) Types.MDD_BID_PRICE_VH.get(mdUpdate, mdDataBase, i);
-            bidQty[Math.toIntExact(i)] = (int) Types.MDD_BID_QUANTITY_VH.get(mdUpdate, mdDataBase, i);
-            askPx[Math.toIntExact(i)] = (double) Types.MDD_ASK_PRICE_VH.get(mdUpdate, mdDataBase, i);
-            askQty[Math.toIntExact(i)] = (int) Types.MDD_ASK_QUANTITY_VH.get(mdUpdate, mdDataBase, i);
-        }
 
-        // 读取 LTP
-        // C++: update->m_lastTradedPrice (MDDataPart)
+        // C++: m_updateIndicators = true  (Instrument.cpp:2177)
+        updateIndicators = true;
+
+        // C++: CopyOrderBook(update) — 遍历 bidUpdates[20] / askUpdates[20]
+        // Ref: Instrument.cpp:2032-2091
+        // C++: m_validBids = update->m_validBids
+        int vBids = ((byte) Types.MDD_VALID_BIDS_VH.get(mdUpdate, mdDataBase)) & 0xFF;
+        int vAsks = ((byte) Types.MDD_VALID_ASKS_VH.get(mdUpdate, mdDataBase)) & 0xFF;
+
+        // C++: for (int i = 0; i < update->m_validBids; i++) { bidPx[i]=...; bidQty[i]=...; bidOrderCount[i]=...; }
+        for (int i = 0; i < vBids && i < 20; i++) {
+            bidPx[i] = (double) Types.MDD_BID_PRICE_VH.get(mdUpdate, mdDataBase, (long) i);
+            bidQty[i] = (int) Types.MDD_BID_QUANTITY_VH.get(mdUpdate, mdDataBase, (long) i);
+            bidOrderCount[i] = (int) Types.MDD_BID_ORDER_COUNT_VH.get(mdUpdate, mdDataBase, (long) i);
+        }
+        // C++: if (update->m_validBids < m_level + 1) { 清零后续档位 }
+        for (int i = vBids; i < level + 1 && i < 20; i++) {
+            bidPx[i] = 0;
+            bidQty[i] = 0;
+            bidOrderCount[i] = 0;
+        }
+        // C++: m_validBids = update->m_validBids
+        validBids = vBids;
+
+        // C++: for (int i = 0; i < update->m_validAsks; i++) { askPx[i]=...; askQty[i]=...; askOrderCount[i]=...; }
+        for (int i = 0; i < vAsks && i < 20; i++) {
+            askPx[i] = (double) Types.MDD_ASK_PRICE_VH.get(mdUpdate, mdDataBase, (long) i);
+            askQty[i] = (int) Types.MDD_ASK_QUANTITY_VH.get(mdUpdate, mdDataBase, (long) i);
+            askOrderCount[i] = (int) Types.MDD_ASK_ORDER_COUNT_VH.get(mdUpdate, mdDataBase, (long) i);
+        }
+        // C++: if (update->m_validAsks < m_level + 1) { 清零后续档位 }
+        for (int i = vAsks; i < level + 1 && i < 20; i++) {
+            askPx[i] = 0;
+            askQty[i] = 0;
+            askOrderCount[i] = 0;
+        }
+        // C++: m_validAsks = update->m_validAsks
+        validAsks = vAsks;
+
+        // C++: lastTradePx = update->m_newPrice; lastTradeqty = update->m_newQuant;
+        // Ref: Instrument.cpp:2199-2202
+        // [C++差异] C++ 仅在 TRADE/TRADE_IMPLIED/TRADE_INFO 类型时更新 lastTradePx/lastTradeqty,
+        // Java 的 md_shm_feeder 使用 MDUPDTYPE_ORDER_ENTRY，lastTradedPrice 由 feeder 填充
         lastTradePx = (double) Types.MDD_LAST_TRADED_PRICE_VH.get(mdUpdate, mdDataBase);
+        // C++: lastTradeqty = update->m_newQuant
+        lastTradeQty = (int) Types.MDD_NEW_QUANT_VH.get(mdUpdate, mdDataBase);
+
+        // C++: CalculatePrices()  (Instrument.cpp:2232)
+        calculatePrices();
     }
 
     /**

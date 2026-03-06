@@ -704,37 +704,150 @@ public class CommonClient {
      */
     public int sendNewOrder(int strategyID, String symbol, int side, double price,
                             int qty, int posDirection, Object strategy) {
+        return sendNewOrder(strategyID, symbol, side, price, qty, posDirection,
+                strategy, 0, 0, 0, "", "", "", OrderHitType.STANDARD);
+    }
+
+    /**
+     * 发送新订单（完整参数版本）。
+     * 迁移自: CommonClient::SendNewOrder(uint32_t, const char*, OptionType, const char*,
+     *          TransactionType, double, int32_t, int32_t, int32_t, const char*, int32_t,
+     *          OrderHitType, ExecutionStrategy*)
+     * Ref: CommonClient.cpp:918-989
+     *
+     * @param token       合约 token (C++: m_instru->m_token)
+     * @param expiryDate  到期日 (C++: m_instru->m_expiryDate)
+     * @param strikePrice 行权价 (C++: m_instru->m_strike)
+     * @param account     账户ID (C++: m_account)
+     * @param instruType  合约类型 (C++: m_instruType, 6 chars)
+     * @param product     产品名 (C++: execStrategy->m_product)
+     * @param ordHitType  命中类型 (C++: OrderHitType — STANDARD/CROSS)
+     */
+    public int sendNewOrder(int strategyID, String symbol, int side, double price,
+                            int qty, int posDirection, Object strategy,
+                            int token, int expiryDate, int strikePrice,
+                            String account, String instruType, String product,
+                            OrderHitType ordHitType) {
         // 清零请求缓冲
         reqMsg.fill((byte) 0);
 
-        // 填充字段
-        // C++: m_reqMsg.Request_Type = NEWORDER
+        // C++: m_reqMsg.Request_Type = NEWORDER  (CommonClient.cpp:920)
         Types.REQ_REQUEST_TYPE_VH.set(reqMsg, 0L, Constants.REQUEST_NEWORDER);
-        Types.REQ_ORD_TYPE_VH.set(reqMsg, 0L, Constants.ORD_LIMIT);
-        Types.REQ_STRATEGY_ID_VH.set(reqMsg, 0L, strategyID);
-        Types.REQ_QUANTITY_VH.set(reqMsg, 0L, qty);
-        Types.REQ_PRICE_VH.set(reqMsg, 0L, price);
-        Types.REQ_POS_DIRECTION_VH.set(reqMsg, 0L, posDirection);
 
-        // C++: Transaction_Type (offset 163)
+        // C++: m_reqMsg.Token = Token  (CommonClient.cpp:922)
+        Types.REQ_TOKEN_VH.set(reqMsg, 0L, token);
+
+        // C++: m_reqMsg.Transaction_Type = ConvertSide(side)  (CommonClient.cpp:923)
         Types.REQ_TRANSACTION_TYPE_VH.set(reqMsg, 0L, (byte) side);
 
-        // C++: m_reqMsg.Exchange_Type = m_exchangeType (FillReqInfo, CommonClient.cpp:1117)
-        Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, exchangeType);
+        // C++: m_reqMsg.Price = price  (CommonClient.cpp:924)
+        Types.REQ_PRICE_VH.set(reqMsg, 0L, price);
 
-        // 写入 symbol
+        // C++: m_reqMsg.Quantity = qty  (CommonClient.cpp:925)
+        Types.REQ_QUANTITY_VH.set(reqMsg, 0L, qty);
+
+        // C++: m_reqMsg.QuantityFilled = 0  (CommonClient.cpp:926)
+        Types.REQ_QUANTITY_FILLED_VH.set(reqMsg, 0L, 0);
+
+        // C++: m_reqMsg.DisclosedQnty = m_reqMsg.Quantity  (CommonClient.cpp:927)
+        Types.REQ_DISCLOSED_QNTY_VH.set(reqMsg, 0L, qty);
+
+        // C++: memcpy(m_reqMsg.Product, execStrategy->m_product, 32)  (CommonClient.cpp:929)
+        if (product != null && !product.isEmpty()) {
+            byte[] productBytes = product.getBytes(StandardCharsets.US_ASCII);
+            int len = Math.min(productBytes.length, Constants.MAX_PRODUCT_SIZE);
+            reqMsg.asSlice(Types.REQ_PRODUCT_OFFSET, len)
+                  .copyFrom(MemorySegment.ofArray(productBytes).asSlice(0, len));
+        }
+
+        // C++: m_reqMsg.StrategyID = execStrategy->m_strategyID  (CommonClient.cpp:930)
+        Types.REQ_STRATEGY_ID_VH.set(reqMsg, 0L, strategyID);
+
+        // C++: memcpy(m_reqMsg.AccountID, Account, strlen(Account))  (CommonClient.cpp:932-933)
+        if (account != null && !account.isEmpty()) {
+            byte[] accBytes = account.getBytes(StandardCharsets.US_ASCII);
+            int len = Math.min(accBytes.length, Constants.ACCOUNT_ID_SIZE);
+            reqMsg.asSlice(Types.REQ_ACCOUNT_ID_OFFSET, len)
+                  .copyFrom(MemorySegment.ofArray(accBytes).asSlice(0, len));
+        }
+
+        // C++: memcpy(m_reqMsg.Contract_Description.InstrumentName, instType, 6)  (CommonClient.cpp:937-938)
+        if (instruType != null && !instruType.isEmpty()) {
+            byte[] instTypeBytes = instruType.getBytes(StandardCharsets.US_ASCII);
+            int len = Math.min(instTypeBytes.length, 6);
+            reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_INSTRUMENT_NAME_OFFSET, len)
+                  .copyFrom(MemorySegment.ofArray(instTypeBytes).asSlice(0, len));
+        }
+
+        // C++: memcpy(m_reqMsg.Contract_Description.Symbol, ticker, strlen(ticker))  (CommonClient.cpp:940)
         byte[] symBytes = symbol.getBytes(StandardCharsets.US_ASCII);
         reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_SYMBOL_OFFSET, symBytes.length)
               .copyFrom(MemorySegment.ofArray(symBytes));
 
+        // C++: Contract_Description.OptionType = "XX"  (CommonClient.cpp:946)
+        // [C++差异] Java 版本默认写 "XX"（期货），期权场景由调用方处理
+        reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_OPTION_TYPE_OFFSET, 2)
+              .copyFrom(MemorySegment.ofArray(new byte[]{'X', 'X'}));
+
+        // C++: m_reqMsg.Contract_Description.CALevel = 0  (CommonClient.cpp:961)
+        // CD_CA_LEVEL_VH 是 JAVA_SHORT
+        reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET + Types.CD_CA_LEVEL_OFFSET, 2)
+              .copyFrom(MemorySegment.ofArray(new byte[]{0, 0}));
+
+        // C++: m_reqMsg.Contract_Description.ExpiryDate = Exp  (CommonClient.cpp:962)
+        MemorySegment cdSlice = reqMsg.asSlice(Types.REQ_CONTRACT_DESC_OFFSET, Types.CONTRACT_DESC_SIZE);
+        Types.CD_EXPIRY_DATE_VH.set(cdSlice, 0L, expiryDate);
+
+        // C++: m_reqMsg.Contract_Description.StrikePrice = sp  (CommonClient.cpp:963)
+        Types.CD_STRIKE_PRICE_VH.set(cdSlice, 0L, strikePrice);
+
+        // C++: m_reqMsg.TimeStamp = getcurtime()  (CommonClient.cpp:964)
+        Types.REQ_TIMESTAMP_VH.set(reqMsg, 0L, System.nanoTime());
+
+        // C++: if (ordHitType == CROSS) m_reqMsg.Duration = FAK; else m_reqMsg.Duration = DAY;
+        // Ref: CommonClient.cpp:966-969
+        if (ordHitType == OrderHitType.CROSS) {
+            Types.REQ_DURATION_VH.set(reqMsg, 0L, Constants.DUR_FAK);
+        } else {
+            Types.REQ_DURATION_VH.set(reqMsg, 0L, Constants.DUR_DAY);
+        }
+
+        // C++: FillReqInfo()  (CommonClient.cpp:971)
+        // C++: m_reqMsg.OrdType = LIMIT; m_reqMsg.PxType = PERUNIT; m_reqMsg.Exchange_Type = m_exchangeType;
+        Types.REQ_ORD_TYPE_VH.set(reqMsg, 0L, Constants.ORD_LIMIT);
+        Types.REQ_PX_TYPE_VH.set(reqMsg, 0L, Constants.PX_PERUNIT);
+        Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, exchangeType);
+
+        // C++: CFFEX override  (CommonClient.cpp:973-974)
+        // if (symbol starts with IF/IC/IM/IH) Exchange_Type = CHINA_CFFEX
+        if (symbol.startsWith("IF") || symbol.startsWith("IC")
+                || symbol.startsWith("IM") || symbol.startsWith("IH")) {
+            Types.REQ_EXCHANGE_TYPE_VH.set(reqMsg, 0L, Constants.CHINA_CFFEX);
+        }
+
+        // C++: PosDirection
+        Types.REQ_POS_DIRECTION_VH.set(reqMsg, 0L, posDirection);
+
         // 委托 Connector 发送
+        // C++: OrderID = m_connector->SendNewOrder(m_reqMsg)  (CommonClient.cpp:976)
         int orderID = connector.sendNewOrder(reqMsg);
 
         // 注册到 orderID→strategy 映射
         // C++: m_configParams->m_orderIDStrategyMap[orderID] = strategy
         configParams.orderIDStrategyMap.put(orderID, strategy);
 
+        log.info(String.format("CommonClient SendNewOrder, OrderID: %d, product: %s, StrategyID: %d, Symbol: %s, Quantity: %d",
+                orderID, product, strategyID, symbol, qty));
+
         return orderID;
+    }
+
+    /**
+     * 命中类型枚举（用于 Duration FAK/DAY 判断）。
+     * 迁移自: hftbase CommonUtils — enum OrderHitType
+     */
+    public enum OrderHitType {
+        STANDARD, IMPROVE, CROSS, DETECT, MATCH
     }
 
     /**
