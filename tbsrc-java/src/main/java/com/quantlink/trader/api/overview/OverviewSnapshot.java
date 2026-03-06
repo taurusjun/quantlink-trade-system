@@ -305,6 +305,11 @@ public class OverviewSnapshot {
             }
         }
 
+        // 按 orderID 升序排序，保证配对稳定（OrderHistoryTracker 返回最新在前，
+        // 不排序的话每来一笔新成交所有下标偏移，配对关系就变了）
+        leg1Fills.sort(Comparator.comparingInt(o -> o.orderID));
+        leg2Fills.sort(Comparator.comparingInt(o -> o.orderID));
+
         // 尝试配对: Leg1 BUY ↔ Leg2 SELL, Leg1 SELL ↔ Leg2 BUY
         int pairs = Math.min(leg1Fills.size(), leg2Fills.size());
         for (int i = 0; i < pairs; i++) {

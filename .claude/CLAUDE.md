@@ -168,6 +168,8 @@ md_shm_feeder → [SysV MWMR SHM 0x1001] → Go trader → [SysV MWMR SHM 0x2001
 
 **核心目标**: Java 代码必须与 C++ 原代码保持最大程度的一致性，使开发者能够在 C++ 和 Java 之间轻松对照。
 
+**⚠️ 禁止参考 Go 代码**: C++ (`tbsrc/`、`hftbase/`、`ors/`) 是 Java 迁移的**唯一源**。`tbsrc-golang/` 是另一个独立的迁移目标，不得作为 Java 迁移的参考、佐证或对齐依据。翻译过程中不得出现 "对齐 Go"、"参考 Go" 等表述。
+
 **原则 1: 文件结构与 C++ 保持一致**
 - Java 包结构必须映射 C++ 目录结构
 - 示例: `tbsrc/Strategies/` → `com/quantlink/trader/strategy/`
@@ -290,6 +292,44 @@ md_shm_feeder → [SysV MWMR SHM 0x1001] → Go trader → [SysV MWMR SHM 0x2001
   // ✅ 正确: 经用户确认后的省略
   // [C++差异-用户确认] C++ 使用 MemLog SHM 推送监控数据（依赖 hftbase MemLog 库），
   // 经用户确认（2026-02-26），Java 使用日志输出替代。
+  ```
+
+**原则 9: C++ 与 Java 结构必须严格一一对应**
+- **函数数量一致**: Java 类中的方法数量必须与对应 C++ 类的方法数量一致。C++ 有的方法 Java 必须有，C++ 没有的方法 Java 不得发明
+- **函数名称一致**: Java 方法名必须由 C++ 方法名驼峰化而来（参照原则 3），不得自行创造方法名
+- **函数入参个数一致**: Java 方法的参数个数必须与 C++ 对应方法一致。不得增加额外参数（如多传一个 exchType），也不得减少参数
+- **字段数量一致**: Java 类的实例字段数量必须与对应 C++ 类的成员变量数量一致。C++ 有的字段 Java 必须有，C++ 没有的字段 Java 不得发明
+- **字段名称一致**: Java 字段名必须由 C++ 成员变量名去掉 `m_` 前缀后驼峰化而来（参照原则 4）
+- **禁止发明**: 不得在 Java 中添加 C++ 不存在的方法、字段、内部类、工厂方法、"简化模式"等。任何 Java 独有的代码都必须先询问用户确认
+- **验证清单** — 迁移完成后必须逐项核对:
+  - [ ] C++ 类有 N 个 public/protected 方法 → Java 类有 N 个对应方法
+  - [ ] 每个方法名与 C++ 一致（驼峰化）
+  - [ ] 每个方法的参数个数与 C++ 一致
+  - [ ] C++ 类有 M 个成员变量 → Java 类有 M 个对应字段
+  - [ ] 每个字段名与 C++ 一致（去 m_ 驼峰化）
+  - [ ] Java 中不存在 C++ 没有的方法或字段
+- 示例（禁止）:
+  ```java
+  // ❌ 错误: C++ PushRequest(RequestMsg&) 只有 1 个参数
+  //    Java 自行加了 exchType 参数 → 入参个数不一致
+  private void pushRequest(MemorySegment req, int exchType) { ... }
+
+  // ❌ 错误: C++ 没有 open() 工厂方法
+  //    Java 自行发明 → 函数数量不一致
+  public static Connector open(Config cfg, MDCallback mdCb, ORSCallback orsCb) { ... }
+
+  // ❌ 错误: C++ 没有 defaultClientId 字段
+  //    Java 自行发明 → 字段数量不一致
+  private int defaultClientId;
+  ```
+- 示例（正确）:
+  ```java
+  // ✅ 正确: 与 C++ PushRequest(RequestMsg&) 一一对应
+  private void pushRequest(MemorySegment req) { ... }
+
+  // ✅ 正确: 与 C++ Connector(MDConnection, ORSConnection, InteractionMode, ConnectorConfig*) 对应
+  //    [C++差异] InteractionMode 省略（仅 LIVE 模式），经用户确认
+  public Connector(MDCallback mdCb, ORSCallback orsCb, Config cfg) { ... }
   ```
 
 ### 配置文件 (`config/`)

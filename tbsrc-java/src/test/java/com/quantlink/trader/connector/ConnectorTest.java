@@ -20,7 +20,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>
  * 迁移自: hftbase/Connector/include/connector.h (illuminati::Connector)
  * <p>
- * 测试使用 createForTest 模式（创建新 SHM），测试完毕后 destroy() 清理。
+ * 测试使用 ConnectorTestHelper.createForTest 预创建 SHM 段，
+ * 然后 Connector 正常构造函数 attach（与 C++ 测试流程一致：外部创建 SHM → Connector attach）。
  * 使用随机高位 SHM key (0x7Fxx_xxxx) 避免与运行中系统冲突。
  * <p>
  * 测试覆盖:
@@ -49,13 +50,19 @@ class ConnectorTest {
         testKeyOffset += 10; // 留足间距
 
         Connector.Config cfg = new Connector.Config();
-        cfg.mdShmKey = BASE_KEY + offset + 1;
-        cfg.mdQueueSize = 64;
-        cfg.reqShmKey = BASE_KEY + offset + 2;
-        cfg.reqQueueSize = 64;
-        cfg.respShmKey = BASE_KEY + offset + 3;
-        cfg.respQueueSize = 64;
-        cfg.clientStoreShmKey = BASE_KEY + offset + 4;
+
+        Connector.ExchangeConfig exchCfg = new Connector.ExchangeConfig();
+        exchCfg.exchangeName = "CHINA_SHFE";
+        exchCfg.mdShmKeys.add(BASE_KEY + offset + 1);
+        exchCfg.mdShmSizes.add(64);
+        exchCfg.mdShmReadModes.add(Connector.MD_READ_ROUND_ROBIN);
+        exchCfg.reqShmKey = BASE_KEY + offset + 2;
+        exchCfg.reqQueueSize = 64;
+        exchCfg.respShmKey = BASE_KEY + offset + 3;
+        exchCfg.respQueueSize = 64;
+        exchCfg.clientStoreShmKey = BASE_KEY + offset + 4;
+        cfg.exchanges.add(exchCfg);
+
         return cfg;
     }
 
@@ -73,12 +80,11 @@ class ConnectorTest {
     void test_orderID_generation_sequential() {
         Connector.Config cfg = newTestConfig();
 
-        // 使用 no-op 回调（此测试不关心回调）
-        Connector connector = Connector.createForTest(cfg,
-                md -> {}, resp -> {});
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg, md -> {}, resp -> {});
 
         try (Arena arena = Arena.ofConfined()) {
-            int clientId = connector.getClientId();
+            int clientId = bundle.getClientId();
             // ClientStore 初始值=1, getAndIncrement 返回 1
             assertEquals(1, clientId, "首个 clientId 应为 1");
 
@@ -90,9 +96,9 @@ class ConnectorTest {
             // 连续发 3 个新订单
             // C++: OrderID = clientId * ORDERID_RANGE + m_OrderCount++
             // Ref: hftbase/Connector/include/connector.h:366
-            int orderId1 = connector.sendNewOrder(req1);
-            int orderId2 = connector.sendNewOrder(req2);
-            int orderId3 = connector.sendNewOrder(req3);
+            int orderId1 = bundle.connector.sendNewOrder(req1);
+            int orderId2 = bundle.connector.sendNewOrder(req2);
+            int orderId3 = bundle.connector.sendNewOrder(req3);
 
             // 验证 OrderID 序列: clientId(1) * 1_000_000 + 0, 1, 2
             assertEquals(1_000_000, orderId1, "第 1 个 OrderID 应为 clientId*ORDERID_RANGE + 0");
@@ -118,9 +124,9 @@ class ConnectorTest {
             // C++: msg.TimeStamp = illuminati::ITime_ClockRT::GetCurrentTime();
             // Ref: hftbase/Connector/include/connector.h:202
             long ts1 = (long) Types.REQ_TIMESTAMP_VH.get(req1, 0L);
-            assertTrue(ts1 > 0, "TimeStamp 应为正值 (System.nanoTime)");
+            assertTrue(ts1 > 0, "TimeStamp 应为正值");
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 
@@ -138,18 +144,18 @@ class ConnectorTest {
     @Order(2)
     void test_sendCancelOrder_and_sendModifyOrder() {
         Connector.Config cfg = newTestConfig();
-        Connector connector = Connector.createForTest(cfg,
-                md -> {}, resp -> {});
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg, md -> {}, resp -> {});
 
         try (Arena arena = Arena.ofConfined()) {
             // 先发一个新订单获取 OrderID
             MemorySegment newReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
-            int orderId = connector.sendNewOrder(newReq);
+            int orderId = bundle.connector.sendNewOrder(newReq);
 
             // 发送撤单
             MemorySegment cancelReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
             Types.REQ_ORDER_ID_VH.set(cancelReq, 0L, orderId);
-            connector.sendCancelOrder(cancelReq);
+            bundle.connector.sendCancelOrder(cancelReq);
 
             // 验证 cancelReq 的 Request_Type
             assertEquals(Constants.REQUEST_CANCELORDER,
@@ -164,14 +170,14 @@ class ConnectorTest {
             MemorySegment modifyReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
             Types.REQ_ORDER_ID_VH.set(modifyReq, 0L, orderId);
             Types.REQ_PRICE_VH.set(modifyReq, 0L, 6800.0);
-            connector.sendModifyOrder(modifyReq);
+            bundle.connector.sendModifyOrder(modifyReq);
 
             // 验证 modifyReq 的 Request_Type
             assertEquals(Constants.REQUEST_MODIFYORDER,
                     (int) Types.REQ_REQUEST_TYPE_VH.get(modifyReq, 0L),
                     "改单请求的 Request_Type 应为 MODIFYORDER (1)");
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 
@@ -194,45 +200,40 @@ class ConnectorTest {
         AtomicReference<Integer> receivedOrderId = new AtomicReference<>();
         CountDownLatch latch = new CountDownLatch(1);
 
-        Connector connector = Connector.createForTest(cfg,
-                md -> {},  // no-op MD callback
-                resp -> {
-                    // ORS 回调: 记录收到的 OrderID
-                    int oid = (int) Types.RESP_ORDER_ID_VH.get(resp, 0L);
-                    receivedOrderId.set(oid);
-                    callbackCount.incrementAndGet();
-                    latch.countDown();
-                });
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> {},
+                        resp -> {
+                            int oid = (int) Types.RESP_ORDER_ID_VH.get(resp, 0L);
+                            receivedOrderId.set(oid);
+                            callbackCount.incrementAndGet();
+                            latch.countDown();
+                        });
 
         try (Arena arena = Arena.ofConfined()) {
-            int myClientId = connector.getClientId();
-            // myClientId 应为 1
+            int myClientId = bundle.getClientId();
 
             // 启动轮询线程
-            connector.startAsync();
-
-            // 等待轮询线程启动
+            bundle.startAsync();
             Thread.sleep(50);
 
             // 构造属于本 clientId 的回报
-            // C++: OrderID = clientId * ORDERID_RANGE + seq
-            // Ref: hftbase/Connector/include/connector.h:366
-            int myOrderId = myClientId * Constants.ORDERID_RANGE + 1; // e.g. 1_000_001
+            int myOrderId = myClientId * Constants.ORDERID_RANGE + 1;
             MemorySegment myResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
             Types.RESP_ORDER_ID_VH.set(myResp, 0L, myOrderId);
             Types.RESP_RESPONSE_TYPE_VH.set(myResp, 0L, Constants.RESP_TRADE_CONFIRM);
 
             // 构造不属于本 clientId 的回报 (clientId=5)
-            int otherOrderId = 5 * Constants.ORDERID_RANGE + 1; // 5_000_001
+            int otherOrderId = 5 * Constants.ORDERID_RANGE + 1;
             MemorySegment otherResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
             Types.RESP_ORDER_ID_VH.set(otherResp, 0L, otherOrderId);
             Types.RESP_RESPONSE_TYPE_VH.set(otherResp, 0L, Constants.RESP_TRADE_CONFIRM);
 
             // 先入队「不属于」本 clientId 的回报
-            connector.enqueueResponse(otherResp);
+            bundle.enqueueResponse(otherResp);
 
             // 再入队「属于」本 clientId 的回报
-            connector.enqueueResponse(myResp);
+            bundle.enqueueResponse(myResp);
 
             // 等待回调触发
             assertTrue(latch.await(3, TimeUnit.SECONDS),
@@ -241,26 +242,18 @@ class ConnectorTest {
             // 稍等以确保不会有额外的回调
             Thread.sleep(200);
 
-            // 验证: 只有一条回报触发了回调
             assertEquals(1, callbackCount.get(),
                     "应仅收到 1 条回报回调（属于 clientId=" + myClientId + " 的）");
             assertEquals(myOrderId, receivedOrderId.get(),
                     "收到的 OrderID 应为 " + myOrderId);
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 
     // =====================================================================
     // 测试 4: 完整流程测试
     // 流程: enqueueMD -> mdCallback 触发 -> sendNewOrder -> enqueueResponse -> orsCallback 触发
-    //
-    // 模拟完整交易链:
-    //   1. md_shm_feeder 写入行情 (enqueueMD)
-    //   2. 策略收到行情 (mdCallback)
-    //   3. 策略发送订单 (sendNewOrder)
-    //   4. counter_bridge 回写成交回报 (enqueueResponse)
-    //   5. 策略收到回报 (orsCallback)
     // =====================================================================
 
     @Test
@@ -274,47 +267,42 @@ class ConnectorTest {
         AtomicReference<Integer> receivedOrderIdRef = new AtomicReference<>();
         AtomicReference<Double> receivedMdPrice = new AtomicReference<>();
 
-        // 创建 Connector: mdCallback 中发单，orsCallback 中记录
-        Connector connector = Connector.createForTest(cfg,
-                md -> {
-                    // Step 2: 收到行情 -> 提取价格
-                    double price = md.get(ValueLayout.JAVA_DOUBLE,
-                            Types.MU_DATA_OFFSET + Types.MDD_NEW_PRICE_OFFSET);
-                    receivedMdPrice.set(price);
-                    mdLatch.countDown();
-                },
-                resp -> {
-                    // Step 5: 收到回报 -> 记录 OrderID
-                    int oid = (int) Types.RESP_ORDER_ID_VH.get(resp, 0L);
-                    receivedOrderIdRef.set(oid);
-                    orsLatch.countDown();
-                });
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> {
+                            double price = md.get(ValueLayout.JAVA_DOUBLE,
+                                    Types.MU_DATA_OFFSET + Types.MDD_NEW_PRICE_OFFSET);
+                            receivedMdPrice.set(price);
+                            mdLatch.countDown();
+                        },
+                        resp -> {
+                            int oid = (int) Types.RESP_ORDER_ID_VH.get(resp, 0L);
+                            receivedOrderIdRef.set(oid);
+                            orsLatch.countDown();
+                        });
 
         try (Arena arena = Arena.ofConfined()) {
-            int myClientId = connector.getClientId();
+            int myClientId = bundle.getClientId();
 
-            // 启动轮询
-            connector.startAsync();
+            bundle.startAsync();
             Thread.sleep(50);
 
             // Step 1: 模拟 md_shm_feeder 写入行情
             MemorySegment md = arena.allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
-            // 设置价格: m_newPrice (在 MDDataPart 中, 绝对 offset = 96 + 0 = 96)
             md.set(ValueLayout.JAVA_DOUBLE,
                     Types.MU_DATA_OFFSET + Types.MDD_NEW_PRICE_OFFSET, 6789.50);
-            connector.enqueueMD(md);
+            bundle.enqueueMD(md);
 
-            // 等待 mdCallback
             assertTrue(mdLatch.await(3, TimeUnit.SECONDS),
                     "应在 3 秒内收到行情回调");
             assertEquals(6789.50, receivedMdPrice.get(), 1e-10,
                     "行情价格应为 6789.50");
 
-            // Step 3: 发送新订单 (在主线程中模拟策略发单)
+            // Step 3: 发送新订单
             MemorySegment req = arena.allocate(Types.REQUEST_MSG_LAYOUT);
             Types.REQ_PRICE_VH.set(req, 0L, 6789.50);
             Types.REQ_QUANTITY_VH.set(req, 0L, 1);
-            int orderId = connector.sendNewOrder(req);
+            int orderId = bundle.connector.sendNewOrder(req);
             sentOrderId.set(orderId);
 
             // Step 4: 模拟 counter_bridge 回写成交回报
@@ -323,15 +311,14 @@ class ConnectorTest {
             Types.RESP_RESPONSE_TYPE_VH.set(resp, 0L, Constants.RESP_TRADE_CONFIRM);
             Types.RESP_QUANTITY_VH.set(resp, 0L, 1);
             Types.RESP_PRICE_VH.set(resp, 0L, 6789.50);
-            connector.enqueueResponse(resp);
+            bundle.enqueueResponse(resp);
 
-            // Step 5: 等待 orsCallback
             assertTrue(orsLatch.await(3, TimeUnit.SECONDS),
                     "应在 3 秒内收到回报回调");
             assertEquals(sentOrderId.get(), receivedOrderIdRef.get(),
                     "回报中的 OrderID 应与发送的一致");
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 
@@ -347,7 +334,6 @@ class ConnectorTest {
     @Test
     @Order(5)
     void test_clientId_increment_across_connectors() {
-        // 这个测试需要手动管理 SHM，因为两个 Connector 共享 clientStore
         int offset = testKeyOffset;
         testKeyOffset += 10;
 
@@ -362,7 +348,7 @@ class ConnectorTest {
         // 手动创建 ClientStore
         ClientStore cs = ClientStore.create(csKey, 1L);
 
-        // 创建第一个 Connector 的队列
+        // 创建 SHM 队列
         MWMRQueue mdQ1 = MWMRQueue.create(mdKey1, 16,
                 Types.MARKET_UPDATE_NEW_SIZE, Types.QUEUE_ELEM_MD_SIZE);
         MWMRQueue reqQ1 = MWMRQueue.create(reqKey1, 16,
@@ -370,10 +356,8 @@ class ConnectorTest {
         MWMRQueue respQ1 = MWMRQueue.create(respKey1, 16,
                 Types.RESPONSE_MSG_SIZE, Types.QUEUE_ELEM_RESP_SIZE);
 
-        // 第一次 getClientIdAndIncrement: 返回 1, store 变为 2
         int clientId1 = (int) cs.getClientIdAndIncrement();
 
-        // 创建第二个 Connector 的队列
         MWMRQueue mdQ2 = MWMRQueue.create(mdKey2, 16,
                 Types.MARKET_UPDATE_NEW_SIZE, Types.QUEUE_ELEM_MD_SIZE);
         MWMRQueue reqQ2 = MWMRQueue.create(reqKey2, 16,
@@ -381,21 +365,16 @@ class ConnectorTest {
         MWMRQueue respQ2 = MWMRQueue.create(respKey2, 16,
                 Types.RESPONSE_MSG_SIZE, Types.QUEUE_ELEM_RESP_SIZE);
 
-        // 第二次 getClientIdAndIncrement: 返回 2, store 变为 3
         int clientId2 = (int) cs.getClientIdAndIncrement();
 
         try {
             assertEquals(1, clientId1, "第一个 clientId 应为 1");
             assertEquals(2, clientId2, "第二个 clientId 应为 2");
 
-            // 验证 OrderID 范围不重叠
-            // clientId1=1 -> OrderID 范围: [1_000_000, 1_999_999]
-            // clientId2=2 -> OrderID 范围: [2_000_000, 2_999_999]
             assertNotEquals(clientId1 * Constants.ORDERID_RANGE,
                     clientId2 * Constants.ORDERID_RANGE,
                     "两个 Connector 的 OrderID 基础值不应重叠");
         } finally {
-            // 清理所有 SHM
             mdQ1.destroy();
             reqQ1.destroy();
             respQ1.destroy();
@@ -408,7 +387,6 @@ class ConnectorTest {
 
     // =====================================================================
     // 测试 6: 多次 ORS 回报 -- 本 clientId 的多条回报全部回调
-    // 验证: 3 条属于本 clientId 的回报全部触发回调
     // =====================================================================
 
     @Test
@@ -420,25 +398,25 @@ class ConnectorTest {
         CountDownLatch latch = new CountDownLatch(expectedCount);
         AtomicInteger callbackCount = new AtomicInteger(0);
 
-        Connector connector = Connector.createForTest(cfg,
-                md -> {},
-                resp -> {
-                    callbackCount.incrementAndGet();
-                    latch.countDown();
-                });
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> {},
+                        resp -> {
+                            callbackCount.incrementAndGet();
+                            latch.countDown();
+                        });
 
         try (Arena arena = Arena.ofConfined()) {
-            int myClientId = connector.getClientId();
-            connector.startAsync();
+            int myClientId = bundle.getClientId();
+            bundle.startAsync();
             Thread.sleep(50);
 
-            // 入队 3 条属于本 clientId 的回报
             for (int i = 0; i < expectedCount; i++) {
                 MemorySegment resp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
                 int orderId = myClientId * Constants.ORDERID_RANGE + i;
                 Types.RESP_ORDER_ID_VH.set(resp, 0L, orderId);
                 Types.RESP_RESPONSE_TYPE_VH.set(resp, 0L, Constants.RESP_NEW_ORDER_CONFIRM);
-                connector.enqueueResponse(resp);
+                bundle.enqueueResponse(resp);
             }
 
             assertTrue(latch.await(3, TimeUnit.SECONDS),
@@ -446,7 +424,7 @@ class ConnectorTest {
             assertEquals(expectedCount, callbackCount.get(),
                     "回调次数应为 " + expectedCount);
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 
@@ -462,33 +440,33 @@ class ConnectorTest {
 
         AtomicInteger mdCount = new AtomicInteger(0);
 
-        Connector connector = Connector.createForTest(cfg,
-                md -> mdCount.incrementAndGet(),
-                resp -> {});
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> mdCount.incrementAndGet(),
+                        resp -> {});
 
         try (Arena arena = Arena.ofConfined()) {
-            // start
-            connector.startAsync();
+            bundle.startAsync();
             Thread.sleep(50);
 
             // 入队一条行情
             MemorySegment md = arena.allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
-            connector.enqueueMD(md);
+            bundle.enqueueMD(md);
             Thread.sleep(200);
             assertEquals(1, mdCount.get(), "应收到 1 条行情回调");
 
             // stop
-            connector.stop();
+            bundle.stop();
             Thread.sleep(100);
 
             // stop 后入队的行情不应触发回调
             int countBefore = mdCount.get();
-            connector.enqueueMD(md);
+            bundle.enqueueMD(md);
             Thread.sleep(200);
             assertEquals(countBefore, mdCount.get(),
                     "stop 后不应再收到行情回调");
         } finally {
-            connector.destroy();
+            bundle.destroy();
         }
     }
 }

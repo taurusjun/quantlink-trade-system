@@ -148,38 +148,49 @@ public class TraderMain {
             mdKey, reqKey, respKey, clientStoreKey));
 
         // ---- Step 6: 创建 Connector ----
-        // C++: new Connector(MDconnection, ORSconnection, connectorCfg)
+        // C++: ConnectorConfig connectorCfg; connectorCfg.init(cfg);
+        // C++: Connector *connector = new Connector(MDcb, ORScb, connectorCfg.INTERACTION_MODE, &connectorCfg);
+        // Ref: tbsrc/main/main.cpp:1030-1073
+
+        // C++ ConnectorConfig 字段映射:
+        //   INTERESTED_EXCHANGES → exchanges (ExchangeConfig list)
+        //   INTERESTED_SYMBOLS → interestedSymbols
+        //   EXCH_*_MAP → ExchangeConfig 内部字段
         Connector.Config connCfg = new Connector.Config();
-        connCfg.mdShmKey = mdKey;
-        connCfg.mdQueueSize = mdSize;
-        connCfg.reqShmKey = reqKey;
-        connCfg.reqQueueSize = reqSize;
-        connCfg.respShmKey = respKey;
-        connCfg.respQueueSize = respSize;
-        connCfg.clientStoreShmKey = clientStoreKey;
 
-        connector = Connector.open(connCfg,
-            this::onMarketData,
-            this::onOrderResponse
-        );
-        logger.info("[main] Connector 已创建, clientId=" + connector.getClientId());
-
-        // ---- 注册 interested symbols (对齐 C++ Connector 构造函数) ----
-        // 迁移自: hftbase/Connector/src/connector.cpp:48-62
-        // C++: m_interestedsymbols_for_md.create_map(INTERESTED_SYMBOLS);
-        //      for (auto i = INTERESTED_SYMBOLS.begin(); ...) val->val = symbolid++;
-        // md_shm_feeder 全局分配 symbolID (所有合约按字母排序: ag2606=0, ag2608=1, au2604=2, ...)，
-        // 但策略只关心自己的合约。此处注册后，Connector.handleLiveMdUpdates() 会：
-        //   1. 按 symbol 字符串过滤，丢弃非注册合约 (如 au2604, au2606)
-        //   2. 覆写 symbolID 为策略本地索引 (0, 1)，确保 CommonClient 路由正确
-        // 注意: sortedSymbols 在下方 Step 8 构建，此处提前构建临时排序数组
+        // C++: INTERESTED_SYMBOLS = TICKERS (排序后的合约列表)
+        // Ref: hftbase/Connector/include/connectorconfig.h:102-104
+        // 构造函数内部会自动分配 symbolID (0, 1, 2, ...)
         {
-            String[] interestedSymbols = {sym1, sym2};
-            Arrays.sort(interestedSymbols);
-            for (short i = 0; i < interestedSymbols.length; i++) {
-                connector.addInterestedSymbol(interestedSymbols[i], i);
+            String[] sortedInterested = {sym1, sym2};
+            Arrays.sort(sortedInterested);
+            for (String s : sortedInterested) {
+                connCfg.interestedSymbols.add(s);
             }
         }
+
+        // C++: INTERESTED_EXCHANGES → EXCH_*_MAP
+        // Ref: hftbase/Connector/include/connectorconfig.h:287-330
+        Connector.ExchangeConfig exchCfg = new Connector.ExchangeConfig();
+        exchCfg.exchangeName = cfgConfig.exchanges;  // e.g. "CHINA_SHFE"
+        exchCfg.mdShmKeys.add(mdKey);
+        exchCfg.mdShmSizes.add(mdSize);
+        exchCfg.mdShmReadModes.add(Connector.MD_READ_ROUND_ROBIN);
+        exchCfg.reqShmKey = reqKey;
+        exchCfg.reqQueueSize = reqSize;
+        exchCfg.respShmKey = respKey;
+        exchCfg.respQueueSize = respSize;
+        exchCfg.clientStoreShmKey = clientStoreKey;
+        connCfg.exchanges.add(exchCfg);
+
+        // C++: new Connector(MDcb, ORScb, INTERACTION_MODE, &connectorCfg)
+        // [C++差异] Java 省略 InteractionMode 参数 (仅实现 LIVE 模式)
+        connector = new Connector(
+            this::onMarketData,
+            this::onOrderResponse,
+            connCfg
+        );
+        logger.info("[main] Connector 已创建, clientId=" + connector.getClientId());
 
         // ---- Step 7: 创建 CommonClient ----
         // C++: client->Initialize(&MDcallback, &ORScallback, ...)

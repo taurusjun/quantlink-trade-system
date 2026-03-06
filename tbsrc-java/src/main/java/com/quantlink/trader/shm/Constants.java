@@ -47,6 +47,12 @@ public final class Constants {
     /** C++: static const int32_t ORDERID_RANGE = 1000000; (constants.h:14) */
     public static final int ORDERID_RANGE = 1_000_000;
 
+    /**
+     * C++: static const int32_t DEFAULT_NOT_POSSIBLE_CLIENTID = 99999999; (constants.h:17)
+     * 用于 m_all_clientIds 数组的默认填充值，表示未分配的 slot。
+     */
+    public static final int DEFAULT_NOT_POSSIBLE_CLIENTID = 99999999;
+
     // =====================================================================
     // Fill Indicators
     // C++: orderresponse.h:25-27
@@ -404,6 +410,51 @@ public final class Constants {
             return ORDER_DURATION_STR[duration];
         }
         return "UNKNOWN";
+    }
+
+    // =====================================================================
+    // 交易所名称 → ID 映射
+    // C++: hftbase/CommonUtils/include/marketupdateNew.h:881-980
+    // =====================================================================
+
+    /**
+     * 交易所名称 → 交易所 ID 映射。
+     * <p>
+     * 迁移自: hftbase/CommonUtils/include/marketupdateNew.h:881-980
+     * C++: static char getExchangeIdFromName(const std::string &amp;token)
+     * <p>
+     * 注意: 此方法在 C++ 中属于 MarketUpdateNew，不属于 Connector。
+     */
+    public static int getExchangeIdFromName(String name) {
+        return switch (name) {
+            case "EXCHANGE_UNKNOWN" -> MD_EXCHANGE_UNKNOWN;
+            case "NSE_FO"          -> MD_NSE_FO;
+            case "NSE_CM"          -> MD_NSE_CM;
+            case "MICEX_FOND"      -> MD_MICEX_FOND;
+            case "MICEX_CURR"      -> MD_MICEX_CURR;
+            case "MICEX_FO"        -> MD_MICEX_FO;
+            case "MCX_FUTCOM"      -> MD_MCX_FUTCOM;
+            case "NSE_CDS"         -> MD_NSE_CDS;
+            case "BSE"             -> MD_BSE;
+            case "NYSE"            -> MD_NYSE;
+            case "ARCA"            -> MD_ARCA;
+            case "CME"             -> MD_CME;
+            case "LME"             -> MD_LME;
+            case "SGX"             -> MD_SGX;
+            case "CHINA_SHFE"      -> CHINA_SHFE;
+            case "CHINA_CFFEX"     -> CHINA_CFFEX;
+            case "CHINA_ZCE"       -> CHINA_ZCE;
+            case "CHINA_DCE"       -> CHINA_DCE;
+            case "CHINA_GFEX"      -> CHINA_GFEX;
+            case "CHINA"           -> MD_CHINA;
+            case "CHINA_SH"        -> MD_CHINA_SH;
+            case "CHINA_SZ"        -> MD_CHINA_SZ;
+            default -> {
+                java.util.logging.Logger.getLogger(Constants.class.getName())
+                    .warning("[getExchangeIdFromName] unknown exchange: " + name + ", returning 0");
+                yield 0;
+            }
+        };
     }
 
     // =====================================================================

@@ -1453,6 +1453,11 @@ public abstract class ExecutionStrategy {
                 Constants.POS_OPEN, this,
                 instru.token, instru.expiryDate, (int) instru.strike,
                 account, instruType, product, hitType);
+        if (orderID < 0) {
+            log.severe("[sendNewOrder] OrderID 分配失败，放弃发单: side=" + side
+                    + " price=" + price + " qty=" + qty);
+            return null;
+        }
 
         // C++: OrderStats *ordStats = new OrderStats()
         OrderStats ordStats = new OrderStats();
