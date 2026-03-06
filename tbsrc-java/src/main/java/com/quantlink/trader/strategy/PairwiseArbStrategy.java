@@ -632,12 +632,20 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         // 当 secondBid=0 但 secondAsk>0 时，midPx=(0+askPx)/2 导致 spread 偏差达万级，
         // 引发 AVG_SPREAD_AWAY 误触发和 EWA 均值污染（实盘 20260303/04 多次复现）。
         // 改进：任一腿的 bid 或 ask <= 0 时都跳过 spread 计算。Ref: PairwiseArbStrategy.cpp:496
-        if (firstStrat.instru.bidPx[0] <= 0 || firstStrat.instru.askPx[0] <= 0
-                || secondStrat.instru.bidPx[0] <= 0 || secondStrat.instru.askPx[0] <= 0) {
-            // currSpreadRatio 不变
+        double fb = firstStrat.instru.bidPx[0], fa = firstStrat.instru.askPx[0];
+        double sb = secondStrat.instru.bidPx[0], sa = secondStrat.instru.askPx[0];
+        if (fb <= 0 || fa <= 0 || sb <= 0 || sa <= 0) {
+            // [诊断] guard 拦截时记录哪个价格为 0
+            log.warning(String.format("[SPREAD-GUARD] 跳过计算: fb=%.2f fa=%.2f sb=%.2f sa=%.2f prev=%.2f",
+                    fb, fa, sb, sa, currSpreadRatio));
         } else {
-            currSpreadRatio = ((firstStrat.instru.bidPx[0] + firstStrat.instru.askPx[0]) / 2)
-                    - ((secondStrat.instru.bidPx[0] + secondStrat.instru.askPx[0]) / 2);
+            double newSpread = ((fb + fa) / 2) - ((sb + sa) / 2);
+            // [诊断] spread 异常时记录 4 个价格 — symbol 过滤修复后降级为 debug
+            if (Math.abs(newSpread) > 500) {
+                log.fine(String.format("[SPREAD-ANOMALY] newSpread=%.2f fb=%.2f fa=%.2f sb=%.2f sa=%.2f prev=%.2f",
+                        newSpread, fb, fa, sb, sa, currSpreadRatio));
+            }
+            currSpreadRatio = newSpread;
             expectedRatio = currSpreadRatio;
         }
 

@@ -146,11 +146,17 @@ public:
 
     // Enqueue — multi-producer safe
     // C++ source: multiwritermultireadershmqueue.h:118-133
+    //
+    // [bugfix] 原 compiler barrier (asm volatile("" ::: "memory")) 仅阻止编译器重排，
+    // 在 ARM (Apple Silicon) 上不产生硬件 fence，reader 可能读到新 seqNo 但旧 data，
+    // 导致 symbolID 混淆（au 行情被错误填入 ag 的 Instrument）。
+    // 替换为 std::atomic_thread_fence(memory_order_release)，保证:
+    //   data memcpy 完成 → release fence → seqNo 写入对 reader 可见
     void enqueue(const T& value) {
         int64_t myHead = header()->head.fetch_add(1, std::memory_order_acq_rel);
         QueueElem<T>* slot = m_updates + (myHead & m_mask);
         std::memcpy(&(slot->data), &value, sizeof(T));
-        asm volatile("" ::: "memory");  // compiler barrier
+        std::atomic_thread_fence(std::memory_order_release);
         slot->seqNo = myHead;
     }
 

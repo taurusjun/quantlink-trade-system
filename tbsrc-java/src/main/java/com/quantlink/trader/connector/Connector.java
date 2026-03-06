@@ -1,12 +1,14 @@
 package com.quantlink.trader.connector;
 
 import com.quantlink.trader.shm.*;
+import com.quantlink.trader.core.Instrument;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
 
 /**
  * SysV MWMR SHM Connector -- 行情接收、订单发送、回报轮询。
@@ -33,6 +35,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *           Java 使用 AtomicInteger 以支持潜在的多线程发单场景。
  */
 public class Connector {
+
+    private static final Logger log = Logger.getLogger(Connector.class.getName());
 
     // =======================================================================
     //  回调接口
@@ -128,6 +132,19 @@ public class Connector {
      * Ref: hftbase/Connector/include/connector.h:380
      */
     private final Map<Integer, Integer> clientIdMap = new HashMap<>();
+
+    /**
+     * 策略关心的合约过滤表: symbol → 本地 symbolID。
+     * <p>
+     * 迁移自: hftbase/Connector/include/connector.h:375
+     * C++: ds::fixed_string_map<uint16_t> m_interestedsymbols_for_md;
+     * <p>
+     * 在 HandleUpdates() (connector.cpp:749-782) 中，C++ 按 update->m_symbol 查此表：
+     *   - 未注册的合约直接丢弃
+     *   - 已注册的合约覆写 update->m_symbolID = iter->val 后再 dispatch
+     * 这防止了 md_shm_feeder 全局分配的 symbolID 与策略本地 symbolID 不一致的问题。
+     */
+    private final Map<String, Short> interestedSymbolsForMd = new HashMap<>();
 
     /**
      * 订单计数器，用于生成唯一 OrderID。
@@ -422,11 +439,24 @@ public class Connector {
     // =======================================================================
 
     /**
-     * 行情轮询循环。
+     * 行情轮询循环 + symbol 过滤 + symbolID 重写。
      * <p>
-     * 迁移自: hftbase/Connector/src/connector.cpp:HandleLiveMdUpdates()
-     * C++ 逻辑: 无限循环从 mdQueue 出队 MarketUpdateNew，调用 HandleUpdates(update)
+     * 迁移自: hftbase/Connector/src/connector.cpp:HandleLiveMdUpdates() + HandleUpdates()
+     * C++ HandleLiveMdUpdates: 无限循环从 mdQueue 出队 MarketUpdateNew，调用 HandleUpdates(update)
      * Ref: hftbase/Connector/include/connector.h:116
+     * <p>
+     * C++ HandleUpdates (connector.cpp:749-782):
+     * <pre>
+     *   if ((update->m_endPkt == 1) || m_interestedsymbols_for_md.size() == 0) {
+     *       m_mdcb(update);
+     *   } else {
+     *       auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
+     *       if (iter != NULL) {
+     *           update->m_symbolID = iter->val;
+     *           m_mdcb(update);
+     *       }
+     *   }
+     * </pre>
      */
     private void handleLiveMdUpdates() {
         // C++: MarketUpdateNew update; (栈上分配)
@@ -434,9 +464,24 @@ public class Connector {
         MemorySegment buf = Arena.global().allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
         while (running) {
             if (mdQueue.dequeue(buf)) {
-                // C++: m_mdcb(update);
-                // Ref: hftbase/Connector/include/connector.h:156
-                mdCallback.onMarketData(buf);
+                // C++: HandleUpdates(update)  — connector.cpp:749-782
+                // 当 interestedSymbolsForMd 为空时，所有行情直接透传（兼容无过滤场景）
+                if (interestedSymbolsForMd.isEmpty()) {
+                    // C++: if (m_interestedsymbols_for_md.size() == 0) m_mdcb(update);
+                    mdCallback.onMarketData(buf);
+                } else {
+                    // C++: auto iter = m_interestedsymbols_for_md.find(update->m_symbol);
+                    String symbol = Instrument.readSymbol(buf);
+                    Short localID = interestedSymbolsForMd.get(symbol);
+                    if (localID != null) {
+                        // C++: update->m_symbolID = iter->val;
+                        // Ref: connector.cpp:773
+                        Types.MDH_SYMBOL_ID_VH.set(buf, 0L, localID.shortValue());
+                        // C++: m_mdcb(update);
+                        mdCallback.onMarketData(buf);
+                    }
+                    // else: 未注册合约，静默丢弃 (与 C++ HandleUpdates 一致)
+                }
             } else {
                 // C++: 忙等待（无显式 yield/sleep）
                 Thread.onSpinWait();
@@ -581,6 +626,27 @@ public class Connector {
         int newClientId = (int) clientStore.getClientIdAndIncrement();
         clientIdMap.put(exchCode, newClientId);
         return newClientId;
+    }
+
+    // =======================================================================
+    //  symbol 过滤注册
+    // =======================================================================
+
+    /**
+     * 注册策略关心的合约及其本地 symbolID。
+     * <p>
+     * 迁移自: hftbase/Connector/src/connector.cpp:48-62
+     * C++: 在 Connector 构造函数中遍历 INTERESTED_SYMBOLS，
+     *      调用 m_interestedsymbols_for_md.create_map() 并赋值 val->val = symbolid++
+     * <p>
+     * Java 版本在 TraderMain 中手动注册，语义等价。
+     *
+     * @param symbol       合约名称 (如 "ag2606")
+     * @param localSymbolID 本地 symbolID (策略内部索引)
+     */
+    public void addInterestedSymbol(String symbol, short localSymbolID) {
+        interestedSymbolsForMd.put(symbol, localSymbolID);
+        log.info(String.format("[Connector] addInterestedSymbol: %s → symbolID=%d", symbol, localSymbolID));
     }
 
     // =======================================================================

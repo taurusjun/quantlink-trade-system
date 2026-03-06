@@ -164,6 +164,23 @@ public class TraderMain {
         );
         logger.info("[main] Connector 已创建, clientId=" + connector.getClientId());
 
+        // ---- 注册 interested symbols (对齐 C++ Connector 构造函数) ----
+        // 迁移自: hftbase/Connector/src/connector.cpp:48-62
+        // C++: m_interestedsymbols_for_md.create_map(INTERESTED_SYMBOLS);
+        //      for (auto i = INTERESTED_SYMBOLS.begin(); ...) val->val = symbolid++;
+        // md_shm_feeder 全局分配 symbolID (所有合约按字母排序: ag2606=0, ag2608=1, au2604=2, ...)，
+        // 但策略只关心自己的合约。此处注册后，Connector.handleLiveMdUpdates() 会：
+        //   1. 按 symbol 字符串过滤，丢弃非注册合约 (如 au2604, au2606)
+        //   2. 覆写 symbolID 为策略本地索引 (0, 1)，确保 CommonClient 路由正确
+        // 注意: sortedSymbols 在下方 Step 8 构建，此处提前构建临时排序数组
+        {
+            String[] interestedSymbols = {sym1, sym2};
+            Arrays.sort(interestedSymbols);
+            for (short i = 0; i < interestedSymbols.length; i++) {
+                connector.addInterestedSymbol(interestedSymbols[i], i);
+            }
+        }
+
         // ---- Step 7: 创建 CommonClient ----
         // C++: client->Initialize(&MDcallback, &ORScallback, ...)
         client = new CommonClient();
