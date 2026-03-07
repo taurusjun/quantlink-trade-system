@@ -157,6 +157,13 @@ public abstract class ExecutionStrategy {
     public boolean lastTradeSide;
     public boolean lastTrade;
     public double lastTradePx;
+
+    // ---- 撤单拒绝处理 ----
+    // 迁移自: ExecutionStrategy.h:177-182
+    // C++: int m_lastCancelReqRejectSet; uint64_t m_lastCancelRejectTime; uint32_t m_lastCancelRejectOrderID;
+    public int lastCancelReqRejectSet;       // C++: m_lastCancelReqRejectSet — 0=未拒, 1=已拒
+    public long lastCancelRejectTime;        // C++: m_lastCancelRejectTime — 上次撤单拒绝的时间戳
+    public int lastCancelRejectOrderID = -1; // C++: m_lastCancelRejectOrderID — 上次被拒撤单的 orderID
     public double currAvgPrice;
     public int level;
 
@@ -201,6 +208,9 @@ public abstract class ExecutionStrategy {
     // C++: OrderMap = map<uint32_t, OrderStats*>
     // C++: PriceMap = map<double, OrderStats*>
     public final Map<Integer, OrderStats> ordMap = new LinkedHashMap<>();
+    // 迁移自: ExecutionStrategy.h:258 — OrderMap m_sweepordMap
+    // C++: 用于 sweepStrategy 模式下跟踪追单（CROSS 类型）
+    public final Map<Integer, OrderStats> sweepOrdMap = new LinkedHashMap<>();
 
     // ---- 订单历史环形缓冲区（Java 新增，C++ 无对应） ----
     // 模拟器成交极快（~150ms），订单在快照采集间隔（1s）内完成整个生命周期，
@@ -247,6 +257,12 @@ public abstract class ExecutionStrategy {
     // C++: PriceMap m_bidMapCache, m_askMapCache — used for self-book tracking
     public final Map<Double, OrderStats> bidMapCache = new TreeMap<>();
     public final Map<Double, OrderStats> askMapCache = new TreeMap<>();
+
+    // 迁移自: ExecutionStrategy.h:263-264 — m_bidMapCacheDel, m_askMapCacheDel
+    // C++: PriceMap m_bidMapCacheDel, m_askMapCacheDel — 撤单中的自营订单簿缓存
+    // 用于 bSelfBook 模式下跟踪正在撤单但未确认的订单
+    public final Map<Double, OrderStats> bidMapCacheDel = new TreeMap<>();
+    public final Map<Double, OrderStats> askMapCacheDel = new TreeMap<>();
 
     // ---- 统计字段 ----
     // 迁移自: ExecutionStrategy.h — instruAvgTradeQty, volumeEwa, SET_HIGH, prevTradeQty
@@ -562,6 +578,12 @@ public abstract class ExecutionStrategy {
         lastTrade = false;
         lastTradePx = 0;
         lastTradeTime = 0;
+
+        // C++: m_lastCancelReqRejectSet = 0, m_lastCancelRejectTime = 0, m_lastCancelRejectOrderID = -1;
+        // Ref: ExecutionStrategy.cpp:355
+        lastCancelReqRejectSet = 0;
+        lastCancelRejectTime = 0;
+        lastCancelRejectOrderID = -1;
 
         buyAggCount = 0; sellAggCount = 0;
         buyAggOrder = 0; sellAggOrder = 0;
@@ -1547,17 +1569,56 @@ public abstract class ExecutionStrategy {
      */
     public boolean sendCancelOrder(int orderID) {
         OrderStats order = ordMap.get(orderID);
-        if (order == null) return false;
+        if (order == null) {
+            log.fine("Cancel OrderID not found: " + orderID);
+            return false;
+        }
 
-        if (order.status == OrderStats.Status.NEW_CONFIRM ||
-            order.status == OrderStats.Status.MODIFY_CONFIRM ||
-            order.status == OrderStats.Status.MODIFY_REJECT) {
+        // C++: if (iter->second->m_ordType == CROSS) return false;
+        // Ref: ExecutionStrategy.cpp:1760-1762
+        if (order.ordType == OrderStats.HitType.CROSS) {
+            return false;
+        }
+
+        // C++: CANCELREQ_PAUSE 逻辑 — 撤单被拒后暂停一段时间再允许重试
+        // Ref: ExecutionStrategy.cpp:1764-1770
+        // 条件: (未被拒) || (不同订单) || (同一订单且已过暂停期)
+        long currTime = Watch.getInstance().getCurrentTime();
+        boolean cancelAllowed =
+                (lastCancelReqRejectSet == 0) ||
+                (lastCancelRejectOrderID != orderID) ||
+                (lastCancelRejectOrderID == orderID && lastCancelReqRejectSet == 1
+                        && (currTime - lastCancelRejectTime) > thold.CANCELREQ_PAUSE);
+
+        if (cancelAllowed &&
+            (order.status == OrderStats.Status.NEW_CONFIRM ||
+             order.status == OrderStats.Status.MODIFY_CONFIRM ||
+             order.status == OrderStats.Status.MODIFY_REJECT)) {
+
+            // C++: 如果是同一订单重试，清除拒绝标记
+            if (lastCancelReqRejectSet == 1 && lastCancelRejectOrderID == orderID) {
+                log.info(String.format("lastCancelReqReject set %d currTime %d lastRejectTime %d diff %d",
+                        thold.CANCELREQ_PAUSE, currTime, lastCancelRejectTime,
+                        currTime - lastCancelRejectTime));
+                lastCancelReqRejectSet = 0;
+            }
+
             order.status = OrderStats.Status.CANCEL_ORDER;
             order.cancel = true;
             cancelCount++;
             client.sendCancelOrder(strategyID, instru.symbol, order.side, orderID, this);
             log.info(String.format("[ORDER-CANCEL] orderID=%d symbol=%s side=%s",
                     orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL"));
+
+            // C++: if (m_configParams->m_bSelfBook && !m_instru->m_bSnapshot)
+            // Ref: ExecutionStrategy.cpp:1784-1795 — 插入 CacheDel 跟踪
+            if (configParams.bSelfBook && !instru.bSnapshot) {
+                Map<Double, OrderStats> priceMapCacheDel =
+                        (order.side == Constants.SIDE_BUY) ? bidMapCacheDel : askMapCacheDel;
+                priceMapCacheDel.put(order.price, order);
+                order.cxlQty = order.openQty;
+            }
+
             return true;
         }
         return false;
@@ -2224,11 +2285,37 @@ public abstract class ExecutionStrategy {
         if (order.side == Constants.SIDE_BUY) {
             bidMap.remove(order.price);
             buyOpenOrders--;
+            // C++: if (m_configParams->m_bSelfBook && !m_instru->m_bSnapshot)
+            //        m_bidMapCache.erase(iter->second->m_price);
+            // Ref: ExecutionStrategy.cpp:1181-1185
+            if (configParams.bSelfBook && !instru.bSnapshot) {
+                bidMapCache.remove(order.price);
+            }
         } else {
             askMap.remove(order.price);
             sellOpenOrders--;
+            // Ref: ExecutionStrategy.cpp:1191-1195
+            if (configParams.bSelfBook && !instru.bSnapshot) {
+                askMapCache.remove(order.price);
+            }
         }
-        ordMap.remove(order.orderID);
+
+        // C++: 条件性移除 — 非 SelfBook 或 TRADED/NEW_REJECT/CANCEL_CONFIRM(且 cancel=true)
+        // Ref: ExecutionStrategy.cpp:1198-1213
+        if (!configParams.bSelfBook || instru.bSnapshot
+                || order.status == OrderStats.Status.TRADED
+                || order.status == OrderStats.Status.NEW_REJECT
+                || (order.status == OrderStats.Status.CANCEL_CONFIRM && order.cancel)) {
+            if (configParams.sweepStrategy && order.ordType == OrderStats.HitType.CROSS) {
+                sweepOrdMap.remove(order.orderID);
+            }
+            configParams.orderIDStrategyMap.remove(order.orderID);
+            ordMap.remove(order.orderID);
+        } else if (order.status == OrderStats.Status.CANCEL_CONFIRM && !order.cancel) {
+            // C++: iter->second->m_cancel = true;
+            // Ref: ExecutionStrategy.cpp:1209-1211
+            order.cancel = true;
+        }
     }
 
     /** 新单被拒。 Ref: ExecutionStrategy.cpp:1803-1829 */
@@ -2252,9 +2339,47 @@ public abstract class ExecutionStrategy {
         order.modifyWait = false;
     }
 
-    /** 撤单被拒。 Ref: ExecutionStrategy.cpp:1855-1886 */
+    /**
+     * 撤单被拒 — 记录拒绝状态 + 清理 CacheDel + CANCELREQ_PAUSE。
+     * 迁移自: ExecutionStrategy::ProcessCancelReject(ResponseMsg*, OrderMapIter)
+     * Ref: ExecutionStrategy.cpp:1855-1886
+     */
     protected void processCancelReject(MemorySegment response, OrderStats order) {
         order.cancel = false;
+
+        // C++: if (m_configParams->m_bSelfBook && !m_instru->m_bSnapshot)
+        //        m_bidMapCacheDel.erase(iter->second->m_price) / m_askMapCacheDel.erase(...)
+        // Ref: ExecutionStrategy.cpp:1861-1868
+        if (configParams.bSelfBook && !instru.bSnapshot) {
+            if (order.side == Constants.SIDE_BUY) {
+                bidMapCacheDel.remove(order.price);
+            } else {
+                askMapCacheDel.remove(order.price);
+            }
+        }
+
+        // C++: m_lastCancelReqRejectSet = 1;
+        //      m_lastCancelRejectTime = Watch::GetUniqueInstance()->GetCurrentTime();
+        //      m_lastCancelRejectOrderID = response->OrderID;
+        // Ref: ExecutionStrategy.cpp:1870-1872
+        lastCancelReqRejectSet = 1;
+        lastCancelRejectTime = Watch.getInstance().getCurrentTime();
+        lastCancelRejectOrderID = (int) Types.RESP_ORDER_ID_VH.get(response, 0L);
+
+        // C++: if (response->Quantity == 0 && m_configParams->m_fillOnCxlReject)
+        // Ref: ExecutionStrategy.cpp:1874-1880
+        // [C++差异] fillOnCxlReject 机制完整保留 — 当撤单拒绝且 Quantity=0 时触发虚拟成交
+        int respQty = (int) Types.RESP_QUANTITY_VH.get(response, 0L);
+        if (respQty == 0 && configParams.fillOnCxlReject) {
+            log.warning("ALERT!!  TRADE ON CANCEL REJECT.");
+            // C++: m_response.Price = iter->second->m_price; m_response.Quantity = iter->second->m_Qty;
+            //      ProcessTrade(&m_response, iter);
+            // [C++差异] 直接调用 processTrade，使用 order 的 price/qty 覆盖 response 中的值
+            Types.RESP_PRICE_VH.set(response, 0L, order.price);
+            Types.RESP_QUANTITY_VH.set(response, 0L, order.qty);
+            processTrade(response, order);
+        }
+
         log.warning(String.format("[CANCEL-REJECT] orderID=%d symbol=%s side=%s",
                 order.orderID, instru.symbol, order.side == Constants.SIDE_BUY ? "BUY" : "SELL"));
     }
@@ -2362,6 +2487,28 @@ public abstract class ExecutionStrategy {
     // =======================================================================
     //  风控
     // =======================================================================
+
+    /**
+     * 激活策略（基类默认实现）。
+     * 迁移自: ExecutionStrategy::HandleSquareON() (virtual)
+     * Ref: ExecutionStrategy.h:47-51
+     *
+     * C++:
+     * <pre>
+     *   virtual void HandleSquareON() {
+     *       if (mlog)
+     *           SendMonitorStratStatus(m_product, m_strategyID, m_onExit, m_onCancel, m_onFlat, m_Active);
+     *   };
+     * </pre>
+     *
+     * 子类（如 PairwiseArbStrategy）通常 override 此方法，先调用基类逻辑再执行自身初始化。
+     */
+    public void handleSquareON() {
+        // C++: if (mlog) SendMonitorStratStatus(m_product, m_strategyID, m_onExit, m_onCancel, m_onFlat, m_Active);
+        // Ref: ExecutionStrategy.h:49-50
+        // [C++差异] C++ 使用 mlog (MemLog) 条件；Java 使用日志输出替代（经用户确认 2026-02-26）
+        sendMonitorStratStatus(product, strategyID, onExit, onCancel, onFlat, active);
+    }
 
     /**
      * 执行平仓。

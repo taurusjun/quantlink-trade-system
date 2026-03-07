@@ -127,6 +127,8 @@ public class Instrument {
     public boolean useSmartBook;          // C++: m_useSmartBook — SmartMD 模式
     public boolean updateIndicators;      // C++: m_updateIndicators — 是否更新指标
     public boolean smartTrade;            // C++: m_smartTrade — SmartMD 交易标志
+    public boolean bSnapshot;             // C++: m_bSnapshot — 是否为快照模式（非逐笔）
+    public boolean adjustBookWithAggCxl;  // C++: m_adjustBookWithAggCxl — 追单撤单后调整订单簿
 
     // ---- 指标列表 ----
     // 迁移自: Instrument.h — IndList* m_indList

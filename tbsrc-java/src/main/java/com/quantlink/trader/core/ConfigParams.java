@@ -75,7 +75,7 @@ public class ConfigParams {
     public boolean useExchTS = false;
     public boolean squareOff = false;
     public boolean commonBook = false;
-    public boolean selfBook = false;
+    public boolean bSelfBook = false;  // C++: m_bSelfBook
     public boolean useCombined = false;
     public boolean useEndPkt = false;
     public boolean deltaStrategy = false;
@@ -106,4 +106,11 @@ public class ConfigParams {
     // 迁移自: ConfigParams::m_underlying
     // C++: 在 SendINDUpdate 中设置，表示当前更新的是期权的标的物合约
     public boolean underlying = false;
+
+    // ---- 撤单拒绝时虚拟成交 ----
+    // 迁移自: ConfigParams::m_fillOnCxlReject
+    // Ref: TradeBotUtils.h:675
+    // C++: 当撤单被拒且 Quantity==0 时，视为已成交（部分交易所行为）
+    public boolean fillOnCxlReject = false;
+
 }

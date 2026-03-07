@@ -550,4 +550,255 @@ class ExecutionStrategyTest {
         assertEquals(ordersBefore, client.newOrderCount,
                 "CTP mode active=false 时 handleSquareoff 不应发送任何订单");
     }
+
+    // =======================================================================
+    //  Fix: CANCELREQ_PAUSE 撤单拒绝暂停机制
+    //  C++: ExecutionStrategy.cpp:1764-1770, 1855-1872
+    // =======================================================================
+
+    @Test
+    void test_sendCancelOrder_normalCancel_noPriorReject() {
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+
+        // 无拒绝记录，lastCancelReqRejectSet = 0
+        assertEquals(0, strategy.lastCancelReqRejectSet);
+
+        boolean result = strategy.sendCancelOrder(order.orderID);
+
+        assertTrue(result);
+        assertEquals(OrderStats.Status.CANCEL_ORDER, order.status);
+        assertEquals(1, strategy.cancelCount);
+    }
+
+    @Test
+    void test_sendCancelOrder_crossOrder_cannotCancel() {
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+        order.ordType = OrderStats.HitType.CROSS;
+
+        boolean result = strategy.sendCancelOrder(order.orderID);
+
+        assertFalse(result, "CROSS 类型订单不可撤");
+        assertEquals(OrderStats.Status.NEW_CONFIRM, order.status);
+    }
+
+    @Test
+    void test_sendCancelOrder_blockedByCancelReqPause() {
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+
+        // 模拟该订单刚被拒绝
+        strategy.lastCancelReqRejectSet = 1;
+        strategy.lastCancelRejectOrderID = order.orderID;
+        strategy.lastCancelRejectTime = Watch.getInstance().getCurrentTime();
+        // CANCELREQ_PAUSE 设为很大值，确保不过期
+        strategy.thold.CANCELREQ_PAUSE = 999_999_999_999L;
+
+        boolean result = strategy.sendCancelOrder(order.orderID);
+
+        assertFalse(result, "CANCELREQ_PAUSE 未过期时应阻止同一 orderID 的撤单");
+        assertEquals(OrderStats.Status.NEW_CONFIRM, order.status, "状态不应变更");
+    }
+
+    @Test
+    void test_sendCancelOrder_allowedAfterPauseExpired() {
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+
+        // 模拟该订单很久之前被拒绝
+        strategy.lastCancelReqRejectSet = 1;
+        strategy.lastCancelRejectOrderID = order.orderID;
+        strategy.lastCancelRejectTime = 1000L; // 很久以前
+        strategy.thold.CANCELREQ_PAUSE = 1L;   // 1 纳秒
+
+        // Watch 时间需要 > lastCancelRejectTime + CANCELREQ_PAUSE 才能通过暂停检查
+        Watch.getInstance().updateTime(100_000L, "test");
+
+        boolean result = strategy.sendCancelOrder(order.orderID);
+
+        assertTrue(result, "CANCELREQ_PAUSE 过期后应允许重试");
+        assertEquals(0, strategy.lastCancelReqRejectSet, "重试后应清除拒绝标记");
+    }
+
+    @Test
+    void test_sendCancelOrder_differentOrderID_notBlocked() {
+        OrderStats orderA = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        orderA.status = OrderStats.Status.NEW_CONFIRM;
+        OrderStats orderB = strategy.sendNewOrder(Constants.SIDE_SELL, 5001, 1, 0);
+        orderB.status = OrderStats.Status.NEW_CONFIRM;
+
+        // 模拟 orderA 被拒绝
+        strategy.lastCancelReqRejectSet = 1;
+        strategy.lastCancelRejectOrderID = orderA.orderID;
+        strategy.lastCancelRejectTime = Watch.getInstance().getCurrentTime();
+        strategy.thold.CANCELREQ_PAUSE = 999_999_999_999L;
+
+        // orderB 不应被阻止
+        boolean result = strategy.sendCancelOrder(orderB.orderID);
+
+        assertTrue(result, "不同 orderID 的撤单不应被阻止");
+        assertEquals(OrderStats.Status.CANCEL_ORDER, orderB.status);
+    }
+
+    // =======================================================================
+    //  Fix: processCancelReject 设置拒绝状态
+    //  C++: ExecutionStrategy.cpp:1855-1886
+    // =======================================================================
+
+    @Test
+    void test_processCancelReject_setsRejectState() {
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.CANCEL_ORDER;
+
+        // Watch 时间需要 > 0 才能验证 lastCancelRejectTime 被正确设置
+        Watch.getInstance().updateTime(500_000L, "test");
+
+        MemorySegment resp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+        Types.RESP_ORDER_ID_VH.set(resp, 0L, order.orderID);
+        Types.RESP_RESPONSE_TYPE_VH.set(resp, 0L, Constants.RESP_CANCEL_ORDER_REJECT);
+        Types.RESP_QUANTITY_VH.set(resp, 0L, 1); // non-zero to avoid fillOnCxlReject
+
+        strategy.orsCallBack(resp);
+
+        assertEquals(1, strategy.lastCancelReqRejectSet, "应设置拒绝标记");
+        assertEquals(order.orderID, strategy.lastCancelRejectOrderID, "应记录被拒 orderID");
+        assertTrue(strategy.lastCancelRejectTime > 0, "应记录拒绝时间");
+        assertFalse(order.cancel, "cancel 标志应被清除");
+    }
+
+    // =======================================================================
+    //  Fix: SelfBook 缓存删除 (bidMapCacheDel / askMapCacheDel)
+    //  C++: ExecutionStrategy.cpp:1784-1795
+    // =======================================================================
+
+    @Test
+    void test_sendCancelOrder_selfBook_insertsCacheDel() {
+        ConfigParams.getInstance().bSelfBook = true;
+        instru.bSnapshot = false;
+
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 2, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+        order.openQty = 2;
+
+        strategy.sendCancelOrder(order.orderID);
+
+        assertTrue(strategy.bidMapCacheDel.containsKey(5000.0),
+                "SelfBook 模式下撤单应插入 bidMapCacheDel");
+        assertEquals(2, order.cxlQty, "cxlQty 应设为 openQty");
+    }
+
+    @Test
+    void test_sendCancelOrder_selfBook_sell_insertsCacheDel() {
+        ConfigParams.getInstance().bSelfBook = true;
+        instru.bSnapshot = false;
+
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_SELL, 5001, 3, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+        order.openQty = 3;
+
+        strategy.sendCancelOrder(order.orderID);
+
+        assertTrue(strategy.askMapCacheDel.containsKey(5001.0),
+                "SelfBook 模式下卖方撤单应插入 askMapCacheDel");
+    }
+
+    @Test
+    void test_processCancelReject_selfBook_clearsFromCacheDel() {
+        ConfigParams.getInstance().bSelfBook = true;
+        instru.bSnapshot = false;
+
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+        order.openQty = 1;
+
+        // 先发起撤单，将订单插入 bidMapCacheDel
+        strategy.sendCancelOrder(order.orderID);
+        assertTrue(strategy.bidMapCacheDel.containsKey(5000.0));
+
+        // 撤单被拒，应从 bidMapCacheDel 移除
+        MemorySegment resp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+        Types.RESP_ORDER_ID_VH.set(resp, 0L, order.orderID);
+        Types.RESP_RESPONSE_TYPE_VH.set(resp, 0L, Constants.RESP_CANCEL_ORDER_REJECT);
+        Types.RESP_QUANTITY_VH.set(resp, 0L, 1);
+
+        strategy.orsCallBack(resp);
+
+        assertFalse(strategy.bidMapCacheDel.containsKey(5000.0),
+                "撤单被拒后应从 bidMapCacheDel 移除");
+    }
+
+    // =======================================================================
+    //  Fix: removeOrder SelfBook 模式下的条件性清理
+    //  C++: ExecutionStrategy.cpp:1175-1213
+    // =======================================================================
+
+    @Test
+    void test_removeOrder_selfBook_cleansBidMapCache() {
+        ConfigParams.getInstance().bSelfBook = true;
+        instru.bSnapshot = false;
+
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_BUY, 5000, 1, 0);
+        order.status = OrderStats.Status.NEW_CONFIRM;
+
+        // 手动放入 bidMapCache
+        strategy.bidMapCache.put(5000.0, order);
+
+        // 模拟 TRADED 状态
+        order.status = OrderStats.Status.TRADED;
+        order.cancel = true;
+        strategy.removeOrder(order);
+
+        assertFalse(strategy.bidMapCache.containsKey(5000.0),
+                "removeOrder 应清理 bidMapCache");
+    }
+
+    @Test
+    void test_removeOrder_selfBook_cancelConfirm_noCancelFlag() {
+        ConfigParams.getInstance().bSelfBook = true;
+        instru.bSnapshot = false;
+
+        OrderStats order = strategy.sendNewOrder(Constants.SIDE_SELL, 5001, 1, 0);
+        order.status = OrderStats.Status.CANCEL_CONFIRM;
+        order.cancel = false;
+
+        strategy.removeOrder(order);
+
+        // C++: 当 cancel=false 时，ordMap 不移除，仅设置 cancel=true
+        assertTrue(order.cancel, "cancel=false 的 CANCEL_CONFIRM 应将 cancel 设为 true");
+        // ordMap 不应被移除（仅设置 cancel 标志）
+        // 注意：askMap 已被移除，但 ordMap 保留
+    }
+
+    // =======================================================================
+    //  Fix: handleSquareON 基类方法
+    //  C++: ExecutionStrategy.h:47-51
+    // =======================================================================
+
+    @Test
+    void test_handleSquareON_baseClass() {
+        strategy.onExit = true;
+        strategy.onCancel = true;
+        strategy.product = "testProduct";
+        strategy.strategyID = 99;
+
+        // 基类 handleSquareON 应调用 sendMonitorStratStatus，不应抛异常
+        assertDoesNotThrow(() -> strategy.handleSquareON());
+    }
+
+    @Test
+    void test_reset_initializesCancelRejectFields() {
+        strategy.lastCancelReqRejectSet = 1;
+        strategy.lastCancelRejectTime = 12345L;
+        strategy.lastCancelRejectOrderID = 999;
+
+        strategy.reset();
+
+        assertEquals(0, strategy.lastCancelReqRejectSet,
+                "reset 应清除 lastCancelReqRejectSet");
+        assertEquals(0, strategy.lastCancelRejectTime,
+                "reset 应清除 lastCancelRejectTime");
+        assertEquals(-1, strategy.lastCancelRejectOrderID,
+                "reset 应将 lastCancelRejectOrderID 重置为 -1");
+    }
 }

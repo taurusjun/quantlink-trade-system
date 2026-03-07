@@ -53,6 +53,16 @@ class MockCommonClient extends CommonClient {
     }
 
     @Override
+    public int sendNewOrder(int strategyID, String symbol, int side, double price,
+                            int qty, int posDirection, Object strategy,
+                            int token, int expiryDate, int strikePrice,
+                            String account, String instruType, String product,
+                            OrderHitType ordHitType) {
+        // 委托给简化版本，避免调用 connector
+        return sendNewOrder(strategyID, symbol, side, price, qty, posDirection, strategy);
+    }
+
+    @Override
     public void sendModifyOrder(int strategyID, String symbol, int side, double price,
                                 int qty, int orderID, int posDirection, Object strategy) {
         modifyOrderCount++;

@@ -741,9 +741,12 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
      * Java 额外增加: 将 avgSpreadRatio_ori 重置为当前 spread，
      * 避免 daily_init 中的旧 avgPx 导致 AVG_SPREAD_AWAY 立即触发 deactivate。
      */
+    @Override
     public void handleSquareON() {
-        // C++: ExecutionStrategy::HandleSquareON()
-        // Ref: ExecutionStrategy.h:47-51
+        // C++: ExecutionStrategy::HandleSquareON() — 调用基类
+        // Ref: PairwiseArbStrategy.cpp:573
+        super.handleSquareON();
+
         onExit = false;
         onCancel = false;
         onFlat = false;
