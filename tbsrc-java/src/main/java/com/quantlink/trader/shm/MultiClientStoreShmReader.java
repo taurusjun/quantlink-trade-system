@@ -1216,6 +1216,14 @@ public class MultiClientStoreShmReader {
             if (reqQueues[i] != null) { reqQueues[i].close(); reqQueues[i] = null; }
         }
 
+        // C++: ~MultiClientStoreShmReader() 中 delete clientStores 中的所有条目
+        // [C++差异-Java 资源管理] C++ 依赖析构函数释放 clientStores，
+        // Java 需要在 shutdown() 中显式 close 以释放 SHM 附着。
+        for (ClientStore cs : clientStores.values()) {
+            cs.close();
+        }
+        clientStores.clear();
+
         // C++: m_mdClientCount = 0; ...
         mdClientCount = 0;
         mdEndPktClientCount = 0;

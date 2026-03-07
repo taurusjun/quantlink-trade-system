@@ -8,6 +8,7 @@ import org.junit.jupiter.api.condition.OS;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -88,10 +89,13 @@ class ConnectorTest {
             // ClientStore 初始值=1, getAndIncrement 返回 1
             assertEquals(1, clientId, "首个 clientId 应为 1");
 
-            // 准备 RequestMsg
+            // 准备 RequestMsg — 必须设置 Exchange_Type 以路由到正确的请求队列
             MemorySegment req1 = arena.allocate(Types.REQUEST_MSG_LAYOUT);
             MemorySegment req2 = arena.allocate(Types.REQUEST_MSG_LAYOUT);
             MemorySegment req3 = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(req1, 0L, (byte) Constants.CHINA_SHFE);
+            Types.REQ_EXCHANGE_TYPE_VH.set(req2, 0L, (byte) Constants.CHINA_SHFE);
+            Types.REQ_EXCHANGE_TYPE_VH.set(req3, 0L, (byte) Constants.CHINA_SHFE);
 
             // 连续发 3 个新订单
             // C++: OrderID = clientId * ORDERID_RANGE + m_OrderCount++
@@ -150,10 +154,12 @@ class ConnectorTest {
         try (Arena arena = Arena.ofConfined()) {
             // 先发一个新订单获取 OrderID
             MemorySegment newReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(newReq, 0L, (byte) Constants.CHINA_SHFE);
             int orderId = bundle.connector.sendNewOrder(newReq);
 
             // 发送撤单
             MemorySegment cancelReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(cancelReq, 0L, (byte) Constants.CHINA_SHFE);
             Types.REQ_ORDER_ID_VH.set(cancelReq, 0L, orderId);
             bundle.connector.sendCancelOrder(cancelReq);
 
@@ -168,6 +174,7 @@ class ConnectorTest {
 
             // 发送改单
             MemorySegment modifyReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(modifyReq, 0L, (byte) Constants.CHINA_SHFE);
             Types.REQ_ORDER_ID_VH.set(modifyReq, 0L, orderId);
             Types.REQ_PRICE_VH.set(modifyReq, 0L, 6800.0);
             bundle.connector.sendModifyOrder(modifyReq);
@@ -300,6 +307,7 @@ class ConnectorTest {
 
             // Step 3: 发送新订单
             MemorySegment req = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(req, 0L, (byte) Constants.CHINA_SHFE);
             Types.REQ_PRICE_VH.set(req, 0L, 6789.50);
             Types.REQ_QUANTITY_VH.set(req, 0L, 1);
             int orderId = bundle.connector.sendNewOrder(req);
@@ -465,6 +473,295 @@ class ConnectorTest {
             Thread.sleep(200);
             assertEquals(countBefore, mdCount.get(),
                     "stop 后不应再收到行情回调");
+        } finally {
+            bundle.destroy();
+        }
+    }
+
+    // =====================================================================
+    // 多交易所辅助方法
+    // =====================================================================
+
+    /**
+     * 创建含 CHINA_SHFE(57) + CHINA_CFFEX(58) 的双交易所配置。
+     * 各交易所使用独立 SHM key。
+     */
+    private static Connector.Config newDualExchangeConfig() {
+        int offset = testKeyOffset;
+        testKeyOffset += 20; // 双交易所需要更多 key 间距
+
+        Connector.Config cfg = new Connector.Config();
+
+        // 交易所 0: CHINA_SHFE
+        Connector.ExchangeConfig shfe = new Connector.ExchangeConfig();
+        shfe.exchangeName = "CHINA_SHFE";
+        shfe.mdShmKeys.add(BASE_KEY + offset + 1);
+        shfe.mdShmSizes.add(64);
+        shfe.mdShmReadModes.add(Connector.MD_READ_ROUND_ROBIN);
+        shfe.reqShmKey = BASE_KEY + offset + 2;
+        shfe.reqQueueSize = 64;
+        shfe.respShmKey = BASE_KEY + offset + 3;
+        shfe.respQueueSize = 64;
+        shfe.clientStoreShmKey = BASE_KEY + offset + 4;
+        cfg.exchanges.add(shfe);
+
+        // 交易所 1: CHINA_CFFEX
+        Connector.ExchangeConfig cffex = new Connector.ExchangeConfig();
+        cffex.exchangeName = "CHINA_CFFEX";
+        cffex.mdShmKeys.add(BASE_KEY + offset + 11);
+        cffex.mdShmSizes.add(64);
+        cffex.mdShmReadModes.add(Connector.MD_READ_ROUND_ROBIN);
+        cffex.reqShmKey = BASE_KEY + offset + 12;
+        cffex.reqQueueSize = 64;
+        cffex.respShmKey = BASE_KEY + offset + 13;
+        cffex.respQueueSize = 64;
+        cffex.clientStoreShmKey = BASE_KEY + offset + 14;
+        cfg.exchanges.add(cffex);
+
+        return cfg;
+    }
+
+    // =====================================================================
+    // 测试 8: 多交易所 clientId 独立分配
+    // 验证: 各交易所独立 ClientStore → 各自 clientId=1
+    //       未注册交易所返回 0
+    //
+    // C++: m_clientId[exchCode] 按交易所独立分配
+    // Ref: hftbase/Connector/src/connector.cpp:94-106
+    // =====================================================================
+
+    @Test
+    @Order(8)
+    void test_multiExchange_clientId_allocation() {
+        Connector.Config cfg = newDualExchangeConfig();
+
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg, md -> {}, resp -> {});
+
+        try {
+            // 各交易所独立 ClientStore，各自分配 clientId=1
+            int shfeClientId = bundle.getClientId(Constants.CHINA_SHFE);
+            int cffexClientId = bundle.getClientId(Constants.CHINA_CFFEX);
+
+            assertEquals(1, shfeClientId,
+                    "SHFE clientId 应为 1（独立 ClientStore）");
+            assertEquals(1, cffexClientId,
+                    "CFFEX clientId 应为 1（独立 ClientStore）");
+
+            // 未注册交易所返回 0
+            int unknownClientId = bundle.getClientId(Constants.CHINA_DCE);
+            assertEquals(0, unknownClientId,
+                    "未注册交易所 DCE 应返回 clientId=0");
+        } finally {
+            bundle.destroy();
+        }
+    }
+
+    // =====================================================================
+    // 测试 9: 多交易所订单路由
+    // 验证: Exchange_Type=SHFE 的订单 → SHFE request queue
+    //       Exchange_Type=CFFEX 的订单 → CFFEX request queue
+    //
+    // C++: m_requestQueue[msg.Exchange_Type]->enqueue(msg)
+    // Ref: hftbase/Connector/include/connector.h:200-220
+    // =====================================================================
+
+    @Test
+    @Order(9)
+    void test_multiExchange_orderRouting() {
+        Connector.Config cfg = newDualExchangeConfig();
+
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg, md -> {}, resp -> {});
+
+        try (Arena arena = Arena.ofConfined()) {
+            // 发送 SHFE 订单
+            MemorySegment shfeReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(shfeReq, 0L, (byte) Constants.CHINA_SHFE);
+            int shfeOrderId = bundle.connector.sendNewOrder(shfeReq);
+            assertTrue(shfeOrderId > 0, "SHFE 订单 OrderID 应为正值");
+
+            // 发送 CFFEX 订单
+            MemorySegment cffexReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(cffexReq, 0L, (byte) Constants.CHINA_CFFEX);
+            int cffexOrderId = bundle.connector.sendNewOrder(cffexReq);
+            assertTrue(cffexOrderId > 0, "CFFEX 订单 OrderID 应为正值");
+
+            // 验证: SHFE request queue 中有 1 条订单
+            // 使用 Connector.shmMgr 内部已附着的队列（不额外占用 shmseg 名额）
+            MWMRQueue shfeReqQueue = bundle.getReqQueue(0); // exchIdx=0 → SHFE
+            MemorySegment dequeueBuf = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            assertTrue(shfeReqQueue.dequeue(dequeueBuf),
+                    "SHFE request queue 应有 1 条订单");
+            assertEquals(shfeOrderId,
+                    (int) Types.REQ_ORDER_ID_VH.get(dequeueBuf, 0L),
+                    "SHFE queue 中的 OrderID 应为 SHFE 订单");
+            assertFalse(shfeReqQueue.dequeue(dequeueBuf),
+                    "SHFE request queue 应只有 1 条订单");
+
+            // 验证: CFFEX request queue 中有 1 条订单
+            MWMRQueue cffexReqQueue = bundle.getReqQueue(1); // exchIdx=1 → CFFEX
+            assertTrue(cffexReqQueue.dequeue(dequeueBuf),
+                    "CFFEX request queue 应有 1 条订单");
+            assertEquals(cffexOrderId,
+                    (int) Types.REQ_ORDER_ID_VH.get(dequeueBuf, 0L),
+                    "CFFEX queue 中的 OrderID 应为 CFFEX 订单");
+            assertFalse(cffexReqQueue.dequeue(dequeueBuf),
+                    "CFFEX request queue 应只有 1 条订单");
+        } finally {
+            bundle.destroy();
+        }
+    }
+
+    // =====================================================================
+    // 测试 10: 多交易所 ORS 回报隔离
+    // 验证: SHFE 回报队列入队本 clientId 回报 → 回调触发
+    //       CFFEX 回报队列入队本 clientId 回报 → 回调触发
+    //       SHFE 回报队列入队 clientId=5 回报 → 回调不触发（被过滤）
+    //       总回调数 = 2
+    //
+    // C++: exchId = m_response_queue_to_exchange_map[queueNum];
+    //      m_all_clientIds[exchId][i] == clientId → m_orscb(msg)
+    // Ref: hftbase/Connector/src/connector.cpp:819-838
+    // =====================================================================
+
+    @Test
+    @Order(10)
+    void test_multiExchange_orsResponseIsolation() throws InterruptedException {
+        Connector.Config cfg = newDualExchangeConfig();
+
+        AtomicInteger callbackCount = new AtomicInteger(0);
+        CountDownLatch latch = new CountDownLatch(2);
+
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> {},
+                        resp -> {
+                            callbackCount.incrementAndGet();
+                            latch.countDown();
+                        });
+
+        try (Arena arena = Arena.ofConfined()) {
+            int shfeClientId = bundle.getClientId(Constants.CHINA_SHFE);
+            int cffexClientId = bundle.getClientId(Constants.CHINA_CFFEX);
+
+            bundle.startAsync();
+            Thread.sleep(50);
+
+            // SHFE 回报: 本 clientId → 应触发回调
+            MemorySegment shfeResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+            int shfeOrderId = shfeClientId * Constants.ORDERID_RANGE + 1;
+            Types.RESP_ORDER_ID_VH.set(shfeResp, 0L, shfeOrderId);
+            Types.RESP_RESPONSE_TYPE_VH.set(shfeResp, 0L, Constants.RESP_TRADE_CONFIRM);
+            bundle.enqueueResponse(shfeResp, 0); // exchIdx=0 → SHFE
+
+            // CFFEX 回报: 本 clientId → 应触发回调
+            MemorySegment cffexResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+            int cffexOrderId = cffexClientId * Constants.ORDERID_RANGE + 1;
+            Types.RESP_ORDER_ID_VH.set(cffexResp, 0L, cffexOrderId);
+            Types.RESP_RESPONSE_TYPE_VH.set(cffexResp, 0L, Constants.RESP_TRADE_CONFIRM);
+            bundle.enqueueResponse(cffexResp, 1); // exchIdx=1 → CFFEX
+
+            // SHFE 回报: 非本 clientId(=5) → 不应触发回调
+            MemorySegment otherResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+            int otherOrderId = 5 * Constants.ORDERID_RANGE + 1;
+            Types.RESP_ORDER_ID_VH.set(otherResp, 0L, otherOrderId);
+            Types.RESP_RESPONSE_TYPE_VH.set(otherResp, 0L, Constants.RESP_TRADE_CONFIRM);
+            bundle.enqueueResponse(otherResp, 0); // exchIdx=0 → SHFE
+
+            // 等待 2 条合法回报的回调
+            assertTrue(latch.await(3, TimeUnit.SECONDS),
+                    "应在 3 秒内收到 2 条回调");
+
+            // 稍等以确保不会有额外的回调
+            Thread.sleep(200);
+
+            assertEquals(2, callbackCount.get(),
+                    "应仅收到 2 条回调（SHFE 1 条 + CFFEX 1 条，clientId=5 被过滤）");
+        } finally {
+            bundle.destroy();
+        }
+    }
+
+    // =====================================================================
+    // 测试 11: 多交易所完整流程
+    // 流程:
+    //   MD 分别写入 SHFE/CFFEX 队列 → 两次 MD 回调
+    //   分别在 SHFE/CFFEX 发单 → 模拟对应队列回报 → 两次 ORS 回调
+    //   验证 OrderID 匹配
+    // =====================================================================
+
+    @Test
+    @Order(11)
+    void test_multiExchange_fullFlow() throws InterruptedException {
+        Connector.Config cfg = newDualExchangeConfig();
+
+        AtomicInteger mdCount = new AtomicInteger(0);
+        CountDownLatch mdLatch = new CountDownLatch(2);
+        CountDownLatch orsLatch = new CountDownLatch(2);
+        List<Integer> receivedOrderIds = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+        ConnectorTestHelper.TestConnectorBundle bundle =
+                ConnectorTestHelper.createForTest(cfg,
+                        md -> {
+                            mdCount.incrementAndGet();
+                            mdLatch.countDown();
+                        },
+                        resp -> {
+                            int oid = (int) Types.RESP_ORDER_ID_VH.get(resp, 0L);
+                            receivedOrderIds.add(oid);
+                            orsLatch.countDown();
+                        });
+
+        try (Arena arena = Arena.ofConfined()) {
+            bundle.startAsync();
+            Thread.sleep(50);
+
+            // Step 1: MD 写入 SHFE 和 CFFEX 队列
+            MemorySegment shfeMd = arena.allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
+            shfeMd.set(ValueLayout.JAVA_DOUBLE,
+                    Types.MU_DATA_OFFSET + Types.MDD_NEW_PRICE_OFFSET, 6000.0);
+            bundle.enqueueMD(shfeMd, 0);
+
+            MemorySegment cffexMd = arena.allocate(Types.MARKET_UPDATE_NEW_LAYOUT);
+            cffexMd.set(ValueLayout.JAVA_DOUBLE,
+                    Types.MU_DATA_OFFSET + Types.MDD_NEW_PRICE_OFFSET, 4000.0);
+            bundle.enqueueMD(cffexMd, 1);
+
+            assertTrue(mdLatch.await(3, TimeUnit.SECONDS),
+                    "应在 3 秒内收到 2 条行情回调");
+            assertEquals(2, mdCount.get(), "应收到 2 条行情回调");
+
+            // Step 2: 在 SHFE 发单
+            MemorySegment shfeReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(shfeReq, 0L, (byte) Constants.CHINA_SHFE);
+            int shfeOrderId = bundle.connector.sendNewOrder(shfeReq);
+
+            // Step 3: 在 CFFEX 发单
+            MemorySegment cffexReq = arena.allocate(Types.REQUEST_MSG_LAYOUT);
+            Types.REQ_EXCHANGE_TYPE_VH.set(cffexReq, 0L, (byte) Constants.CHINA_CFFEX);
+            int cffexOrderId = bundle.connector.sendNewOrder(cffexReq);
+
+            // Step 4: 模拟 SHFE 回报
+            MemorySegment shfeResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+            Types.RESP_ORDER_ID_VH.set(shfeResp, 0L, shfeOrderId);
+            Types.RESP_RESPONSE_TYPE_VH.set(shfeResp, 0L, Constants.RESP_TRADE_CONFIRM);
+            bundle.enqueueResponse(shfeResp, 0);
+
+            // Step 5: 模拟 CFFEX 回报
+            MemorySegment cffexResp = arena.allocate(Types.RESPONSE_MSG_LAYOUT);
+            Types.RESP_ORDER_ID_VH.set(cffexResp, 0L, cffexOrderId);
+            Types.RESP_RESPONSE_TYPE_VH.set(cffexResp, 0L, Constants.RESP_TRADE_CONFIRM);
+            bundle.enqueueResponse(cffexResp, 1);
+
+            assertTrue(orsLatch.await(3, TimeUnit.SECONDS),
+                    "应在 3 秒内收到 2 条回报回调");
+
+            // 验证: 收到的 OrderID 包含 SHFE 和 CFFEX 的
+            assertTrue(receivedOrderIds.contains(shfeOrderId),
+                    "应收到 SHFE OrderID=" + shfeOrderId);
+            assertTrue(receivedOrderIds.contains(cffexOrderId),
+                    "应收到 CFFEX OrderID=" + cffexOrderId);
         } finally {
             bundle.destroy();
         }
