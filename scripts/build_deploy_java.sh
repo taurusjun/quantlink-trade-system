@@ -322,6 +322,50 @@ echo -e "${GREEN}[INFO]${NC} 启动策略: ./scripts/start_strategy.sh <strategy
 echo ""
 SCRIPT_EOF
 
+# --- archive_logs.sh (日志归档) ---
+cat > "${DEPLOY_DIR}/scripts/archive_logs.sh" << 'SCRIPT_EOF'
+#!/bin/bash
+# ============================================
+# 归档前一天的日志到日期子目录
+# Usage: ./scripts/archive_logs.sh [log_dir]
+# 默认归档 log/ 目录，可指定其他目录如 sim/log
+# ============================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$DEPLOY_ROOT"
+
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+LOG_DIR="${1:-log}"
+DATE=$(date +%Y%m%d)
+
+if [ ! -d "$LOG_DIR" ]; then
+    exit 0
+fi
+
+archived=0
+for logfile in "$LOG_DIR"/*.log "$LOG_DIR"/nohup.* "$LOG_DIR"/log.control.*; do
+    [ -f "$logfile" ] || continue
+    fname=$(basename "$logfile")
+    # 提取日志文件中的日期 (YYYYMMDD)
+    log_date=$(echo "$fname" | grep -oE '[0-9]{8}' | head -1)
+    [ -z "$log_date" ] && continue
+    # 只归档非今天的日志
+    if [ "$log_date" != "$DATE" ]; then
+        archive_dir="$LOG_DIR/$log_date"
+        mkdir -p "$archive_dir"
+        mv "$logfile" "$archive_dir/"
+        echo -e "${YELLOW}[ARCHIVE]${NC} $fname → $archive_dir/"
+        archived=$((archived + 1))
+    fi
+done
+
+if [ "$archived" -gt 0 ]; then
+    echo -e "${YELLOW}[ARCHIVE]${NC} 共归档 $archived 个日志文件"
+fi
+SCRIPT_EOF
+
 # --- start_strategy.sh (Java Trader) ---
 cat > "${DEPLOY_DIR}/scripts/start_strategy.sh" << 'SCRIPT_EOF'
 #!/bin/bash

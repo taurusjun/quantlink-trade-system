@@ -59,7 +59,15 @@ cat deploy_java/live/models/model.*.par.txt.<strategy_id>
 
 不要展示文件内容（含敏感信息），只确认文件存在。
 
-### 6. 启动网关（CTP 模式）
+### 6. 归档旧日志
+
+```bash
+cd deploy_java && ./scripts/archive_logs.sh log
+```
+
+将前一天的日志文件归档到 `log/YYYYMMDD/` 子目录。
+
+### 7. 启动网关（CTP 模式）
 
 ```bash
 cd deploy_java
@@ -76,14 +84,14 @@ tail -20 deploy_java/log/counter_bridge.$(date +%Y%m%d).log
 - MD SHM Feeder: CTP 登录成功 + 合约订阅
 - Counter Bridge: CTP 交易连接成功 + 持仓加载 + HTTP :8082 启动
 
-### 7. 启动策略
+### 8. 启动策略
 
 ```bash
 cd deploy_java
 ./scripts/start_strategy.sh <strategy_id> <session>
 ```
 
-### 8. 检查策略日志
+### 9. 检查策略日志
 
 等待 5 秒，检查策略日志：
 ```bash
@@ -98,7 +106,7 @@ tail -50 deploy_java/nohup.out.<strategy_id>
 - API Server 启动（端口 9201）
 - Dashboard 可访问
 
-### 9. 汇报状态
+### 10. 汇报状态
 
 展示：
 - 所有进程 PID 和状态
