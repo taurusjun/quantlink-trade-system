@@ -822,7 +822,7 @@ public class PairwiseArbStrategy extends ExecutionStrategy {
         active = false;
 
         log.warning(String.format("[PAIR-EXIT] active=false avgSpread=%.4f ytd1=%d ytd2=%d netpos1=%d netpos2=%d",
-                avgSpreadRatio_ori, firstStrat.netposPassYtd, secondStrat.netposPassYtd,
+                avgSpreadRatio_ori, firstStrat.netposPass, secondStrat.netposAgg,
                 firstStrat.netpos, secondStrat.netpos));
 
         // C++: SaveMatrix2("../data/daily_init." + strategyID)
