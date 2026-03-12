@@ -880,7 +880,10 @@ hft::plugin::OrderInfo SimulatorPlugin::ConvertToOrderInfo(const InternalOrder& 
     hft::plugin::OrderInfo order_info;
 
     std::strncpy(order_info.order_id, order.order_id.c_str(), sizeof(order_info.order_id) - 1);
-    std::strncpy(order_info.client_order_id, order.client_order_id.c_str(), sizeof(order_info.client_order_id) - 1);
+    // 与 CTP 一致: client_order_id 存 order_id (模拟 CTP 的 OrderSysID)
+    // CTP: ConvertOrder 将 OrderSysID 写入 client_order_id
+    // counter_bridge OnBrokerOrderCallback 通过 client_order_id 建立反向映射
+    std::strncpy(order_info.client_order_id, order.order_id.c_str(), sizeof(order_info.client_order_id) - 1);
     std::strncpy(order_info.symbol, order.request.symbol, sizeof(order_info.symbol) - 1);
     std::strncpy(order_info.exchange, order.request.exchange, sizeof(order_info.exchange) - 1);
 

@@ -296,6 +296,7 @@ if((BUILD_CTP_PLUGIN OR BUILD_SIMULATOR_PLUGIN) AND APPLE AND HAS_YAML_CPP)
         )
         target_link_libraries(counter_bridge
             ${CTP_FRAMEWORK_DIR}/thosttraderapi_se.framework/Versions/A/thosttraderapi_se
+            iconv
         )
     endif()
 

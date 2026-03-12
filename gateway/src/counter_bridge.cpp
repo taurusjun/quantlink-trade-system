@@ -103,6 +103,7 @@ struct SHMConfig {
 static std::atomic<bool> g_running{true};
 static RespQueue* g_response_queue = nullptr;
 static std::map<std::string, CachedOrderInfo> g_order_map;  // broker_order_id -> order info
+static std::map<std::string, std::string> g_order_sys_id_map; // OrderSysID -> broker_order_id (for OnBrokerTradeCallback lookup)
 static std::mutex g_orders_mutex;
 
 // Broker plugin registry
@@ -548,6 +549,12 @@ void OnBrokerOrderCallback(const hft::plugin::OrderInfo& order_info) {
         auto it = g_order_map.find(order_info.order_id);
         if (it != g_order_map.end()) {
             cached_info = it->second;
+            // 建立 OrderSysID → broker_order_id 反向映射
+            // CTP: client_order_id = OrderSysID; Simulator: client_order_id = order_id
+            // 参考: ors/China/src/ORSServer.cpp OnRtnOrder 中 OrderSysID 关联逻辑
+            if (order_info.client_order_id[0] != '\0') {
+                g_order_sys_id_map[order_info.client_order_id] = order_info.order_id;
+            }
         } else {
             std::cerr << "[Bridge] Order not in cache: " << order_info.order_id << std::endl;
             return;
@@ -569,13 +576,15 @@ void OnBrokerOrderCallback(const hft::plugin::OrderInfo& order_info) {
 
         case hft::plugin::OrderStatus::PARTIAL_FILLED:
         case hft::plugin::OrderStatus::FILLED:
-            resp.Response_Type = TRADE_CONFIRM;
-            resp.Quantity = order_info.traded_volume;
-            resp.Price = order_info.price;
+            // TRADE_CONFIRM 由 OnBrokerTradeCallback 生成（使用实际成交价和单笔成交量）
+            // 参考: ors/China/src/ORSServer.cpp — OnRtnOrder 不生成 TRADE_CONFIRM
             if (order_info.status == hft::plugin::OrderStatus::FILLED) {
                 g_stats.filled_orders++;
             }
-            break;
+            std::cout << "[Bridge] Order FILLED/PARTIAL: OID=" << order_info.order_id
+                      << " traded=" << order_info.traded_volume
+                      << " (TRADE_CONFIRM via OnBrokerTradeCallback)" << std::endl;
+            return;
 
         case hft::plugin::OrderStatus::CANCELED:
             resp.Response_Type = CANCEL_ORDER_CONFIRM;
@@ -609,11 +618,57 @@ void OnBrokerOrderCallback(const hft::plugin::OrderInfo& order_info) {
               << " price=" << resp.Price << std::endl;
 }
 
-// Broker trade callback
+// Broker trade callback — generate TRADE_CONFIRM with actual fill price/qty
+// 参考: ors/China/src/ORSServer.cpp OnRtnTrade (L2837-2915)
+// CTP OnRtnTrade 提供实际成交价 (pTrade->Price) 和单笔成交量 (pTrade->Volume)
 void OnBrokerTradeCallback(const hft::plugin::TradeInfo& trade_info) {
-    std::cout << "[Bridge] Trade: " << trade_info.order_id
-              << " price=" << trade_info.price
-              << " volume=" << trade_info.volume << std::endl;
+    if (!g_response_queue) return;
+
+    // 通过 OrderSysID 反向映射查找 CachedOrderInfo
+    CachedOrderInfo cached_info;
+    {
+        std::lock_guard<std::mutex> lock(g_orders_mutex);
+
+        // trade_info.order_id 是 OrderSysID (CTP) 或 order_id (Simulator)
+        // 通过 g_order_sys_id_map 反向映射到 broker_order_id (g_order_map key)
+        auto sys_it = g_order_sys_id_map.find(trade_info.order_id);
+        if (sys_it == g_order_sys_id_map.end()) {
+            std::cerr << "[Bridge] Trade: OrderSysID not in reverse map: "
+                      << trade_info.order_id << std::endl;
+            return;
+        }
+
+        auto it = g_order_map.find(sys_it->second);
+        if (it == g_order_map.end()) {
+            std::cerr << "[Bridge] Trade: broker_order_id not in cache: "
+                      << sys_it->second << std::endl;
+            return;
+        }
+        cached_info = it->second;
+    }
+
+    // 构建 TRADE_CONFIRM ResponseMsg
+    ResponseMsg resp;
+    std::memset(&resp, 0, sizeof(resp));
+    resp.Response_Type = TRADE_CONFIRM;
+    resp.OrderID = cached_info.order_id;         // uint32 hftbase OrderID
+    resp.StrategyID = cached_info.strategy_id;   // int StrategyID
+    resp.Side = cached_info.side;                // 'B' or 'S'
+    std::strncpy(resp.Symbol, cached_info.symbol.c_str(), sizeof(resp.Symbol) - 1);
+    resp.Price = trade_info.price;               // 实际成交价 (CTP pTrade->Price)
+    resp.Quantity = trade_info.volume;            // 单笔成交量 (CTP pTrade->Volume)
+    resp.TimeStamp = trade_info.trade_time;
+
+    // Update position tracking
+    updatePosition(&resp, cached_info);
+
+    // Write to MWMR response queue
+    g_response_queue->enqueue(resp);
+
+    std::cout << "[Bridge] TRADE_CONFIRM: OID=" << resp.OrderID
+              << " price=" << resp.Price
+              << " qty=" << resp.Quantity
+              << " trade_id=" << trade_info.trade_id << std::endl;
 }
 
 // Broker error callback
@@ -986,12 +1041,10 @@ int main(int argc, char** argv) {
             std::vector<hft::plugin::PositionInfo> positions;
             bool queryOk = broker->QueryPositions(positions);
 
-            // Fallback: QueryPositions 可能因 CTP 限频返回空，尝试 GetCachedPositions
+            // Fallback: QueryPositions 可能因 CTP 限频返回空
             if (!queryOk || positions.empty()) {
                 std::cout << "[Main] QueryPositions " << (queryOk ? "returned empty" : "failed")
-                          << " for " << name << ", trying GetCachedPositions fallback..." << std::endl;
-                positions.clear();
-                broker->GetCachedPositions(positions);
+                          << " for " << name << std::endl;
             }
 
             if (!positions.empty()) {
