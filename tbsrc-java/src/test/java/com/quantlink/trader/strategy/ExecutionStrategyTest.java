@@ -396,8 +396,8 @@ class ExecutionStrategyTest {
     // =======================================================================
 
     /**
-     * Fix 1: useArbStrat=true 时 checkSquareoff 不调用基类 handleSquareoff()。
-     * 子 strat 的平仓由父级 PairwiseArbStrategy 统一管理。
+     * 验证: useArbStrat=true 时 checkSquareoff 也调用 handleSquareoff（与 C++ 一致）。
+     * C++ ExecutionStrategy::CheckSquareoff() L2338 无条件调用 HandleSquareoff()。
      */
     @Test
     void test_checkSquareoff_useArbStrat_skipsHandleSquareoff() {
@@ -422,9 +422,9 @@ class ExecutionStrategyTest {
         assertTrue(subStrat.onExit, "onExit should be set");
         assertTrue(subStrat.onFlat, "onFlat should be set");
 
-        // 验证：useArbStrat=true 时不调用基类 handleSquareoff → 不发单
-        assertEquals(ordersBefore, client.newOrderCount,
-                "useArbStrat=true 时 checkSquareoff 不应发送订单");
+        // 验证：useArbStrat=true 时也调用 handleSquareoff → 发平仓单（与 C++ 一致）
+        assertTrue(client.newOrderCount > ordersBefore,
+                "useArbStrat=true 时 checkSquareoff 也应发送平仓订单（C++ 无条件调用）");
     }
 
     /**
@@ -455,10 +455,12 @@ class ExecutionStrategyTest {
     }
 
     /**
-     * Fix 2: handleSquareoff active=false 时不发送平仓订单。
+     * 验证: handleSquareoff active=false 时仍然发送平仓订单（与 C++ 一致）。
+     * C++ ExecutionStrategy::HandleSquareoff() 不检查 m_Active。
+     * PairwiseArb 场景下子腿 active 在 CTP 模式始终为 false，平仓仍需执行。
      */
     @Test
-    void test_handleSquareoff_activeFlase_noOrders() {
+    void test_handleSquareoff_activeFalse_stillSendsOrders() {
         strategy.netpos = 82;
         strategy.active = false;
         strategy.onFlat = true;
@@ -470,15 +472,15 @@ class ExecutionStrategyTest {
 
         strategy.handleSquareoff();
 
-        assertEquals(ordersBefore, client.newOrderCount,
-                "active=false 时 handleSquareoff 不应发送任何订单");
+        assertTrue(client.newOrderCount > ordersBefore,
+                "active=false 时 handleSquareoff 仍应发送平仓订单（C++ 不检查 active）");
     }
 
     /**
-     * Fix 2 (负持仓): handleSquareoff active=false 时不发送买入平仓订单。
+     * 验证: handleSquareoff active=false 负持仓时也发送买入平仓订单（与 C++ 一致）。
      */
     @Test
-    void test_handleSquareoff_activeFalse_shortPos_noOrders() {
+    void test_handleSquareoff_activeFalse_shortPos_stillSendsOrders() {
         strategy.netpos = -83;
         strategy.active = false;
         strategy.onFlat = true;
@@ -490,8 +492,8 @@ class ExecutionStrategyTest {
 
         strategy.handleSquareoff();
 
-        assertEquals(ordersBefore, client.newOrderCount,
-                "active=false 时 handleSquareoff 不应发送买入订单");
+        assertTrue(client.newOrderCount > ordersBefore,
+                "active=false 时 handleSquareoff 仍应发送买入平仓订单（C++ 不检查 active）");
     }
 
     /**
@@ -519,11 +521,14 @@ class ExecutionStrategyTest {
     }
 
     /**
-     * Fix 2 综合: 模拟事故场景 — CTP模式 active=false，有昨仓 82/-83。
-     * checkSquareoff 触发 END TIME → onFlat=true → handleSquareoff() → 不应发单。
+     * CTP模式 active=false，有昨仓 82。
+     * checkSquareoff 触发 END TIME → onFlat=true → handleSquareoff() → 应发单。
+     * C++ HandleSquareoff() 不检查 active 状态 (ExecutionStrategy.cpp:2355-2437)，
+     * 子腿 active=false 在 CTP 模式是正常状态（modeType != 1），不应阻止平仓。
+     * PairwiseArb 层 active 守卫 (L711) 负责防止预激活触发，不影响子腿独立平仓。
      */
     @Test
-    void test_checkSquareoff_ctpMode_activeFalse_noOrders() {
+    void test_checkSquareoff_ctpMode_activeFalse_stillSendsOrders() {
         // CTP 模式: modeType != 1
         ConfigParams.getInstance().modeType = 2;
         simConfig.useArbStrat = false; // 独立策略（测试基类行为）
@@ -546,9 +551,9 @@ class ExecutionStrategyTest {
         assertTrue(ctpStrat.onExit, "onExit 应被设置");
         assertTrue(ctpStrat.onFlat, "onFlat 应被设置");
 
-        // 关键验证: active=false 时 handleSquareoff 不发单
-        assertEquals(ordersBefore, client.newOrderCount,
-                "CTP mode active=false 时 handleSquareoff 不应发送任何订单");
+        // C++ 对齐: HandleSquareoff 不检查 active，有持仓就发平仓单
+        assertTrue(client.newOrderCount > ordersBefore,
+                "C++ HandleSquareoff 不检查 active，有持仓应发送平仓订单");
     }
 
     // =======================================================================

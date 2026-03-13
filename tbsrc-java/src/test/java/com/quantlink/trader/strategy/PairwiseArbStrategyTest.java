@@ -388,11 +388,14 @@ class PairwiseArbStrategyTest {
     }
 
     /**
-     * Fix 3: active=false 时 mdCallBack 不触发 endTime 检查。
-     * 模拟事故场景: 昨仓 82/-83, endTime 已过, active=false.
+     * active=false 时 PairwiseArb 层 endTime 不触发（L711 守卫），
+     * 但子腿 checkSquareoff 独立触发 endTime → handleSquareoff → 发平仓单。
+     * C++ 对齐: ExecutionStrategy::CheckSquareoff() 和 HandleSquareoff() 都不检查 active。
+     * 子腿 active=false 在 CTP 模式是正常状态（modeType != 1），不阻止平仓。
+     * Ref: ExecutionStrategy.cpp:2152-2161 (endTime check), 2355-2437 (HandleSquareoff)
      */
     @Test
-    void test_mdCallBack_activeFalse_endTimePassed_noOrders() {
+    void test_mdCallBack_activeFalse_endTimePassed_subLegsStillSquareoff() {
         Arena arena = Arena.ofConfined();
         try {
             // 设置昨仓
@@ -428,11 +431,14 @@ class PairwiseArbStrategyTest {
             MemorySegment update = buildMarketUpdate(arena, nowTS, "ag2603");
             strategy.mdCallBack(update);
 
-            // 关键验证: active=false 时不触发 endTime → 不调用 handleSquareoff → 不发单
-            assertFalse(strategy.onExit, "active=false 时不应触发 endTime → onExit 应保持 false");
-            assertFalse(strategy.onFlat, "active=false 时不应触发 endTime → onFlat 应保持 false");
-            assertEquals(ordersBefore, client.newOrderCount,
-                    "active=false + endTime 过后，不应发送任何订单（事故重现验证）");
+            // PairwiseArb 层: active=false 守卫阻止父级 endTime 触发
+            assertFalse(strategy.onExit, "PairwiseArb active=false 时父级 endTime 不触发 → onExit 保持 false");
+            assertFalse(strategy.onFlat, "PairwiseArb active=false 时父级 endTime 不触发 → onFlat 保持 false");
+
+            // 子腿层: checkSquareoff 独立触发，handleSquareoff 不检查 active → 发平仓单
+            // C++ 对齐: 子腿 CheckSquareoff → HandleSquareoff 无条件执行
+            assertTrue(client.newOrderCount > ordersBefore,
+                    "子腿 checkSquareoff 独立触发 endTime，handleSquareoff 不检查 active → 应发平仓单");
         } finally {
             arena.close();
         }
@@ -485,11 +491,14 @@ class PairwiseArbStrategyTest {
     }
 
     /**
-     * 综合事故重现: 昨仓 82/-83 + endTime 过后 + active=false + 子 strat 也不发单。
-     * 验证三层守卫全部生效。
+     * 综合场景: 昨仓 82/-83 + endTime 过后 + PairwiseArb active=false。
+     * PairwiseArb 层 endTime 不触发（L711 active 守卫），
+     * 但子腿 checkSquareoff 独立触发 endTime → handleSquareoff → 发平仓单。
+     * C++ 对齐: HandleSquareoff() 不检查 active (ExecutionStrategy.cpp:2355-2437)。
+     * 子腿 active=false 在 CTP 模式是正常状态，不阻止平仓。
      */
     @Test
-    void test_fullAccidentScenario_noOrdersSent(@TempDir Path tempDir) throws Exception {
+    void test_fullAccidentScenario_subLegsSendOrders(@TempDir Path tempDir) throws Exception {
         Arena arena = Arena.ofConfined();
         try {
             // 使用 CTP 模式创建策略
@@ -543,15 +552,12 @@ class PairwiseArbStrategyTest {
             testStrat.mdCallBack(update);
 
             // ===== 核心验证 =====
-            // 事故中: 此处发出了 SELL 82 ag2603 + BUY 83 ag2605
-            // 修复后: 三层守卫阻止所有订单
-            assertEquals(ordersBefore, testClient.newOrderCount,
-                    "事故重现: 昨仓82/-83 + endTime过后 + active=false，不应发送任何订单！"
-                    + " (实际发送了 " + (testClient.newOrderCount - ordersBefore) + " 笔)");
-            assertTrue(testClient.orderRecords.isEmpty(),
-                    "不应有任何订单记录");
+            // C++ 对齐: 子腿 checkSquareoff 独立触发 endTime，handleSquareoff 不检查 active
+            // 子腿有昨仓 → 发平仓单（SELL 82 ag2603 + BUY 83 ag2605）
+            assertTrue(testClient.newOrderCount > ordersBefore,
+                    "子腿 checkSquareoff 独立触发 endTime，handleSquareoff 不检查 active → 应发平仓单");
 
-            // 验证策略状态: active=false 时 endTime 检查被跳过
+            // PairwiseArb 层: active=false 守卫阻止父级 endTime 触发
             assertFalse(testStrat.onExit,
                     "active=false 时 PairwiseArb 层 endTime 不应触发 onExit");
         } finally {

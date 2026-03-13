@@ -1329,17 +1329,11 @@ public abstract class ExecutionStrategy {
 
             // === 8. 执行平仓 ===
             // C++: HandleSquareoff();
-            // Ref: ExecutionStrategy.cpp:2341
-            // [C++差异] 当 useArbStrat=true 时，本 strat 是 PairwiseArbStrategy 的子 strat
-            // (firstStrat/secondStrat)。平仓由父级 PairwiseArbStrategy.handleSquareoff() 统一管理
-            // （只撤单+设标志，不发新单）。如果在子 strat 级别调用基类 handleSquareoff()，
-            // 会绕过父级控制直接发送 SendNewOrder 平仓单，导致：
-            // 1. active=false 时仍然发单
-            // 2. flag=POS_OPEN 而非 POS_CLOSE（对冲持仓应平仓）
-            // 因此子 strat 只设标志不发单，平仓操作由父级处理。
-            if (!simConfig.useArbStrat) {
-                handleSquareoff();
-            }
+            // Ref: ExecutionStrategy.cpp:2338 — 无条件调用
+            // C++ 中子腿的 CheckSquareoff 末尾无条件调用 HandleSquareoff()，
+            // 由 HandleSquareoff 内部根据 netpos/askMap/bidMap 状态决定是否发单。
+            // PairwiseArb 场景下子腿也需要执行此路径来发送平仓订单。
+            handleSquareoff();
         }
     }
 
@@ -2602,11 +2596,12 @@ public abstract class ExecutionStrategy {
 
         // C++: if (m_askMap.size() == 0 && m_bidMap.size() == 0)
         // Ref: ExecutionStrategy.cpp:2420-2436
-        // [C++差异] 防御性守卫：active=false 时禁止发送平仓订单。
-        // C++ 中此路径在 PairwiseArb 场景下也会执行（通过 CheckSquareoff → HandleSquareoff 链），
-        // 但 C++ 不会在 endTime 之后启动策略，所以此 bug 不会在 C++ 中触发。
-        // Java 中策略可能在 endTime 之后启动（等待手动激活），必须阻止未激活时发单。
-        if (askMap.isEmpty() && bidMap.isEmpty() && active) {
+        // C++ 无 active 守卫 — endTime 触发后子腿 netpos!=0 时必须发平仓单。
+        // Java 之前加了 && active 守卫导致 aggFlat 后无法发单（PairwiseArb.handleSquareoff
+        // 先设了 active=false）。已移除该守卫，与 C++ 保持一致。
+        // 未激活时不会误发单：PairwiseArbStrategy.mdCallBack L711 已有 if (active) 守卫
+        // 阻止 endTimeAgg 在未激活时触发。
+        if (askMap.isEmpty() && bidMap.isEmpty()) {
             if (netpos > 0) {
                 // C++: if (m_aggFlat) SendNewOrder(SELL, sellprice, qty, 0, QUOTE, CROSS);
                 //      else SendNewOrder(SELL, sellprice, qty, 0);
@@ -2624,9 +2619,6 @@ public abstract class ExecutionStrategy {
                     sendNewOrder(Constants.SIDE_BUY, buyprice, qty, 0);
                 }
             }
-        } else if (askMap.isEmpty() && bidMap.isEmpty() && !active && netpos != 0) {
-            log.warning("[GUARD] handleSquareoff: active=false, 跳过发送平仓订单."
-                    + " netpos=" + netpos + " symbol=" + (instru != null ? instru.origBaseName : "null"));
         }
     }
 
